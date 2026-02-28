@@ -98,6 +98,9 @@ struct GeneralSettingsView: View {
     @State private var keyValidationSuccess = false
     @State private var customVocabularyInput: String = ""
     @State private var micPermissionGranted = false
+    @State private var availableModels: [GroqModel] = []
+    @State private var isFetchingModels = false
+    @State private var modelFetchFailed = false
     @StateObject private var githubCache = GitHubMetadataCache.shared
     @ObservedObject private var updateManager = UpdateManager.shared
     private let freeflowRepoURL = URL(string: "https://github.com/zachlatta/freeflow")!
@@ -238,6 +241,11 @@ struct GeneralSettingsView: View {
                 }
                 SettingsCard("API Key", icon: "key.fill") {
                     apiKeySection
+                }
+                if !appState.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    SettingsCard("Post-Processing Model", icon: "cpu") {
+                        postProcessingModelSection
+                    }
                 }
                 SettingsCard("Push-to-Talk Key", icon: "keyboard.fill") {
                     hotkeySection
@@ -560,6 +568,71 @@ struct GeneralSettingsView: View {
                     keyValidationSuccess = true
                 } else {
                     keyValidationError = "Invalid API key. Please check and try again."
+                }
+            }
+        }
+    }
+
+    // MARK: Post-Processing Model
+
+    private var postProcessingModelSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("The LLM used to clean up raw transcriptions.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if isFetchingModels {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Loading models...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if !availableModels.isEmpty {
+                Picker("Model", selection: $appState.postProcessingModel) {
+                    ForEach(availableModels) { model in
+                        Text(model.id).tag(model.id)
+                    }
+                }
+                .labelsHidden()
+            } else {
+                HStack(spacing: 8) {
+                    TextField("Model ID", text: $appState.postProcessingModel)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+
+                    Button("Fetch Models") {
+                        fetchModels()
+                    }
+                }
+
+                if modelFetchFailed {
+                    Text("Could not load model list. You can type a model ID manually.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .onAppear {
+            if availableModels.isEmpty && !appState.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                fetchModels()
+            }
+        }
+    }
+
+    private func fetchModels() {
+        isFetchingModels = true
+        modelFetchFailed = false
+        Task {
+            let models = await GroqModelsService.fetchModels(apiKey: appState.apiKey, baseURL: appState.apiBaseURL)
+            await MainActor.run {
+                isFetchingModels = false
+                if models.isEmpty {
+                    modelFetchFailed = true
+                } else {
+                    availableModels = models
+                    // If current model isn't in the list, keep it (user may have typed a valid ID)
                 }
             }
         }
@@ -968,7 +1041,7 @@ struct PromptsSettingsView: View {
         systemTestError = nil
         systemTestPrompt = nil
 
-        let service = PostProcessingService(apiKey: appState.apiKey, baseURL: appState.apiBaseURL)
+        let service = PostProcessingService(apiKey: appState.apiKey, baseURL: appState.apiBaseURL, model: appState.postProcessingModel)
         let input = systemTestInput
         let customPrompt = appState.customSystemPrompt
         let vocabulary = appState.customVocabulary
@@ -1282,8 +1355,19 @@ struct RunLogEntryView: View {
                                 .foregroundStyle(.red)
                         }
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(item.timestamp.formatted(date: .numeric, time: .standard))
-                                .font(.subheadline.weight(.semibold))
+                            HStack(spacing: 6) {
+                                Text(item.timestamp.formatted(date: .numeric, time: .standard))
+                                    .font(.subheadline.weight(.semibold))
+                                if let total = item.totalDurationMs {
+                                    Text(formatDurationMs(total))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1)
+                                        .background(Color.secondary.opacity(0.1))
+                                        .cornerRadius(3)
+                                }
+                            }
                             Text(item.postProcessedTranscript.isEmpty ? "(no transcript)" : item.postProcessedTranscript)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -1363,6 +1447,7 @@ struct RunLogEntryView: View {
                         PipelineStepView(
                             number: 1,
                             title: "Capture Context",
+                            durationMs: item.contextDurationMs,
                             content: {
                                 VStack(alignment: .leading, spacing: 6) {
                                     if let dataURL = item.contextScreenshotDataURL,
@@ -1417,6 +1502,7 @@ struct RunLogEntryView: View {
                         PipelineStepView(
                             number: 2,
                             title: "Transcribe Audio",
+                            durationMs: item.transcriptionDurationMs,
                             content: {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("Sent audio to Groq whisper-large-v3")
@@ -1444,6 +1530,7 @@ struct RunLogEntryView: View {
                         PipelineStepView(
                             number: 3,
                             title: "Post-Process",
+                            durationMs: item.postProcessingDurationMs,
                             content: {
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(item.postProcessingStatus)
@@ -1523,11 +1610,22 @@ struct RunLogEntryView: View {
     }
 }
 
+// MARK: - Duration Formatting
+
+private func formatDurationMs(_ ms: Double) -> String {
+    if ms >= 1000 {
+        return String(format: "%.1fs", ms / 1000)
+    } else {
+        return String(format: "%.0fms", ms)
+    }
+}
+
 // MARK: - Pipeline Step View
 
 struct PipelineStepView<Content: View>: View {
     let number: Int
     let title: String
+    var durationMs: Double? = nil
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -1539,8 +1637,19 @@ struct PipelineStepView<Content: View>: View {
                 .background(Circle().fill(Color.accentColor))
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(title)
-                    .font(.caption.weight(.semibold))
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.caption.weight(.semibold))
+                    if let ms = durationMs {
+                        Text(formatDurationMs(ms))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.1))
+                            .cornerRadius(3)
+                    }
+                }
                 content()
             }
             .frame(maxWidth: .infinity, alignment: .leading)

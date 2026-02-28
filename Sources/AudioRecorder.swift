@@ -130,6 +130,8 @@ class AudioRecorder: NSObject, ObservableObject {
     private var bufferCount: Int = 0
     private var currentDeviceUID: String?
     private var storedInputFormat: AVAudioFormat?
+    private var realtimeConverter: AVAudioConverter?
+    private var targetFormat: AVAudioFormat?
 
     @Published var isRecording = false
     /// Thread-safe flag read from the audio tap callback.
@@ -198,7 +200,7 @@ class AudioRecorder: NSObject, ObservableObject {
 
             storedInputFormat = inputFormat
 
-            // Install tap — checks isRecording and audioFile dynamically
+            // Install tap — converts to 16kHz mono in real-time during recording
             inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
                 guard let self, self._recording.withLock({ $0 }) else { return }
 
@@ -227,16 +229,35 @@ class AudioRecorder: NSObject, ObservableObject {
                     self.onRecordingReady?()
                 }
 
+                // Convert to 16kHz mono and write
                 self.audioFileQueue.sync {
-                    if let file = self.audioFile {
-                        do {
-                            try file.write(from: buffer)
-                        } catch {
-                            os_log(.error, log: recordingLog, "ERROR writing buffer #%d to file: %{public}@", self.bufferCount, error.localizedDescription)
-                            self.audioFile = nil
+                    if let file = self.audioFile, let converter = self.realtimeConverter, let targetFmt = self.targetFormat {
+                        let ratio = targetFmt.sampleRate / buffer.format.sampleRate
+                        let convertedCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1
+                        guard let convertedBuffer = AVAudioPCMBuffer(pcmFormat: targetFmt, frameCapacity: convertedCapacity) else { return }
+                        var error: NSError?
+                        var consumed = false
+                        converter.convert(to: convertedBuffer, error: &error) { _, outStatus in
+                            if consumed {
+                                outStatus.pointee = .noDataNow
+                                return nil
+                            }
+                            consumed = true
+                            outStatus.pointee = .haveData
+                            return buffer
+                        }
+                        if let error {
+                            os_log(.error, log: recordingLog, "realtime conversion error at buffer #%d: %{public}@", self.bufferCount, error.localizedDescription)
+                        } else if convertedBuffer.frameLength > 0 {
+                            do {
+                                try file.write(from: convertedBuffer)
+                            } catch {
+                                os_log(.error, log: recordingLog, "ERROR writing buffer #%d to file: %{public}@", self.bufferCount, error.localizedDescription)
+                                self.audioFile = nil
+                            }
                         }
                     } else if self.bufferCount <= 5 {
-                        os_log(.error, log: recordingLog, "audioFile is nil at buffer #%d — audio not being written!", self.bufferCount)
+                        os_log(.error, log: recordingLog, "audioFile/converter is nil at buffer #%d — audio not being written!", self.bufferCount)
                     }
                 }
                 self.computeAudioLevel(from: buffer)
@@ -260,32 +281,33 @@ class AudioRecorder: NSObject, ObservableObject {
             throw AudioRecorderError.invalidInputFormat("No stored input format")
         }
 
-        // Create a temp file — record in native format, convert to 16kHz mono on stop
+        // Create a temp file — write directly in 16kHz mono (no post-recording conversion needed)
         let tempDir = FileManager.default.temporaryDirectory
         let fileURL = tempDir.appendingPathComponent(UUID().uuidString + ".wav")
         self.tempFileURL = fileURL
 
-        let newAudioFile: AVAudioFile
-        do {
-            newAudioFile = try AVAudioFile(forWriting: fileURL, settings: inputFormat.settings)
-        } catch {
-            let fallbackSettings: [String: Any] = [
-                AVFormatIDKey: kAudioFormatLinearPCM,
-                AVSampleRateKey: inputFormat.sampleRate,
-                AVNumberOfChannelsKey: inputFormat.channelCount,
-                AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsFloatKey: false,
-                AVLinearPCMIsBigEndianKey: false,
-                AVLinearPCMIsNonInterleaved: inputFormat.isInterleaved ? 0 : 1,
-            ]
-            newAudioFile = try AVAudioFile(
-                forWriting: fileURL,
-                settings: fallbackSettings,
-                commonFormat: .pcmFormatInt16,
-                interleaved: inputFormat.isInterleaved
-            )
+        guard let outFormat = AVAudioFormat(
+            commonFormat: .pcmFormatInt16,
+            sampleRate: 16000,
+            channels: 1,
+            interleaved: true
+        ) else {
+            throw AudioRecorderError.invalidInputFormat("Failed to create 16kHz mono format")
         }
-        os_log(.info, log: recordingLog, "audio file created: %.3fms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)
+        self.targetFormat = outFormat
+
+        guard let converter = AVAudioConverter(from: inputFormat, to: outFormat) else {
+            throw AudioRecorderError.invalidInputFormat("Failed to create realtime converter from \(inputFormat) to 16kHz mono")
+        }
+        self.realtimeConverter = converter
+
+        let newAudioFile = try AVAudioFile(
+            forWriting: fileURL,
+            settings: outFormat.settings,
+            commonFormat: .pcmFormatInt16,
+            interleaved: true
+        )
+        os_log(.info, log: recordingLog, "audio file created (16kHz mono, realtime conversion): %.3fms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)
 
         audioFileQueue.sync { self.audioFile = newAudioFile }
         _recording.withLock { $0 = true }
@@ -305,12 +327,8 @@ class AudioRecorder: NSObject, ObservableObject {
 
         // Stop engine so mic indicator goes away — keep engine object for fast restart
         audioEngine?.stop()
+        realtimeConverter = nil
         os_log(.info, log: recordingLog, "engine stopped (mic indicator off)")
-
-        // Convert to 16kHz mono for smaller upload (Whisper is trained on 16kHz mono)
-        if let url = tempFileURL {
-            tempFileURL = convertTo16kHzMono(url) ?? url
-        }
 
         // Debug: check the recorded file
         if let url = tempFileURL {
@@ -373,80 +391,6 @@ class AudioRecorder: NSObject, ObservableObject {
         }
     }
 
-    /// Convert audio file to 16kHz mono 16-bit PCM for minimal upload size.
-    private func convertTo16kHzMono(_ sourceURL: URL) -> URL? {
-        let t0 = CFAbsoluteTimeGetCurrent()
-        do {
-            let sourceFile = try AVAudioFile(forReading: sourceURL)
-            let sourceFormat = sourceFile.processingFormat
-
-            guard let targetFormat = AVAudioFormat(
-                commonFormat: .pcmFormatInt16,
-                sampleRate: 16000,
-                channels: 1,
-                interleaved: true
-            ) else {
-                os_log(.error, log: recordingLog, "failed to create target format for 16kHz mono")
-                return nil
-            }
-
-            guard let converter = AVAudioConverter(from: sourceFormat, to: targetFormat) else {
-                os_log(.error, log: recordingLog, "failed to create audio converter")
-                return nil
-            }
-
-            let destURL = sourceURL.deletingPathExtension().appendingPathExtension("16k.wav")
-            let destFile = try AVAudioFile(
-                forWriting: destURL,
-                settings: targetFormat.settings,
-                commonFormat: .pcmFormatInt16,
-                interleaved: true
-            )
-
-            // Process in chunks
-            let bufferSize: AVAudioFrameCount = 4096
-            guard let convertBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: bufferSize) else {
-                os_log(.error, log: recordingLog, "failed to create conversion buffer")
-                return nil
-            }
-
-            var isDone = false
-            while !isDone {
-                let status = converter.convert(to: convertBuffer, error: nil) { inNumPackets, outStatus in
-                    do {
-                        let readBuffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: inNumPackets)!
-                        try sourceFile.read(into: readBuffer)
-                        if readBuffer.frameLength == 0 {
-                            outStatus.pointee = .endOfStream
-                            return nil
-                        }
-                        outStatus.pointee = .haveData
-                        return readBuffer
-                    } catch {
-                        outStatus.pointee = .endOfStream
-                        return nil
-                    }
-                }
-
-                if status == .error || convertBuffer.frameLength == 0 {
-                    isDone = true
-                } else {
-                    try destFile.write(from: convertBuffer)
-                }
-            }
-
-            // Clean up source file
-            try? FileManager.default.removeItem(at: sourceURL)
-
-            let elapsed = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-            let destSize = (try? FileManager.default.attributesOfItem(atPath: destURL.path)[.size] as? UInt64) ?? 0
-            os_log(.info, log: recordingLog, "converted to 16kHz mono: %llu bytes in %.1fms", destSize, elapsed)
-            return destURL
-        } catch {
-            os_log(.error, log: recordingLog, "audio conversion failed: %{public}@", error.localizedDescription)
-            return nil
-        }
-    }
 
     func cleanup() {
         if let url = tempFileURL {

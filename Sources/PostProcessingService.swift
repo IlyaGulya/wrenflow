@@ -30,6 +30,8 @@ final class PostProcessingService {
     static let defaultSystemPrompt = """
 You are a dictation post-processor. You clean up raw speech-to-text output for typing.
 
+CRITICAL: Output MUST be in the SAME language as RAW_TRANSCRIPTION. If input is Russian, output Russian. If input is English, output English. NEVER translate to another language.
+
 Rules:
 - Add punctuation, capitalization, and formatting.
 - Remove filler words (um, uh, like, you know) unless they carry meaning.
@@ -43,7 +45,7 @@ If the input is empty or only noise, respond: {"text": "", "reasoning": "explana
 
     private let apiKey: String
     private let baseURL: String
-    private let defaultModel = "meta-llama/llama-4-scout-17b-16e-instruct"
+    private let model: String
     private let postProcessingTimeoutSeconds: TimeInterval = 20
 
     static func validateAPIKey(_ key: String, baseURL: String = "https://api.groq.com/openai/v1") async -> Bool {
@@ -62,9 +64,10 @@ If the input is empty or only noise, respond: {"text": "", "reasoning": "explana
         }
     }
 
-    init(apiKey: String, baseURL: String = "https://api.groq.com/openai/v1") {
+    init(apiKey: String, baseURL: String = "https://api.groq.com/openai/v1", model: String = "meta-llama/llama-4-scout-17b-16e-instruct") {
         self.apiKey = apiKey
         self.baseURL = baseURL
+        self.model = model
     }
 
     func postProcess(
@@ -84,7 +87,7 @@ If the input is empty or only noise, respond: {"text": "", "reasoning": "explana
                 return try await self.process(
                     transcript: transcript,
                     contextSummary: context.contextSummary,
-                    model: defaultModel,
+                    model: self.model,
                     customVocabulary: vocabularyTerms,
                     customSystemPrompt: customSystemPrompt
                 )

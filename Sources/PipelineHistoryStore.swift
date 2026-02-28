@@ -172,6 +172,10 @@ final class PipelineHistoryStore {
                 entity.debugStatus = item.debugStatus
                 entity.customVocabulary = item.customVocabulary
                 entity.audioFileName = item.audioFileName
+                entity.transcriptionDurationMs = item.transcriptionDurationMs as NSNumber?
+                entity.contextDurationMs = item.contextDurationMs as NSNumber?
+                entity.postProcessingDurationMs = item.postProcessingDurationMs as NSNumber?
+                entity.totalDurationMs = item.totalDurationMs as NSNumber?
                 try saveContext()
             } catch {
                 thrownError = error
@@ -241,7 +245,11 @@ final class PipelineHistoryStore {
             postProcessingStatus: entity.postProcessingStatus ?? "",
             debugStatus: entity.debugStatus ?? "",
             customVocabulary: entity.customVocabulary ?? "",
-            audioFileName: entity.audioFileName
+            audioFileName: entity.audioFileName,
+            transcriptionDurationMs: entity.transcriptionDurationMs?.doubleValue,
+            contextDurationMs: entity.contextDurationMs?.doubleValue,
+            postProcessingDurationMs: entity.postProcessingDurationMs?.doubleValue,
+            totalDurationMs: entity.totalDurationMs?.doubleValue
         )
     }
 
@@ -265,7 +273,11 @@ final class PipelineHistoryStore {
             makeAttribute(name: "postProcessingStatus", type: .stringAttributeType, isOptional: false),
             makeAttribute(name: "debugStatus", type: .stringAttributeType, isOptional: false),
             makeAttribute(name: "customVocabulary", type: .stringAttributeType, isOptional: false),
-            makeAttribute(name: "audioFileName", type: .stringAttributeType, isOptional: true)
+            makeAttribute(name: "audioFileName", type: .stringAttributeType, isOptional: true),
+            makeAttribute(name: "transcriptionDurationMs", type: .doubleAttributeType, isOptional: true),
+            makeAttribute(name: "contextDurationMs", type: .doubleAttributeType, isOptional: true),
+            makeAttribute(name: "postProcessingDurationMs", type: .doubleAttributeType, isOptional: true),
+            makeAttribute(name: "totalDurationMs", type: .doubleAttributeType, isOptional: true)
         ]
 
         model.entities = [entity]
@@ -296,4 +308,8 @@ final class PipelineHistoryEntry: NSManagedObject {
     @NSManaged var debugStatus: String?
     @NSManaged var customVocabulary: String?
     @NSManaged var audioFileName: String?
+    @NSManaged var transcriptionDurationMs: NSNumber?
+    @NSManaged var contextDurationMs: NSNumber?
+    @NSManaged var postProcessingDurationMs: NSNumber?
+    @NSManaged var totalDurationMs: NSNumber?
 }
