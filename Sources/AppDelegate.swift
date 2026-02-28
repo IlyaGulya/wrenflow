@@ -1,9 +1,12 @@
 import SwiftUI
+import Combine
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
     var setupWindow: NSWindow?
     private var settingsWindow: NSWindow?
+    private var modelDownloadWindow: NSWindow?
+    private var modelStateCancellable: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NotificationCenter.default.addObserver(
@@ -30,6 +33,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             if !AXIsProcessTrusted() {
                 appState.showAccessibilityAlert()
+            }
+
+            if !appState.localTranscriptionService.state.isReady {
+                showModelDownloadWindow()
             }
         }
 
@@ -130,5 +137,51 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if !AXIsProcessTrusted() {
             appState.showAccessibilityAlert()
         }
+    }
+
+    private func showModelDownloadWindow() {
+        guard modelDownloadWindow == nil else { return }
+
+        let view = ModelDownloadView(
+            localTranscriptionService: appState.localTranscriptionService,
+            onDismiss: { [weak self] in
+                self?.modelDownloadWindow?.close()
+                self?.modelDownloadWindow = nil
+            }
+        )
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 260),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "FreeFlow"
+        window.contentView = NSHostingView(rootView: view)
+        window.isReleasedWhenClosed = false
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        modelDownloadWindow = window
+
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.modelDownloadWindow = nil
+        }
+
+        // Auto-close when model becomes ready
+        modelStateCancellable = appState.localTranscriptionService.$state
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                if state.isReady {
+                    self?.modelDownloadWindow?.close()
+                    self?.modelDownloadWindow = nil
+                    self?.modelStateCancellable = nil
+                }
+            }
     }
 }

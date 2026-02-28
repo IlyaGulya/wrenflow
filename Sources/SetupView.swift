@@ -91,7 +91,16 @@ struct SetupView: View {
                 Spacer()
                 if currentStep != .ready {
                     if currentStep == .apiKey {
-                        // API key step: validate before continuing
+                        // API key step: skip or validate before continuing
+                        Button("Skip") {
+                            appState.apiKey = ""
+                            withAnimation {
+                                currentStep = nextStep(currentStep)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+
                         Button(isValidatingKey ? "Validating..." : "Continue") {
                             validateAndContinue()
                         }
@@ -285,7 +294,7 @@ struct SetupView: View {
                 .font(.title)
                 .fontWeight(.bold)
 
-            Text("FreeFlow uses Groq for fast, high-accuracy transcription.")
+            Text("Transcription happens locally on your Mac.\nA Groq API key is used for text cleanup only (optional).")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -792,7 +801,7 @@ struct SetupView: View {
         keyValidationError = nil
 
         Task {
-            let valid = await TranscriptionService.validateAPIKey(key, baseURL: appState.apiBaseURL)
+            let valid = await PostProcessingService.validateAPIKey(key, baseURL: appState.apiBaseURL)
             await MainActor.run {
                 isValidatingKey = false
                 if valid {
@@ -920,8 +929,7 @@ struct SetupView: View {
 
                 Task {
                     do {
-                        let service = TranscriptionService(apiKey: appState.apiKey, baseURL: appState.apiBaseURL)
-                        let transcript = try await service.transcribe(fileURL: url)
+                        let transcript = try await appState.localTranscriptionService.transcribe(fileURL: url)
                         await MainActor.run {
                             testTranscript = transcript
                             withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {

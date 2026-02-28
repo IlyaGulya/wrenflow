@@ -1,8 +1,8 @@
-APP_NAME ?= FreeFlow Dev
-BUNDLE_ID ?= com.zachlatta.freeflow.dev
+APP_NAME ?= FreeFlow Debug
+BUNDLE_ID ?= com.ilyagulya.freeflow.debug
 BUILD_DIR = build
 APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
-CODESIGN_IDENTITY ?= FreeFlow Dev
+CODESIGN_IDENTITY ?= FreeFlow Debug
 CONTENTS = $(APP_BUNDLE)/Contents
 MACOS_DIR = $(CONTENTS)/MacOS
 
@@ -19,29 +19,11 @@ all: $(MACOS_DIR)/$(APP_NAME)
 $(MACOS_DIR)/$(APP_NAME): $(SOURCES) Info.plist $(ICON_ICNS)
 	@mkdir -p "$(MACOS_DIR)" "$(RESOURCES)"
 ifeq ($(ARCH),universal)
-	swiftc \
-		-parse-as-library \
-		-o "$(MACOS_DIR)/$(APP_NAME)-arm64" \
-		-sdk $(shell xcrun --show-sdk-path) \
-		-target arm64-apple-macosx13.0 \
-		$(SOURCES)
-	swiftc \
-		-parse-as-library \
-		-o "$(MACOS_DIR)/$(APP_NAME)-x86_64" \
-		-sdk $(shell xcrun --show-sdk-path) \
-		-target x86_64-apple-macosx13.0 \
-		$(SOURCES)
-	lipo -create -output "$(MACOS_DIR)/$(APP_NAME)" \
-		"$(MACOS_DIR)/$(APP_NAME)-arm64" \
-		"$(MACOS_DIR)/$(APP_NAME)-x86_64"
-	@rm "$(MACOS_DIR)/$(APP_NAME)-arm64" "$(MACOS_DIR)/$(APP_NAME)-x86_64"
+	swift build -c release --arch arm64 --arch x86_64
+	@cp .build/apple/Products/Release/FreeFlow "$(MACOS_DIR)/$(APP_NAME)"
 else
-	swiftc \
-		-parse-as-library \
-		-o "$(MACOS_DIR)/$(APP_NAME)" \
-		-sdk $(shell xcrun --show-sdk-path) \
-		-target $(ARCH)-apple-macosx13.0 \
-		$(SOURCES)
+	swift build -c debug
+	@cp "$$(swift build -c debug --show-bin-path)/FreeFlow" "$(MACOS_DIR)/$(APP_NAME)"
 endif
 	@cp Info.plist "$(CONTENTS)/"
 	@plutil -replace CFBundleName -string "$(APP_NAME)" "$(CONTENTS)/Info.plist"
@@ -49,7 +31,7 @@ endif
 	@plutil -replace CFBundleExecutable -string "$(APP_NAME)" "$(CONTENTS)/Info.plist"
 	@plutil -replace CFBundleIdentifier -string "$(BUNDLE_ID)" "$(CONTENTS)/Info.plist"
 	@cp $(ICON_ICNS) "$(RESOURCES)/"
-	@codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" --entitlements FreeFlow.entitlements "$(APP_BUNDLE)"
+	@codesign --force --sign "$(CODESIGN_IDENTITY)" --entitlements FreeFlow.entitlements "$(APP_BUNDLE)"
 	@echo "Built $(APP_BUNDLE)"
 
 icon: $(ICON_ICNS)
@@ -103,7 +85,7 @@ notarize:
 	xcrun stapler staple $(BUILD_DIR)/$(APP_NAME).dmg
 
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf $(BUILD_DIR) .build
 
 run: all
 	open "$(APP_BUNDLE)"

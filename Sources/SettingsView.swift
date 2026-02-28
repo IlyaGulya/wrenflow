@@ -228,6 +228,14 @@ struct GeneralSettingsView: View {
                 SettingsCard("Updates", icon: "arrow.triangle.2.circlepath") {
                     updatesSection
                 }
+                SettingsCard("Transcription", icon: "waveform") {
+                    transcriptionProviderSection
+                }
+                if appState.selectedTranscriptionProvider == .local {
+                    SettingsCard("Local Transcription", icon: "waveform.badge.magnifyingglass") {
+                        localTranscriptionSection
+                    }
+                }
                 SettingsCard("API Key", icon: "key.fill") {
                     apiKeySection
                 }
@@ -394,11 +402,90 @@ struct GeneralSettingsView: View {
         }
     }
 
+    // MARK: Local Transcription
+
+    // MARK: Transcription Provider
+
+    private var transcriptionProviderSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Picker("Provider", selection: $appState.selectedTranscriptionProvider) {
+                ForEach(TranscriptionProvider.allCases) { provider in
+                    Text(provider.displayName).tag(provider)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text(appState.selectedTranscriptionProvider.subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if appState.selectedTranscriptionProvider == .groq
+                && appState.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                    Text("No API key configured. Transcription will fall back to local.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+        }
+    }
+
+    // MARK: Local Transcription
+
+    private var localTranscriptionSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Speech-to-text runs entirely on your Mac using the Parakeet model.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                switch appState.localTranscriptionService.state {
+                case .notLoaded:
+                    Image(systemName: "circle")
+                        .foregroundStyle(.secondary)
+                    Text("Not loaded")
+                        .foregroundStyle(.secondary)
+                case .loading:
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Loading model...")
+                        .foregroundStyle(.secondary)
+                case .ready:
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("Ready")
+                        .foregroundStyle(.green)
+                case .error(let message):
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                    Text(message)
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                }
+                Spacer()
+                if case .error = appState.localTranscriptionService.state {
+                    Button("Retry") {
+                        appState.localTranscriptionService.initialize()
+                    }
+                    .font(.caption)
+                } else if case .notLoaded = appState.localTranscriptionService.state {
+                    Button("Load") {
+                        appState.localTranscriptionService.initialize()
+                    }
+                    .font(.caption)
+                }
+            }
+        }
+    }
+
     // MARK: API Key
 
     private var apiKeySection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("FreeFlow uses Groq's whisper-large-v3 model for transcription.")
+            Text("Used for Groq transcription (when selected) and text cleanup (post-processing).")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -465,7 +552,7 @@ struct GeneralSettingsView: View {
         keyValidationSuccess = false
 
         Task {
-            let valid = await TranscriptionService.validateAPIKey(key, baseURL: baseURL.isEmpty ? "https://api.groq.com/openai/v1" : baseURL)
+            let valid = await PostProcessingService.validateAPIKey(key, baseURL: baseURL.isEmpty ? "https://api.groq.com/openai/v1" : baseURL)
             await MainActor.run {
                 isValidatingKey = false
                 if valid {
@@ -1397,6 +1484,21 @@ struct RunLogEntryView: View {
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                             .background(Color(nsColor: .controlBackgroundColor))
                                             .cornerRadius(4)
+                                    }
+
+                                    if let reasoning = item.postProcessingReasoning, !reasoning.isEmpty {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text("LLM Reasoning")
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundStyle(.secondary)
+                                            Text(reasoning)
+                                                .font(.system(.caption2, design: .monospaced))
+                                                .textSelection(.enabled)
+                                                .padding(8)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                                .background(Color.blue.opacity(0.06))
+                                                .cornerRadius(4)
+                                        }
                                     }
                                 }
                             }

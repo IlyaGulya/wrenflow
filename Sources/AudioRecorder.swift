@@ -232,8 +232,11 @@ class AudioRecorder: NSObject, ObservableObject {
                         do {
                             try file.write(from: buffer)
                         } catch {
+                            os_log(.error, log: recordingLog, "ERROR writing buffer #%d to file: %{public}@", self.bufferCount, error.localizedDescription)
                             self.audioFile = nil
                         }
+                    } else if self.bufferCount <= 5 {
+                        os_log(.error, log: recordingLog, "audioFile is nil at buffer #%d — audio not being written!", self.bufferCount)
                     }
                 }
                 self.computeAudioLevel(from: buffer)
@@ -257,12 +260,11 @@ class AudioRecorder: NSObject, ObservableObject {
             throw AudioRecorderError.invalidInputFormat("No stored input format")
         }
 
-        // Create a temp file to write audio to
+        // Create a temp file — record in native format, convert to 16kHz mono on stop
         let tempDir = FileManager.default.temporaryDirectory
         let fileURL = tempDir.appendingPathComponent(UUID().uuidString + ".wav")
         self.tempFileURL = fileURL
 
-        // Try the input format first to avoid conversion issues, then fall back to 16-bit PCM.
         let newAudioFile: AVAudioFile
         do {
             newAudioFile = try AVAudioFile(forWriting: fileURL, settings: inputFormat.settings)
@@ -305,6 +307,31 @@ class AudioRecorder: NSObject, ObservableObject {
         audioEngine?.stop()
         os_log(.info, log: recordingLog, "engine stopped (mic indicator off)")
 
+        // Convert to 16kHz mono for smaller upload (Whisper is trained on 16kHz mono)
+        if let url = tempFileURL {
+            tempFileURL = convertTo16kHzMono(url) ?? url
+        }
+
+        // Debug: check the recorded file
+        if let url = tempFileURL {
+            if FileManager.default.fileExists(atPath: url.path) {
+                do {
+                    let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+                    let fileSize = attrs[.size] as? UInt64 ?? 0
+                    os_log(.info, log: recordingLog, "recorded file: %{public}@, size=%llu bytes", url.lastPathComponent, fileSize)
+                    if fileSize == 0 {
+                        os_log(.error, log: recordingLog, "WARNING: recorded file is EMPTY (0 bytes)!")
+                    }
+                } catch {
+                    os_log(.error, log: recordingLog, "failed to get file attributes: %{public}@", error.localizedDescription)
+                }
+            } else {
+                os_log(.error, log: recordingLog, "ERROR: temp file does not exist at %{public}@", url.path)
+            }
+        } else {
+            os_log(.error, log: recordingLog, "ERROR: tempFileURL is nil")
+        }
+
         return tempFileURL
     }
 
@@ -343,6 +370,81 @@ class AudioRecorder: NSObject, ObservableObject {
 
         DispatchQueue.main.async {
             self.audioLevel = self.smoothedLevel
+        }
+    }
+
+    /// Convert audio file to 16kHz mono 16-bit PCM for minimal upload size.
+    private func convertTo16kHzMono(_ sourceURL: URL) -> URL? {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        do {
+            let sourceFile = try AVAudioFile(forReading: sourceURL)
+            let sourceFormat = sourceFile.processingFormat
+
+            guard let targetFormat = AVAudioFormat(
+                commonFormat: .pcmFormatInt16,
+                sampleRate: 16000,
+                channels: 1,
+                interleaved: true
+            ) else {
+                os_log(.error, log: recordingLog, "failed to create target format for 16kHz mono")
+                return nil
+            }
+
+            guard let converter = AVAudioConverter(from: sourceFormat, to: targetFormat) else {
+                os_log(.error, log: recordingLog, "failed to create audio converter")
+                return nil
+            }
+
+            let destURL = sourceURL.deletingPathExtension().appendingPathExtension("16k.wav")
+            let destFile = try AVAudioFile(
+                forWriting: destURL,
+                settings: targetFormat.settings,
+                commonFormat: .pcmFormatInt16,
+                interleaved: true
+            )
+
+            // Process in chunks
+            let bufferSize: AVAudioFrameCount = 4096
+            guard let convertBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: bufferSize) else {
+                os_log(.error, log: recordingLog, "failed to create conversion buffer")
+                return nil
+            }
+
+            var isDone = false
+            while !isDone {
+                let status = converter.convert(to: convertBuffer, error: nil) { inNumPackets, outStatus in
+                    do {
+                        let readBuffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: inNumPackets)!
+                        try sourceFile.read(into: readBuffer)
+                        if readBuffer.frameLength == 0 {
+                            outStatus.pointee = .endOfStream
+                            return nil
+                        }
+                        outStatus.pointee = .haveData
+                        return readBuffer
+                    } catch {
+                        outStatus.pointee = .endOfStream
+                        return nil
+                    }
+                }
+
+                if status == .error || convertBuffer.frameLength == 0 {
+                    isDone = true
+                } else {
+                    try destFile.write(from: convertBuffer)
+                }
+            }
+
+            // Clean up source file
+            try? FileManager.default.removeItem(at: sourceURL)
+
+            let elapsed = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+            let destSize = (try? FileManager.default.attributesOfItem(atPath: destURL.path)[.size] as? UInt64) ?? 0
+            os_log(.info, log: recordingLog, "converted to 16kHz mono: %llu bytes in %.1fms", destSize, elapsed)
+            return destURL
+        } catch {
+            os_log(.error, log: recordingLog, "audio conversion failed: %{public}@", error.localizedDescription)
+            return nil
         }
     }
 

@@ -34,6 +34,27 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     }
 }
 
+enum TranscriptionProvider: String, CaseIterable, Identifiable {
+    case local
+    case groq
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .local: return "Local (Parakeet)"
+        case .groq: return "Groq (Whisper)"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .local: return "On-device, no internet needed"
+        case .groq: return "Cloud-based, requires API key"
+        }
+    }
+}
+
 final class AppState: ObservableObject, @unchecked Sendable {
     private let apiKeyStorageKey = "groq_api_key"
     private let apiBaseURLStorageKey = "api_base_url"
@@ -43,6 +64,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let customContextPromptStorageKey = "custom_context_prompt"
     private let customSystemPromptLastModifiedStorageKey = "custom_system_prompt_last_modified"
     private let customContextPromptLastModifiedStorageKey = "custom_context_prompt_last_modified"
+    private let transcriptionProviderStorageKey = "transcription_provider"
     private let transcribingIndicatorDelay: TimeInterval = 1.0
     let maxPipelineHistoryCount = 20
 
@@ -117,6 +139,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     @Published var lastRawTranscript = ""
     @Published var lastPostProcessedTranscript = ""
     @Published var lastPostProcessingPrompt = ""
+    @Published var lastPostProcessingReasoning = ""
     @Published var lastContextSummary = ""
     @Published var lastPostProcessingStatus = ""
     @Published var lastContextScreenshotDataURL: String? = nil
@@ -131,11 +154,17 @@ final class AppState: ObservableObject, @unchecked Sendable {
             UserDefaults.standard.set(selectedMicrophoneID, forKey: selectedMicrophoneStorageKey)
         }
     }
+    @Published var selectedTranscriptionProvider: TranscriptionProvider {
+        didSet {
+            UserDefaults.standard.set(selectedTranscriptionProvider.rawValue, forKey: transcriptionProviderStorageKey)
+        }
+    }
     @Published var availableMicrophones: [AudioDevice] = []
 
     let audioRecorder = AudioRecorder()
     let hotkeyManager = HotkeyManager()
     let overlayManager = RecordingOverlayManager()
+    let localTranscriptionService = LocalTranscriptionService()
     private var accessibilityTimer: Timer?
     private var audioLevelCancellable: AnyCancellable?
     private var debugOverlayTimer: Timer?
@@ -187,9 +216,11 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.hasScreenRecordingPermission = initialScreenCapturePermission
         self.launchAtLogin = SMAppService.mainApp.status == .enabled
         self.selectedMicrophoneID = selectedMicrophoneID
+        self.selectedTranscriptionProvider = TranscriptionProvider(rawValue: UserDefaults.standard.string(forKey: transcriptionProviderStorageKey) ?? "") ?? .local
 
         refreshAvailableMicrophones()
         installAudioDeviceListener()
+        localTranscriptionService.initialize()
     }
 
     deinit {
@@ -598,15 +629,26 @@ final class AppState: ObservableObject, @unchecked Sendable {
         lastContextSummary = ""
         lastPostProcessingStatus = ""
         lastPostProcessingPrompt = ""
+        lastPostProcessingReasoning = ""
         lastContextScreenshotDataURL = nil
         lastContextScreenshotStatus = "No screenshot"
 
         guard let fileURL = audioRecorder.stopRecording() else {
+            os_log(.error, log: recordingLog, "stopRecording() returned nil URL")
             audioRecorder.cleanup()
             errorMessage = "No audio recorded"
             isRecording = false
             statusText = "Error"
             return
+        }
+        os_log(.info, log: recordingLog, "stopRecording() returned file: %{public}@", fileURL.path)
+        // Check file size before sending to transcription
+        if let fileAttrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+           let fileSize = fileAttrs[.size] as? UInt64 {
+            os_log(.info, log: recordingLog, "audio file size for transcription: %llu bytes", fileSize)
+            if fileSize < 1000 {
+                os_log(.error, log: recordingLog, "WARNING: audio file suspiciously small (%llu bytes), transcription may fail", fileSize)
+            }
         }
         let savedAudioFileName = Self.saveAudioFile(from: fileURL)
         isRecording = false
@@ -630,41 +672,72 @@ final class AppState: ObservableObject, @unchecked Sendable {
             } catch {}
         }
 
-        let transcriptionService = TranscriptionService(apiKey: apiKey, baseURL: apiBaseURL)
-        let postProcessingService = PostProcessingService(apiKey: apiKey, baseURL: apiBaseURL)
+        os_log(.info, log: recordingLog, "creating post-processing service, apiBaseURL=%{public}@", apiBaseURL)
+        let postProcessingService = apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? nil
+            : PostProcessingService(apiKey: apiKey, baseURL: apiBaseURL)
 
         Task {
             do {
-                async let transcript = transcriptionService.transcribe(fileURL: fileURL)
-                let rawTranscript = try await transcript
+                let rawTranscript: String
+                switch self.selectedTranscriptionProvider {
+                case .local:
+                    rawTranscript = try await self.localTranscriptionService.transcribe(fileURL: fileURL)
+                case .groq:
+                    let trimmedKey = self.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmedKey.isEmpty {
+                        os_log(.info, log: recordingLog, "Groq selected but no API key — falling back to local transcription")
+                        rawTranscript = try await self.localTranscriptionService.transcribe(fileURL: fileURL)
+                    } else {
+                        rawTranscript = try await TranscriptionService(apiKey: trimmedKey, baseURL: self.apiBaseURL).transcribe(fileURL: fileURL)
+                    }
+                }
+                os_log(.info, log: recordingLog, "rawTranscript: '%{public}@'", rawTranscript)
                 let appContext: AppContext
                 if let sessionContext {
+                    os_log(.info, log: recordingLog, "using sessionContext for post-processing")
                     appContext = sessionContext
                 } else if let inFlightContext = await inFlightContextTask?.value {
+                    os_log(.info, log: recordingLog, "using inFlightContext for post-processing")
                     appContext = inFlightContext
                 } else {
+                    os_log(.info, log: recordingLog, "using fallbackContext for post-processing")
                     appContext = fallbackContextAtStop()
                 }
+                os_log(.info, log: recordingLog, "appContext: app=%{public}@, window=%{public}@, activity=%{public}@", appContext.appName ?? "nil", appContext.windowTitle ?? "nil", appContext.currentActivity)
                 await MainActor.run { [weak self] in
                     self?.debugStatusMessage = "Running post-processing"
                 }
                 let finalTranscript: String
                 let processingStatus: String
                 let postProcessingPrompt: String
-                do {
-                    let postProcessingResult = try await postProcessingService.postProcess(
-                        transcript: rawTranscript,
-                        context: appContext,
-                        customVocabulary: customVocabulary,
-                        customSystemPrompt: customSystemPrompt
-                    )
-                    finalTranscript = postProcessingResult.transcript
-                    processingStatus = "Post-processing succeeded"
-                    postProcessingPrompt = postProcessingResult.prompt
-                } catch {
+                let postProcessingReasoning: String
+                if let postProcessingService {
+                    do {
+                        let postProcessingResult = try await postProcessingService.postProcess(
+                            transcript: rawTranscript,
+                            context: appContext,
+                            customVocabulary: customVocabulary,
+                            customSystemPrompt: customSystemPrompt
+                        )
+                        finalTranscript = postProcessingResult.transcript
+                        processingStatus = "Post-processing succeeded"
+                        postProcessingPrompt = postProcessingResult.prompt
+                        postProcessingReasoning = postProcessingResult.reasoning
+                        os_log(.info, log: recordingLog, "post-processing reasoning: %{public}@", postProcessingReasoning)
+                    } catch {
+                        os_log(.error, log: recordingLog, "post-processing FAILED: %{public}@", error.localizedDescription)
+                        finalTranscript = rawTranscript
+                        processingStatus = "Post-processing failed, using raw transcript"
+                        postProcessingPrompt = ""
+                        postProcessingReasoning = "Error: \(error.localizedDescription)"
+                    }
+                } else {
+                    os_log(.info, log: recordingLog, "no API key — skipping post-processing, using raw transcript")
                     finalTranscript = rawTranscript
-                    processingStatus = "Post-processing failed, using raw transcript"
+                    processingStatus = "Post-processing skipped (no API key)"
                     postProcessingPrompt = ""
+                    postProcessingReasoning = "No API key configured"
                 }
                 await MainActor.run {
                     self.lastContextSummary = appContext.contextSummary
@@ -674,6 +747,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     let trimmedRawTranscript = rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
                     let trimmedFinalTranscript = finalTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
                     self.lastPostProcessingPrompt = postProcessingPrompt
+                    self.lastPostProcessingReasoning = postProcessingReasoning
                     self.lastRawTranscript = trimmedRawTranscript
                     self.lastPostProcessedTranscript = trimmedFinalTranscript
                     self.lastPostProcessingStatus = processingStatus
@@ -681,6 +755,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         rawTranscript: trimmedRawTranscript,
                         postProcessedTranscript: trimmedFinalTranscript,
                         postProcessingPrompt: postProcessingPrompt,
+                        postProcessingReasoning: postProcessingReasoning,
                         context: appContext,
                         processingStatus: processingStatus,
                         audioFileName: savedAudioFileName
@@ -691,7 +766,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     self.isTranscribing = false
                     self.debugStatusMessage = "Done"
 
+                    os_log(.info, log: recordingLog, "finalTranscript: '%{public}@'", trimmedFinalTranscript)
                     if trimmedFinalTranscript.isEmpty {
+                        os_log(.info, log: recordingLog, "transcript empty — showing 'Nothing to transcribe'")
                         self.statusText = "Nothing to transcribe"
                         self.overlayManager.dismiss()
                     } else {
@@ -703,8 +780,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(trimmedFinalTranscript, forType: .string)
+                        os_log(.info, log: recordingLog, "clipboard set, scheduling paste")
 
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            os_log(.info, log: recordingLog, "pasteAtCursor() firing now")
                             self.pasteAtCursor()
                         }
                     }
@@ -718,6 +797,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     }
                 }
             } catch {
+                os_log(.error, log: recordingLog, "PIPELINE ERROR: %{public}@", error.localizedDescription)
                 let resolvedContext: AppContext
                 if let sessionContext {
                     resolvedContext = sessionContext
@@ -739,6 +819,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     self.lastContextSummary = ""
                     self.lastPostProcessingStatus = "Error: \(error.localizedDescription)"
                     self.lastPostProcessingPrompt = ""
+                    self.lastPostProcessingReasoning = ""
                     self.lastContextScreenshotDataURL = resolvedContext.screenshotDataURL
                     self.lastContextScreenshotStatus = resolvedContext.screenshotError
                         ?? "available (\(resolvedContext.screenshotMimeType ?? "image"))"
@@ -759,6 +840,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         rawTranscript: String,
         postProcessedTranscript: String,
         postProcessingPrompt: String,
+        postProcessingReasoning: String = "",
         context: AppContext,
         processingStatus: String,
         audioFileName: String? = nil
@@ -768,6 +850,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             rawTranscript: rawTranscript,
             postProcessedTranscript: postProcessedTranscript,
             postProcessingPrompt: postProcessingPrompt,
+            postProcessingReasoning: postProcessingReasoning,
             contextSummary: context.contextSummary,
             contextPrompt: context.contextPrompt,
             contextScreenshotDataURL: context.screenshotDataURL,

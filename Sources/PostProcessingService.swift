@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let ppLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "PostProcessing")
 
 enum PostProcessingError: LocalizedError {
     case requestFailed(Int, String)
@@ -20,23 +23,21 @@ enum PostProcessingError: LocalizedError {
 struct PostProcessingResult {
     let transcript: String
     let prompt: String
+    let reasoning: String
 }
 
 final class PostProcessingService {
     static let defaultSystemPrompt = """
-You are a dictation post-processor. You receive raw speech-to-text output and return clean text ready to be typed into an application.
+You are a dictation post-processor. You clean up raw speech-to-text output for typing.
 
-Your job:
-- Remove filler words (um, uh, you know, like) unless they carry meaning.
-- Fix spelling, grammar, and punctuation errors.
-- When the transcript already contains a word that is a close misspelling of a name or term from the context or custom vocabulary, correct the spelling. Never insert names or terms from context that the speaker did not say.
-- Preserve the speaker's intent, tone, and meaning exactly.
+Rules:
+- Add punctuation, capitalization, and formatting.
+- Remove filler words (um, uh, like, you know) unless they carry meaning.
+- Fix misspellings using context and custom vocabulary — only correct words already spoken, never insert new ones.
+- Preserve tone, intent, and word choice exactly. Never censor, rephrase, or omit anything including profanity and slang.
 
-Output rules:
-- Return ONLY the cleaned transcript text, nothing else.
-- If the transcription is empty, return exactly: EMPTY
-- Do not add words, names, or content that are not in the transcription. The context is only for correcting spelling of words already spoken.
-- Do not change the meaning of what was said.
+Respond with JSON: {"text": "cleaned text", "reasoning": "brief explanation of changes made"}
+If the input is empty or only noise, respond: {"text": "", "reasoning": "explanation"}
 """
     static let defaultSystemPromptDate = "2026-02-24"
 
@@ -44,6 +45,22 @@ Output rules:
     private let baseURL: String
     private let defaultModel = "meta-llama/llama-4-scout-17b-16e-instruct"
     private let postProcessingTimeoutSeconds: TimeInterval = 20
+
+    static func validateAPIKey(_ key: String, baseURL: String = "https://api.groq.com/openai/v1") async -> Bool {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        var request = URLRequest(url: URL(string: "\(baseURL)/models")!)
+        request.setValue("Bearer \(trimmed)", forHTTPHeaderField: "Authorization")
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            return status == 200
+        } catch {
+            return false
+        }
+    }
 
     init(apiKey: String, baseURL: String = "https://api.groq.com/openai/v1") {
         self.apiKey = apiKey
@@ -98,6 +115,7 @@ Output rules:
         customVocabulary: [String],
         customSystemPrompt: String = ""
     ) async throws -> PostProcessingResult {
+        os_log(.info, log: ppLog, "process() called — transcript: '%{public}@', context: '%{public}@'", transcript, contextSummary)
         var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -105,6 +123,7 @@ Output rules:
         request.timeoutInterval = postProcessingTimeoutSeconds
 
         let normalizedVocabulary = normalizedVocabularyText(customVocabulary)
+        os_log(.info, log: ppLog, "vocabulary: '%{public}@', customSystemPrompt empty: %{public}d", normalizedVocabulary, customSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         let vocabularyPrompt = if !normalizedVocabulary.isEmpty {
             """
 The following vocabulary must be treated as high-priority terms while rewriting.
@@ -123,12 +142,13 @@ Use these spellings exactly in the output when relevant:
         }
 
         let userMessage = """
-Instructions: Clean up RAW_TRANSCRIPTION and return only the cleaned transcript text without surrounding quotes. Return EMPTY if there should be no result.
+CONTEXT: \(contextSummary)
 
-CONTEXT: "\(contextSummary)"
-
-RAW_TRANSCRIPTION: "\(transcript)"
+RAW_TRANSCRIPTION: \(transcript)
 """
+
+        os_log(.info, log: ppLog, "sending to model: %{public}@", model)
+        os_log(.info, log: ppLog, "user message: '%{public}@'", userMessage)
 
         let promptForDisplay = """
 Model: \(model)
@@ -143,6 +163,7 @@ Model: \(model)
         let payload: [String: Any] = [
             "model": model,
             "temperature": 0.0,
+            "response_format": ["type": "json_object"],
             "messages": [
                 [
                     "role": "system",
@@ -159,45 +180,71 @@ Model: \(model)
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
+            os_log(.error, log: ppLog, "no HTTP response")
             throw PostProcessingError.invalidResponse("No HTTP response")
         }
 
+        os_log(.info, log: ppLog, "post-processing API response status: %d", httpResponse.statusCode)
+
         guard httpResponse.statusCode == 200 else {
             let message = String(data: data, encoding: .utf8) ?? ""
+            os_log(.error, log: ppLog, "post-processing API error: status=%d body='%{public}@'", httpResponse.statusCode, message)
             throw PostProcessingError.requestFailed(httpResponse.statusCode, message)
         }
+
+        let rawBody = String(data: data, encoding: .utf8) ?? "<binary>"
+        os_log(.info, log: ppLog, "post-processing API raw response: '%{public}@'", rawBody)
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let choices = json["choices"] as? [[String: Any]],
               let firstChoice = choices.first,
               let message = firstChoice["message"] as? [String: Any],
               let content = message["content"] as? String else {
+            os_log(.error, log: ppLog, "failed to parse response JSON")
             throw PostProcessingError.invalidResponse("Missing choices[0].message.content")
         }
 
+        os_log(.info, log: ppLog, "LLM raw content: '%{public}@'", content)
+        let (cleanedText, reasoning) = parsePostProcessingResponse(content)
+        os_log(.info, log: ppLog, "parsed text: '%{public}@', reasoning: '%{public}@'", cleanedText, reasoning)
         return PostProcessingResult(
-            transcript: sanitizePostProcessedTranscript(content),
-            prompt: promptForDisplay
+            transcript: cleanedText,
+            prompt: promptForDisplay,
+            reasoning: reasoning
         )
     }
 
-    private func sanitizePostProcessedTranscript(_ value: String) -> String {
-        var result = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !result.isEmpty else { return "" }
+    /// Parse LLM response as JSON {"text": "...", "reasoning": "..."}.
+    /// Falls back to treating the entire response as plain text if JSON parsing fails.
+    private func parsePostProcessingResponse(_ value: String) -> (text: String, reasoning: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return ("", "Empty response from LLM") }
 
-        // Strip outer quotes if the LLM wrapped the entire response
+        // Try JSON parse first
+        if let data = trimmed.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let text = (json["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let reasoning = (json["reasoning"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            os_log(.info, log: ppLog, "parsed as JSON — text: '%{public}@', reasoning: '%{public}@'", text, reasoning)
+            return (text, reasoning)
+        }
+
+        // Fallback: treat as plain text (LLM didn't return JSON)
+        os_log(.info, log: ppLog, "LLM did not return JSON, falling back to plain text")
+        var result = trimmed
+
+        // Strip outer quotes if the LLM wrapped the response
         if result.hasPrefix("\"") && result.hasSuffix("\"") && result.count > 1 {
             result.removeFirst()
             result.removeLast()
             result = result.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
-        // Treat the sentinel value as empty
         if result == "EMPTY" {
-            return ""
+            return ("", "LLM returned EMPTY sentinel")
         }
 
-        return result
+        return (result, "LLM returned plain text (no JSON)")
     }
 
     private func mergedVocabularyTerms(rawVocabulary: String) -> [String] {

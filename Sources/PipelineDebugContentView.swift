@@ -17,6 +17,7 @@ struct PipelineDebugContentView: View {
     let rawTranscript: String
     let postProcessedTranscript: String
     let postProcessingPrompt: String
+    let postProcessingReasoning: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -49,6 +50,10 @@ struct PipelineDebugContentView: View {
 
             if !postProcessedTranscript.isEmpty {
                 debugRow(title: "Post-Processed Transcript", value: postProcessedTranscript, copyText: postProcessedTranscript)
+            }
+
+            if !postProcessingReasoning.isEmpty {
+                debugRow(title: "LLM Reasoning", value: postProcessingReasoning)
             }
 
             if contextSummary.isEmpty && rawTranscript.isEmpty && postProcessedTranscript.isEmpty && postProcessingPrompt.isEmpty {

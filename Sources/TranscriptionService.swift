@@ -1,9 +1,12 @@
 import Foundation
+import os.log
+
+private let tsLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "Transcription")
 
 class TranscriptionService {
     private let apiKey: String
     private let baseURL: String
-    private let transcriptionModel = "whisper-large-v3"
+    private let transcriptionModel = "whisper-large-v3-turbo"
     private let transcriptionTimeoutSeconds: TimeInterval = 20
 
     init(apiKey: String, baseURL: String = "https://api.groq.com/openai/v1") {
@@ -53,6 +56,7 @@ class TranscriptionService {
 
     // Send audio file for transcription and return text
     private func transcribeAudio(fileURL: URL) async throws -> String {
+        os_log(.info, log: tsLog, "transcribeAudio() starting for file: %{public}@", fileURL.lastPathComponent)
         let url = URL(string: "\(baseURL)/audio/transcriptions")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -63,6 +67,7 @@ class TranscriptionService {
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
 
         let audioData = try Data(contentsOf: fileURL)
+        os_log(.info, log: tsLog, "audio data loaded: %d bytes, sending to %{public}@", audioData.count, url.absoluteString)
         let body = makeMultipartBody(
             audioData: audioData,
             fileName: fileURL.lastPathComponent,
@@ -74,15 +79,24 @@ class TranscriptionService {
         let (data, response) = try await URLSession.shared.upload(for: request, from: body)
 
         guard let httpResponse = response as? HTTPURLResponse else {
+            os_log(.error, log: tsLog, "no HTTP response from server")
             throw TranscriptionError.submissionFailed("No response from server")
         }
 
+        os_log(.info, log: tsLog, "transcription API response status: %d", httpResponse.statusCode)
+
         guard httpResponse.statusCode == 200 else {
             let responseBody = String(data: data, encoding: .utf8) ?? ""
+            os_log(.error, log: tsLog, "transcription API error: status=%d body='%{public}@'", httpResponse.statusCode, responseBody)
             throw TranscriptionError.submissionFailed("Status \(httpResponse.statusCode): \(responseBody)")
         }
 
-        return try parseTranscript(from: data)
+        let rawResponseBody = String(data: data, encoding: .utf8) ?? "<binary>"
+        os_log(.info, log: tsLog, "transcription API raw response: '%{public}@'", rawResponseBody)
+
+        let result = try parseTranscript(from: data)
+        os_log(.info, log: tsLog, "parsed transcript: '%{public}@'", result)
+        return result
     }
 
     private func makeMultipartBody(audioData: Data, fileName: String, model: String, boundary: String) -> Data {
