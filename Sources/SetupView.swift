@@ -11,6 +11,7 @@ struct SetupView: View {
     private let freeflowRepoURL = URL(string: "https://github.com/zachlatta/freeflow")!
     private enum SetupStep: Int, CaseIterable {
         case welcome = 0
+        case transcriptionProvider
         case apiKey
         case micPermission
         case accessibility
@@ -53,6 +54,8 @@ struct SetupView: View {
                 switch currentStep {
                 case .welcome:
                     welcomeStep
+                case .transcriptionProvider:
+                    transcriptionProviderStep
                 case .apiKey:
                     apiKeyStep
                 case .micPermission:
@@ -88,63 +91,80 @@ struct SetupView: View {
                     }
                     .disabled(isValidatingKey)
                 }
-                Spacer()
-                if currentStep != .ready {
-                    if currentStep == .apiKey {
-                        // API key step: skip or validate before continuing
-                        Button("Skip") {
-                            appState.apiKey = ""
-                            withAnimation {
-                                currentStep = nextStep(currentStep)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
 
-                        Button(isValidatingKey ? "Validating..." : "Continue") {
-                            validateAndContinue()
-                        }
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isValidatingKey)
-                    } else if currentStep == .vocabulary {
-                        Button("Continue") {
-                            saveCustomVocabularyAndContinue()
-                        }
-                        .keyboardShortcut(.defaultAction)
-                    } else if currentStep == .testTranscription {
-                        Button("Skip") {
-                            stopTestHotkeyMonitoring()
-                            withAnimation {
-                                currentStep = nextStep(currentStep)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-
-                        Button("Continue") {
-                            stopTestHotkeyMonitoring()
-                            withAnimation {
-                                currentStep = nextStep(currentStep)
-                            }
-                        }
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(testPhase != .done || testTranscript.isEmpty || testError != nil)
-                    } else {
-                        Button("Continue") {
-                            withAnimation {
-                                currentStep = nextStep(currentStep)
-                            }
-                        }
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(!canContinueFromCurrentStep)
-                    }
-                } else {
-                    Button("Get Started") {
-                        onComplete()
-                    }
-                    .keyboardShortcut(.defaultAction)
+                // Inline model download status (shown after provider step when local is selected)
+                if appState.selectedTranscriptionProvider == .local
+                    && currentStep.rawValue > SetupStep.transcriptionProvider.rawValue {
+                    modelDownloadStatusInline
                 }
-            }
+
+                Spacer()
+                    if currentStep != .ready {
+                        if currentStep == .apiKey {
+                            // API key step: skip or validate before continuing
+                            Button("Skip") {
+                                appState.apiKey = ""
+                                withAnimation {
+                                    currentStep = nextStep(currentStep)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+
+                            Button(isValidatingKey ? "Validating..." : "Continue") {
+                                validateAndContinue()
+                            }
+                            .keyboardShortcut(.defaultAction)
+                            .disabled(apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isValidatingKey)
+                        } else if currentStep == .transcriptionProvider {
+                            Button("Continue") {
+                                if appState.selectedTranscriptionProvider == .local {
+                                    appState.localTranscriptionService.initialize()
+                                }
+                                withAnimation {
+                                    currentStep = nextStep(currentStep)
+                                }
+                            }
+                            .keyboardShortcut(.defaultAction)
+                        } else if currentStep == .vocabulary {
+                            Button("Continue") {
+                                saveCustomVocabularyAndContinue()
+                            }
+                            .keyboardShortcut(.defaultAction)
+                        } else if currentStep == .testTranscription {
+                            Button("Skip") {
+                                stopTestHotkeyMonitoring()
+                                withAnimation {
+                                    currentStep = nextStep(currentStep)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+
+                            Button("Continue") {
+                                stopTestHotkeyMonitoring()
+                                withAnimation {
+                                    currentStep = nextStep(currentStep)
+                                }
+                            }
+                            .keyboardShortcut(.defaultAction)
+                            .disabled(testPhase != .done || testTranscript.isEmpty || testError != nil)
+                        } else {
+                            Button("Continue") {
+                                withAnimation {
+                                    currentStep = nextStep(currentStep)
+                                }
+                            }
+                            .keyboardShortcut(.defaultAction)
+                            .disabled(!canContinueFromCurrentStep)
+                        }
+                    } else {
+                        Button("Get Started") {
+                            onComplete()
+                        }
+                        .keyboardShortcut(.defaultAction)
+                    }
+                }
             .padding(20)
         }
         .frame(width: 520, height: 520)
@@ -282,6 +302,87 @@ struct SetupView: View {
 
             stepIndicator
         }
+    }
+
+    var transcriptionProviderStep: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "waveform")
+                .font(.system(size: 60))
+                .foregroundStyle(.blue)
+
+            Text("Transcription Provider")
+                .font(.title)
+                .fontWeight(.bold)
+
+            Text("Choose how your speech is converted to text.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(spacing: 8) {
+                providerCard(
+                    provider: .local,
+                    icon: "desktopcomputer",
+                    title: "Local (Parakeet)",
+                    subtitle: "Private, runs on your Mac. No internet needed."
+                )
+
+                providerCard(
+                    provider: .groq,
+                    icon: "cloud",
+                    title: "Groq (Whisper)",
+                    subtitle: "Fast cloud transcription. Requires API key."
+                )
+
+                if appState.selectedTranscriptionProvider == .groq {
+                    HStack(spacing: 6) {
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.blue)
+                        Text("You'll set up your Groq API key in the next step.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                    .transition(.opacity)
+                }
+            }
+
+            stepIndicator
+        }
+    }
+
+    private func providerCard(provider: TranscriptionProvider, icon: String, title: String, subtitle: String) -> some View {
+        let isSelected = appState.selectedTranscriptionProvider == provider
+        return Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                appState.selectedTranscriptionProvider = provider
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isSelected ? .blue : .secondary)
+                Image(systemName: icon)
+                    .frame(width: 24)
+                    .foregroundStyle(.blue)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .foregroundStyle(.primary)
+                        .fontWeight(.medium)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(12)
+            .background(isSelected ? Color.blue.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 1.5)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     var apiKeyStep: some View {
@@ -750,6 +851,39 @@ struct SetupView: View {
             .padding(.top, 10)
 
             stepIndicator
+        }
+    }
+
+    @ViewBuilder
+    private var modelDownloadStatusInline: some View {
+        switch appState.localTranscriptionService.state {
+        case .notLoaded, .loading:
+            HStack(spacing: 4) {
+                ProgressView()
+                    .scaleEffect(0.5)
+                Text("Downloading model...")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        case .ready:
+            HStack(spacing: 3) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.green)
+                Text("Model ready")
+                    .font(.caption2)
+                    .foregroundStyle(.green)
+            }
+        case .error:
+            HStack(spacing: 3) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                Button("Retry download") {
+                    appState.localTranscriptionService.initialize()
+                }
+                .font(.caption2)
+            }
         }
     }
 

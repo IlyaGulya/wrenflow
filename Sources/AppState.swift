@@ -220,7 +220,11 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
         refreshAvailableMicrophones()
         installAudioDeviceListener()
-        localTranscriptionService.initialize()
+
+        // Only initialize local transcription if already chosen; otherwise deferred to setup wizard
+        if selectedTranscriptionProvider == .local && hasCompletedSetup {
+            localTranscriptionService.initialize()
+        }
     }
 
     deinit {
