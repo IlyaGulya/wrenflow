@@ -839,7 +839,15 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         audioFileSizeBytes: audioFileSizeBytes,
                         transcriptionProvider: capturedTranscriptionProvider,
                         postProcessingModel: capturedPostProcessingModel,
-                        pasteDurationMs: pasteDurationMs
+                        pasteDurationMs: pasteDurationMs,
+                        screenshotWindowListMs: appContext.screenshotWindowListMs,
+                        screenshotWindowSearchMs: appContext.screenshotWindowSearchMs,
+                        screenshotCaptureMs: appContext.screenshotCaptureMs,
+                        screenshotScContentMs: appContext.screenshotScContentMs,
+                        screenshotEncodeMs: appContext.screenshotEncodeMs,
+                        screenshotMethod: appContext.screenshotMethod,
+                        screenshotImageWidth: appContext.screenshotImageWidth,
+                        screenshotImageHeight: appContext.screenshotImageHeight
                     )
 
                     self.audioRecorder.cleanup()
@@ -887,7 +895,15 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         recordingDurationMs: recordingDurationMs,
                         audioFileSizeBytes: audioFileSizeBytes,
                         transcriptionProvider: capturedTranscriptionProvider,
-                        postProcessingModel: capturedPostProcessingModel
+                        postProcessingModel: capturedPostProcessingModel,
+                        screenshotWindowListMs: resolvedContext.screenshotWindowListMs,
+                        screenshotWindowSearchMs: resolvedContext.screenshotWindowSearchMs,
+                        screenshotCaptureMs: resolvedContext.screenshotCaptureMs,
+                        screenshotScContentMs: resolvedContext.screenshotScContentMs,
+                        screenshotEncodeMs: resolvedContext.screenshotEncodeMs,
+                        screenshotMethod: resolvedContext.screenshotMethod,
+                        screenshotImageWidth: resolvedContext.screenshotImageWidth,
+                        screenshotImageHeight: resolvedContext.screenshotImageHeight
                     )
                 }
             }
@@ -910,7 +926,15 @@ final class AppState: ObservableObject, @unchecked Sendable {
         audioFileSizeBytes: Int64? = nil,
         transcriptionProvider: String? = nil,
         postProcessingModel: String? = nil,
-        pasteDurationMs: Double? = nil
+        pasteDurationMs: Double? = nil,
+        screenshotWindowListMs: Double? = nil,
+        screenshotWindowSearchMs: Double? = nil,
+        screenshotCaptureMs: Double? = nil,
+        screenshotScContentMs: Double? = nil,
+        screenshotEncodeMs: Double? = nil,
+        screenshotMethod: String? = nil,
+        screenshotImageWidth: Int? = nil,
+        screenshotImageHeight: Int? = nil
     ) {
         let newEntry = PipelineHistoryItem(
             timestamp: Date(),
@@ -938,7 +962,15 @@ final class AppState: ObservableObject, @unchecked Sendable {
             contextLlmInferenceDurationMs: context.llmInferenceDurationMs,
             transcriptionProvider: transcriptionProvider,
             postProcessingModel: postProcessingModel,
-            pasteDurationMs: pasteDurationMs
+            pasteDurationMs: pasteDurationMs,
+            screenshotWindowListMs: screenshotWindowListMs,
+            screenshotWindowSearchMs: screenshotWindowSearchMs,
+            screenshotCaptureMs: screenshotCaptureMs,
+            screenshotScContentMs: screenshotScContentMs,
+            screenshotEncodeMs: screenshotEncodeMs,
+            screenshotMethod: screenshotMethod,
+            screenshotImageWidth: screenshotImageWidth,
+            screenshotImageHeight: screenshotImageHeight
         )
         do {
             let removedAudioFileNames = try pipelineHistoryStore.append(newEntry, maxCount: maxPipelineHistoryCount)
@@ -990,7 +1022,15 @@ final class AppState: ObservableObject, @unchecked Sendable {
             screenshotError: "No app context captured before stop",
             screenshotDurationMs: nil,
             llmInferenceDurationMs: nil,
-            totalCaptureDurationMs: nil
+            totalCaptureDurationMs: nil,
+            screenshotWindowListMs: nil,
+            screenshotWindowSearchMs: nil,
+            screenshotCaptureMs: nil,
+            screenshotScContentMs: nil,
+            screenshotEncodeMs: nil,
+            screenshotMethod: nil,
+            screenshotImageWidth: nil,
+            screenshotImageHeight: nil
         )
     }
 

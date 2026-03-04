@@ -1,6 +1,7 @@
 import Foundation
 import ApplicationServices
 import AppKit
+import ScreenCaptureKit
 
 struct AppContext {
     let appName: String?
@@ -15,6 +16,14 @@ struct AppContext {
     let screenshotDurationMs: Double?
     let llmInferenceDurationMs: Double?
     let totalCaptureDurationMs: Double?
+    let screenshotWindowListMs: Double?
+    let screenshotWindowSearchMs: Double?
+    let screenshotCaptureMs: Double?
+    let screenshotScContentMs: Double?
+    let screenshotEncodeMs: Double?
+    let screenshotMethod: String?
+    let screenshotImageWidth: Int?
+    let screenshotImageHeight: Int?
 
     var contextSummary: String {
         currentActivity
@@ -63,7 +72,15 @@ Return only two sentences, no labels, no markdown, no extra commentary.
                 screenshotError: "No frontmost application",
                 screenshotDurationMs: nil,
                 llmInferenceDurationMs: nil,
-                totalCaptureDurationMs: totalMs
+                totalCaptureDurationMs: totalMs,
+                screenshotWindowListMs: nil,
+                screenshotWindowSearchMs: nil,
+                screenshotCaptureMs: nil,
+                screenshotScContentMs: nil,
+                screenshotEncodeMs: nil,
+                screenshotMethod: nil,
+                screenshotImageWidth: nil,
+                screenshotImageHeight: nil
             )
         }
 
@@ -74,13 +91,12 @@ Return only two sentences, no labels, no markdown, no extra commentary.
         let windowTitle = focusedWindowTitle(from: appElement) ?? appName
         let selectedText = selectedText(from: appElement)
 
-        let screenshotStart = CFAbsoluteTimeGetCurrent()
-        let screenshot = captureActiveWindowScreenshot(
+        let screenshot = await captureActiveWindowScreenshot(
             processIdentifier: frontmostApp.processIdentifier,
             appElement: appElement,
             focusedWindowTitle: windowTitle
         )
-        let screenshotDurationMs = (CFAbsoluteTimeGetCurrent() - screenshotStart) * 1000
+        let screenshotDurationMs = screenshot.timings.totalMs
 
         let currentActivity: String
         let contextPrompt: String?
@@ -133,7 +149,15 @@ Return only two sentences, no labels, no markdown, no extra commentary.
             screenshotError: screenshot.error,
             screenshotDurationMs: screenshotDurationMs,
             llmInferenceDurationMs: llmInferenceDurationMs,
-            totalCaptureDurationMs: totalCaptureDurationMs
+            totalCaptureDurationMs: totalCaptureDurationMs,
+            screenshotWindowListMs: screenshot.timings.windowListMs,
+            screenshotWindowSearchMs: screenshot.timings.windowSearchMs,
+            screenshotCaptureMs: screenshot.timings.captureMs,
+            screenshotScContentMs: screenshot.timings.scContentMs,
+            screenshotEncodeMs: screenshot.timings.encodeMs,
+            screenshotMethod: screenshot.timings.method.isEmpty ? nil : screenshot.timings.method,
+            screenshotImageWidth: screenshot.timings.imageWidth > 0 ? screenshot.timings.imageWidth : nil,
+            screenshotImageHeight: screenshot.timings.imageHeight > 0 ? screenshot.timings.imageHeight : nil
         )
     }
 
@@ -351,24 +375,44 @@ Selected text: \(selectedText ?? "None")
         return size
     }
 
+    struct ScreenshotTimings {
+        var windowListMs: Double = 0
+        var windowSearchMs: Double = 0
+        var scContentMs: Double = 0
+        var captureMs: Double = 0
+        var encodeMs: Double = 0
+        var totalMs: Double = 0
+        var method: String = ""
+        var imageWidth: Int = 0
+        var imageHeight: Int = 0
+    }
+
     private func captureActiveWindowScreenshot(
         processIdentifier: pid_t,
         appElement: AXUIElement,
         focusedWindowTitle: String?
-    ) -> (dataURL: String?, mimeType: String?, error: String?) {
+    ) async -> (dataURL: String?, mimeType: String?, error: String?, timings: ScreenshotTimings) {
+        let totalStart = CFAbsoluteTimeGetCurrent()
+        var timings = ScreenshotTimings()
+
         if !CGPreflightScreenCaptureAccess() {
+            timings.totalMs = (CFAbsoluteTimeGetCurrent() - totalStart) * 1000
             return (
                 nil,
                 nil,
-                "Screen recording permission not granted. Enable in System Settings > Privacy & Security > Screen Recording."
+                "Screen recording permission not granted. Enable in System Settings > Privacy & Security > Screen Recording.",
+                timings
             )
         }
 
+        let windowListStart = CFAbsoluteTimeGetCurrent()
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
             as? [[String: Any]]
+        timings.windowListMs = (CFAbsoluteTimeGetCurrent() - windowListStart) * 1000
 
         guard let windows else {
-            return (nil, nil, "Unable to read window list")
+            timings.totalMs = (CFAbsoluteTimeGetCurrent() - totalStart) * 1000
+            return (nil, nil, "Unable to read window list", timings)
         }
 
         let ownerPIDKey = kCGWindowOwnerPID as String
@@ -386,6 +430,7 @@ Selected text: \(selectedText ?? "None")
             let name: String?
         }
 
+        let searchStart = CFAbsoluteTimeGetCurrent()
         let candidateWindows = windows.compactMap { windowInfo -> CandidateWindow? in
             guard let ownerPID = windowInfo[ownerPIDKey] as? Int,
                   ownerPID == processIdentifier else {
@@ -409,6 +454,9 @@ Selected text: \(selectedText ?? "None")
             )
         }
 
+        // Find the target window ID using bounds matching or title matching
+        var targetWindowID: CGWindowID?
+
         if let focusedWindowBounds = focusedWindowBounds(from: appElement), !focusedWindowBounds.isNull {
             if let activeWindow = candidateWindows
                 .compactMap({ candidate -> (CandidateWindow, CGFloat)? in
@@ -424,104 +472,135 @@ Selected text: \(selectedText ?? "None")
                     }
                     return lhs.0.layer < rhs.0.layer
                 })
-                    .first?.0 {
-                if let dataURL = captureWindowImage(
-                    windowID: activeWindow.id,
-                    fileType: .jpeg,
-                    mimeType: "image/jpeg",
-                    compression: screenshotCompressionPrimary,
-                    maxDimension: screenshotMaxDimension
-                ) {
-                    return (dataURL, "image/jpeg", nil)
-                }
-            }
-
-            if let focusedWindowTitle,
-               let activeWindow = candidateWindows
-                   .filter({ candidate in
-                       let normalizedName = candidate.name?
-                           .lowercased()
-                           .trimmingCharacters(in: .whitespacesAndNewlines)
-                       let normalizedTarget = focusedWindowTitle
-                           .lowercased()
-                           .trimmingCharacters(in: .whitespacesAndNewlines)
-                       guard let normalizedName, !normalizedName.isEmpty,
-                             !normalizedTarget.isEmpty else {
-                           return false
-                       }
-
-                       return normalizedName == normalizedTarget || normalizedName.contains(normalizedTarget)
-                   })
-                   .sorted(by: { lhs, rhs in
-                       if lhs.layer == rhs.layer {
-                           return lhs.area > rhs.area
-                       }
-                       return lhs.layer < rhs.layer
-                   })
-                   .first {
-                if let dataURL = captureWindowImage(
-                    windowID: activeWindow.id,
-                    fileType: .jpeg,
-                    mimeType: "image/jpeg",
-                    compression: screenshotCompressionPrimary,
-                    maxDimension: screenshotMaxDimension
-                ) {
-                    return (dataURL, "image/jpeg", nil)
-                }
+                .first?.0 {
+                timings.windowSearchMs = (CFAbsoluteTimeGetCurrent() - searchStart) * 1000
+                timings.method = "bounds"
+                targetWindowID = activeWindow.id
             }
         }
 
-        guard let fullScreenImage = CGWindowListCreateImage(
-            CGRect.infinite,
-            .optionOnScreenOnly,
-            kCGNullWindowID,
-            [.bestResolution]
-        ) else {
-            return (nil, nil, "Could not capture screenshot (screen recording permission or window access issue)")
+        if targetWindowID == nil, let focusedWindowTitle {
+            if let activeWindow = candidateWindows
+                .filter({ candidate in
+                    let normalizedName = candidate.name?
+                        .lowercased()
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    let normalizedTarget = focusedWindowTitle
+                        .lowercased()
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard let normalizedName, !normalizedName.isEmpty,
+                          !normalizedTarget.isEmpty else {
+                        return false
+                    }
+                    return normalizedName == normalizedTarget || normalizedName.contains(normalizedTarget)
+                })
+                .sorted(by: { lhs, rhs in
+                    if lhs.layer == rhs.layer {
+                        return lhs.area > rhs.area
+                    }
+                    return lhs.layer < rhs.layer
+                })
+                .first {
+                timings.windowSearchMs = (CFAbsoluteTimeGetCurrent() - searchStart) * 1000
+                timings.method = "title"
+                targetWindowID = activeWindow.id
+            }
         }
 
-        if let croppedImage = croppedWhitespaceImage(from: fullScreenImage),
-           let dataURL = convertImageToDataURL(
-            croppedImage,
-            mimeType: "image/jpeg",
-            fileType: .jpeg,
-            compression: screenshotCompressionPrimary,
-            maxDimension: screenshotMaxDimension
-        ) {
-            return (dataURL, "image/jpeg", nil)
+        if timings.windowSearchMs == 0 {
+            timings.windowSearchMs = (CFAbsoluteTimeGetCurrent() - searchStart) * 1000
         }
 
-        return (nil, nil, "Could not capture screenshot within size limits")
-    }
-
-    private func captureWindowImage(
-        windowID: CGWindowID,
-        fileType: NSBitmapImageRep.FileType,
-        mimeType: String,
-        compression: Double? = nil,
-        maxDimension: CGFloat? = nil
-    ) -> String? {
-        guard let image = CGWindowListCreateImage(
-            .null,
-            .optionIncludingWindow,
-            windowID,
-            [.bestResolution]
-        ) else {
-            return nil
+        // Get SCShareableContent for ScreenCaptureKit capture
+        let scContentStart = CFAbsoluteTimeGetCurrent()
+        let scContent: SCShareableContent
+        do {
+            scContent = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        } catch {
+            timings.scContentMs = (CFAbsoluteTimeGetCurrent() - scContentStart) * 1000
+            timings.totalMs = (CFAbsoluteTimeGetCurrent() - totalStart) * 1000
+            return (nil, nil, "Could not get shareable content: \(error.localizedDescription)", timings)
         }
-        guard let croppedImage = croppedWhitespaceImage(from: image) else { return nil }
+        timings.scContentMs = (CFAbsoluteTimeGetCurrent() - scContentStart) * 1000
 
-        if let dataURL = convertImageToDataURL(
-            croppedImage,
-            mimeType: mimeType,
-            fileType: fileType,
-            compression: compression,
-            maxDimension: maxDimension
-        ) {
-            return dataURL
+        // Try window capture via ScreenCaptureKit
+        if let targetWindowID {
+            if let scWindow = scContent.windows.first(where: { $0.windowID == targetWindowID }) {
+                let captureStart = CFAbsoluteTimeGetCurrent()
+                do {
+                    let filter = SCContentFilter(desktopIndependentWindow: scWindow)
+                    let config = SCStreamConfiguration()
+                    config.width = Int(filter.contentRect.width * CGFloat(filter.pointPixelScale))
+                    config.height = Int(filter.contentRect.height * CGFloat(filter.pointPixelScale))
+                    config.ignoreShadowsSingleWindow = true
+                    config.showsCursor = false
+                    let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+                    timings.captureMs = (CFAbsoluteTimeGetCurrent() - captureStart) * 1000
+                    timings.imageWidth = image.width
+                    timings.imageHeight = image.height
+
+                    let encodeStart = CFAbsoluteTimeGetCurrent()
+                    if let dataURL = convertImageToDataURL(
+                        image,
+                        mimeType: "image/jpeg",
+                        fileType: .jpeg,
+                        compression: screenshotCompressionPrimary,
+                        maxDimension: screenshotMaxDimension
+                    ) {
+                        timings.encodeMs = (CFAbsoluteTimeGetCurrent() - encodeStart) * 1000
+                        timings.totalMs = (CFAbsoluteTimeGetCurrent() - totalStart) * 1000
+                        return (dataURL, "image/jpeg", nil, timings)
+                    }
+                } catch {
+                    // Fall through to fullscreen capture
+                }
+            }
         }
 
-        return nil
+        // Fullscreen fallback via ScreenCaptureKit display capture
+        timings.method = timings.method.isEmpty ? "fullscreen" : timings.method
+        let mouseLocation = NSEvent.mouseLocation
+        let targetDisplay = scContent.displays.first { display in
+            let frame = display.frame
+            return frame.contains(CGPoint(x: mouseLocation.x, y: mouseLocation.y))
+        } ?? scContent.displays.first
+
+        guard let display = targetDisplay else {
+            timings.totalMs = (CFAbsoluteTimeGetCurrent() - totalStart) * 1000
+            return (nil, nil, "No display found for screenshot", timings)
+        }
+
+        let captureStart = CFAbsoluteTimeGetCurrent()
+        do {
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            let config = SCStreamConfiguration()
+            config.width = Int(display.frame.width) * Int(display.frame.width > 2560 ? 2 : 1)
+            config.height = Int(display.frame.height) * Int(display.frame.width > 2560 ? 2 : 1)
+            config.showsCursor = false
+            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            timings.captureMs = (CFAbsoluteTimeGetCurrent() - captureStart) * 1000
+            timings.imageWidth = image.width
+            timings.imageHeight = image.height
+
+            let encodeStart = CFAbsoluteTimeGetCurrent()
+            if let dataURL = convertImageToDataURL(
+                image,
+                mimeType: "image/jpeg",
+                fileType: .jpeg,
+                compression: screenshotCompressionPrimary,
+                maxDimension: screenshotMaxDimension
+            ) {
+                timings.encodeMs = (CFAbsoluteTimeGetCurrent() - encodeStart) * 1000
+                timings.totalMs = (CFAbsoluteTimeGetCurrent() - totalStart) * 1000
+                return (dataURL, "image/jpeg", nil, timings)
+            }
+        } catch {
+            timings.totalMs = (CFAbsoluteTimeGetCurrent() - totalStart) * 1000
+            return (nil, nil, "Could not capture screenshot: \(error.localizedDescription)", timings)
+        }
+
+        timings.totalMs = (CFAbsoluteTimeGetCurrent() - totalStart) * 1000
+        return (nil, nil, "Could not capture screenshot within size limits", timings)
     }
 
     private func boundsValue(_ value: Any?) -> CGSize? {
@@ -595,74 +674,6 @@ Selected text: \(selectedText ?? "None")
         }
 
         return nil
-    }
-
-    private func croppedWhitespaceImage(from image: CGImage) -> CGImage? {
-        let width = image.width
-        let height = image.height
-        guard width > 0, height > 0 else { return nil }
-
-        let bytesPerPixel = 4
-        let bytesPerRow = width * bytesPerPixel
-        let byteCount = bytesPerRow * height
-        var pixelData = Array(repeating: UInt8(0), count: byteCount)
-
-        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
-              let context = CGContext(
-                data: &pixelData,
-                width: width,
-                height: height,
-                bitsPerComponent: 8,
-                bytesPerRow: bytesPerRow,
-                space: colorSpace,
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-              ) else {
-            return image
-        }
-
-        let drawRect = CGRect(origin: .zero, size: CGSize(width: width, height: height))
-        context.draw(image, in: drawRect)
-
-        let whiteThreshold: UInt8 = 245
-        let alphaThreshold: UInt8 = 5
-        var minX = width
-        var minY = height
-        var maxX: Int = -1
-        var maxY: Int = -1
-        var hasContent = false
-
-        for y in 0..<height {
-            let rowOffset = y * bytesPerRow
-            for x in 0..<width {
-                let offset = rowOffset + x * bytesPerPixel
-                let r = pixelData[offset]
-                let g = pixelData[offset + 1]
-                let b = pixelData[offset + 2]
-                let a = pixelData[offset + 3]
-
-                if a <= alphaThreshold { continue }
-                if r >= whiteThreshold && g >= whiteThreshold && b >= whiteThreshold {
-                    continue
-                }
-
-                hasContent = true
-                minX = min(minX, x)
-                minY = min(minY, y)
-                maxX = max(maxX, x)
-                maxY = max(maxY, y)
-            }
-        }
-
-        guard hasContent else { return image }
-
-        let cropRect = CGRect(
-            x: CGFloat(minX),
-            y: CGFloat(minY),
-            width: CGFloat(maxX - minX + 1),
-            height: CGFloat(maxY - minY + 1)
-        )
-
-        return image.cropping(to: cropRect) ?? image
     }
 
     private func resizedImage(for image: CGImage, maxDimension: CGFloat) -> CGImage? {

@@ -27,6 +27,14 @@ struct PipelineHistoryItem: Identifiable, Codable {
     let transcriptionProvider: String?
     let postProcessingModel: String?
     let pasteDurationMs: Double?
+    let screenshotWindowListMs: Double?
+    let screenshotWindowSearchMs: Double?
+    let screenshotCaptureMs: Double?
+    let screenshotScContentMs: Double?
+    let screenshotEncodeMs: Double?
+    let screenshotMethod: String?
+    let screenshotImageWidth: Int?
+    let screenshotImageHeight: Int?
 
     init(
         id: UUID = UUID(),
@@ -54,7 +62,15 @@ struct PipelineHistoryItem: Identifiable, Codable {
         contextLlmInferenceDurationMs: Double? = nil,
         transcriptionProvider: String? = nil,
         postProcessingModel: String? = nil,
-        pasteDurationMs: Double? = nil
+        pasteDurationMs: Double? = nil,
+        screenshotWindowListMs: Double? = nil,
+        screenshotWindowSearchMs: Double? = nil,
+        screenshotCaptureMs: Double? = nil,
+        screenshotScContentMs: Double? = nil,
+        screenshotEncodeMs: Double? = nil,
+        screenshotMethod: String? = nil,
+        screenshotImageWidth: Int? = nil,
+        screenshotImageHeight: Int? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -82,5 +98,13 @@ struct PipelineHistoryItem: Identifiable, Codable {
         self.transcriptionProvider = transcriptionProvider
         self.postProcessingModel = postProcessingModel
         self.pasteDurationMs = pasteDurationMs
+        self.screenshotWindowListMs = screenshotWindowListMs
+        self.screenshotWindowSearchMs = screenshotWindowSearchMs
+        self.screenshotCaptureMs = screenshotCaptureMs
+        self.screenshotScContentMs = screenshotScContentMs
+        self.screenshotEncodeMs = screenshotEncodeMs
+        self.screenshotMethod = screenshotMethod
+        self.screenshotImageWidth = screenshotImageWidth
+        self.screenshotImageHeight = screenshotImageHeight
     }
 }

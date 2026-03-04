@@ -1093,7 +1093,15 @@ struct PromptsSettingsView: View {
             screenshotError: nil,
             screenshotDurationMs: nil,
             llmInferenceDurationMs: nil,
-            totalCaptureDurationMs: nil
+            totalCaptureDurationMs: nil,
+            screenshotWindowListMs: nil,
+            screenshotWindowSearchMs: nil,
+            screenshotCaptureMs: nil,
+            screenshotScContentMs: nil,
+            screenshotEncodeMs: nil,
+            screenshotMethod: nil,
+            screenshotImageWidth: nil,
+            screenshotImageHeight: nil
         )
 
         Task {

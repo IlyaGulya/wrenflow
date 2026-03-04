@@ -184,6 +184,14 @@ final class PipelineHistoryStore {
                 entity.transcriptionProvider = item.transcriptionProvider
                 entity.postProcessingModel = item.postProcessingModel
                 entity.pasteDurationMs = item.pasteDurationMs as NSNumber?
+                entity.screenshotWindowListMs = item.screenshotWindowListMs as NSNumber?
+                entity.screenshotWindowSearchMs = item.screenshotWindowSearchMs as NSNumber?
+                entity.screenshotCaptureMs = item.screenshotCaptureMs as NSNumber?
+                entity.screenshotScContentMs = item.screenshotScContentMs as NSNumber?
+                entity.screenshotEncodeMs = item.screenshotEncodeMs as NSNumber?
+                entity.screenshotMethod = item.screenshotMethod
+                entity.screenshotImageWidth = item.screenshotImageWidth as NSNumber?
+                entity.screenshotImageHeight = item.screenshotImageHeight as NSNumber?
                 try saveContext()
             } catch {
                 thrownError = error
@@ -265,7 +273,15 @@ final class PipelineHistoryStore {
             contextLlmInferenceDurationMs: entity.contextLlmInferenceDurationMs?.doubleValue,
             transcriptionProvider: entity.transcriptionProvider,
             postProcessingModel: entity.postProcessingModel,
-            pasteDurationMs: entity.pasteDurationMs?.doubleValue
+            pasteDurationMs: entity.pasteDurationMs?.doubleValue,
+            screenshotWindowListMs: entity.screenshotWindowListMs?.doubleValue,
+            screenshotWindowSearchMs: entity.screenshotWindowSearchMs?.doubleValue,
+            screenshotCaptureMs: entity.screenshotCaptureMs?.doubleValue,
+            screenshotScContentMs: entity.screenshotScContentMs?.doubleValue,
+            screenshotEncodeMs: entity.screenshotEncodeMs?.doubleValue,
+            screenshotMethod: entity.screenshotMethod,
+            screenshotImageWidth: entity.screenshotImageWidth?.intValue,
+            screenshotImageHeight: entity.screenshotImageHeight?.intValue
         )
     }
 
@@ -301,7 +317,15 @@ final class PipelineHistoryStore {
             makeAttribute(name: "contextLlmInferenceDurationMs", type: .doubleAttributeType, isOptional: true),
             makeAttribute(name: "transcriptionProvider", type: .stringAttributeType, isOptional: true),
             makeAttribute(name: "postProcessingModel", type: .stringAttributeType, isOptional: true),
-            makeAttribute(name: "pasteDurationMs", type: .doubleAttributeType, isOptional: true)
+            makeAttribute(name: "pasteDurationMs", type: .doubleAttributeType, isOptional: true),
+            makeAttribute(name: "screenshotWindowListMs", type: .doubleAttributeType, isOptional: true),
+            makeAttribute(name: "screenshotWindowSearchMs", type: .doubleAttributeType, isOptional: true),
+            makeAttribute(name: "screenshotCaptureMs", type: .doubleAttributeType, isOptional: true),
+            makeAttribute(name: "screenshotScContentMs", type: .doubleAttributeType, isOptional: true),
+            makeAttribute(name: "screenshotEncodeMs", type: .doubleAttributeType, isOptional: true),
+            makeAttribute(name: "screenshotMethod", type: .stringAttributeType, isOptional: true),
+            makeAttribute(name: "screenshotImageWidth", type: .integer32AttributeType, isOptional: true),
+            makeAttribute(name: "screenshotImageHeight", type: .integer32AttributeType, isOptional: true)
         ]
 
         model.entities = [entity]
@@ -344,4 +368,12 @@ final class PipelineHistoryEntry: NSManagedObject {
     @NSManaged var transcriptionProvider: String?
     @NSManaged var postProcessingModel: String?
     @NSManaged var pasteDurationMs: NSNumber?
+    @NSManaged var screenshotWindowListMs: NSNumber?
+    @NSManaged var screenshotWindowSearchMs: NSNumber?
+    @NSManaged var screenshotCaptureMs: NSNumber?
+    @NSManaged var screenshotScContentMs: NSNumber?
+    @NSManaged var screenshotEncodeMs: NSNumber?
+    @NSManaged var screenshotMethod: String?
+    @NSManaged var screenshotImageWidth: NSNumber?
+    @NSManaged var screenshotImageHeight: NSNumber?
 }
