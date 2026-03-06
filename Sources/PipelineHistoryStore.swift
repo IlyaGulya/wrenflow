@@ -172,26 +172,7 @@ final class PipelineHistoryStore {
                 entity.debugStatus = item.debugStatus
                 entity.customVocabulary = item.customVocabulary
                 entity.audioFileName = item.audioFileName
-                entity.transcriptionDurationMs = item.transcriptionDurationMs as NSNumber?
-                entity.contextDurationMs = item.contextDurationMs as NSNumber?
-                entity.postProcessingDurationMs = item.postProcessingDurationMs as NSNumber?
-                entity.totalDurationMs = item.totalDurationMs as NSNumber?
-                entity.recordingDurationMs = item.recordingDurationMs as NSNumber?
-                entity.audioFileSizeBytes = item.audioFileSizeBytes as NSNumber?
-                entity.contextCaptureDurationMs = item.contextCaptureDurationMs as NSNumber?
-                entity.contextScreenshotDurationMs = item.contextScreenshotDurationMs as NSNumber?
-                entity.contextLlmInferenceDurationMs = item.contextLlmInferenceDurationMs as NSNumber?
-                entity.transcriptionProvider = item.transcriptionProvider
-                entity.postProcessingModel = item.postProcessingModel
-                entity.pasteDurationMs = item.pasteDurationMs as NSNumber?
-                entity.screenshotWindowListMs = item.screenshotWindowListMs as NSNumber?
-                entity.screenshotWindowSearchMs = item.screenshotWindowSearchMs as NSNumber?
-                entity.screenshotCaptureMs = item.screenshotCaptureMs as NSNumber?
-                entity.screenshotScContentMs = item.screenshotScContentMs as NSNumber?
-                entity.screenshotEncodeMs = item.screenshotEncodeMs as NSNumber?
-                entity.screenshotMethod = item.screenshotMethod
-                entity.screenshotImageWidth = item.screenshotImageWidth as NSNumber?
-                entity.screenshotImageHeight = item.screenshotImageHeight as NSNumber?
+                entity.metricsJSON = Self.encodeMetrics(item.metrics)
                 try saveContext()
             } catch {
                 thrownError = error
@@ -247,6 +228,20 @@ final class PipelineHistoryStore {
         }
     }
 
+    private static func encodeMetrics(_ metrics: PipelineMetrics) -> String? {
+        guard !metrics.isEmpty else { return nil }
+        guard let data = try? JSONEncoder().encode(metrics) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func decodeMetrics(_ json: String?) -> PipelineMetrics {
+        guard let json, let data = json.data(using: .utf8),
+              let metrics = try? JSONDecoder().decode(PipelineMetrics.self, from: data) else {
+            return PipelineMetrics()
+        }
+        return metrics
+    }
+
     private static func makeHistoryItem(from entity: PipelineHistoryEntry) -> PipelineHistoryItem {
         PipelineHistoryItem(
             id: entity.id,
@@ -262,26 +257,7 @@ final class PipelineHistoryStore {
             debugStatus: entity.debugStatus ?? "",
             customVocabulary: entity.customVocabulary ?? "",
             audioFileName: entity.audioFileName,
-            transcriptionDurationMs: entity.transcriptionDurationMs?.doubleValue,
-            contextDurationMs: entity.contextDurationMs?.doubleValue,
-            postProcessingDurationMs: entity.postProcessingDurationMs?.doubleValue,
-            totalDurationMs: entity.totalDurationMs?.doubleValue,
-            recordingDurationMs: entity.recordingDurationMs?.doubleValue,
-            audioFileSizeBytes: entity.audioFileSizeBytes?.int64Value,
-            contextCaptureDurationMs: entity.contextCaptureDurationMs?.doubleValue,
-            contextScreenshotDurationMs: entity.contextScreenshotDurationMs?.doubleValue,
-            contextLlmInferenceDurationMs: entity.contextLlmInferenceDurationMs?.doubleValue,
-            transcriptionProvider: entity.transcriptionProvider,
-            postProcessingModel: entity.postProcessingModel,
-            pasteDurationMs: entity.pasteDurationMs?.doubleValue,
-            screenshotWindowListMs: entity.screenshotWindowListMs?.doubleValue,
-            screenshotWindowSearchMs: entity.screenshotWindowSearchMs?.doubleValue,
-            screenshotCaptureMs: entity.screenshotCaptureMs?.doubleValue,
-            screenshotScContentMs: entity.screenshotScContentMs?.doubleValue,
-            screenshotEncodeMs: entity.screenshotEncodeMs?.doubleValue,
-            screenshotMethod: entity.screenshotMethod,
-            screenshotImageWidth: entity.screenshotImageWidth?.intValue,
-            screenshotImageHeight: entity.screenshotImageHeight?.intValue
+            metrics: decodeMetrics(entity.metricsJSON)
         )
     }
 
@@ -306,26 +282,7 @@ final class PipelineHistoryStore {
             makeAttribute(name: "debugStatus", type: .stringAttributeType, isOptional: false),
             makeAttribute(name: "customVocabulary", type: .stringAttributeType, isOptional: false),
             makeAttribute(name: "audioFileName", type: .stringAttributeType, isOptional: true),
-            makeAttribute(name: "transcriptionDurationMs", type: .doubleAttributeType, isOptional: true),
-            makeAttribute(name: "contextDurationMs", type: .doubleAttributeType, isOptional: true),
-            makeAttribute(name: "postProcessingDurationMs", type: .doubleAttributeType, isOptional: true),
-            makeAttribute(name: "totalDurationMs", type: .doubleAttributeType, isOptional: true),
-            makeAttribute(name: "recordingDurationMs", type: .doubleAttributeType, isOptional: true),
-            makeAttribute(name: "audioFileSizeBytes", type: .integer64AttributeType, isOptional: true),
-            makeAttribute(name: "contextCaptureDurationMs", type: .doubleAttributeType, isOptional: true),
-            makeAttribute(name: "contextScreenshotDurationMs", type: .doubleAttributeType, isOptional: true),
-            makeAttribute(name: "contextLlmInferenceDurationMs", type: .doubleAttributeType, isOptional: true),
-            makeAttribute(name: "transcriptionProvider", type: .stringAttributeType, isOptional: true),
-            makeAttribute(name: "postProcessingModel", type: .stringAttributeType, isOptional: true),
-            makeAttribute(name: "pasteDurationMs", type: .doubleAttributeType, isOptional: true),
-            makeAttribute(name: "screenshotWindowListMs", type: .doubleAttributeType, isOptional: true),
-            makeAttribute(name: "screenshotWindowSearchMs", type: .doubleAttributeType, isOptional: true),
-            makeAttribute(name: "screenshotCaptureMs", type: .doubleAttributeType, isOptional: true),
-            makeAttribute(name: "screenshotScContentMs", type: .doubleAttributeType, isOptional: true),
-            makeAttribute(name: "screenshotEncodeMs", type: .doubleAttributeType, isOptional: true),
-            makeAttribute(name: "screenshotMethod", type: .stringAttributeType, isOptional: true),
-            makeAttribute(name: "screenshotImageWidth", type: .integer32AttributeType, isOptional: true),
-            makeAttribute(name: "screenshotImageHeight", type: .integer32AttributeType, isOptional: true)
+            makeAttribute(name: "metricsJSON", type: .stringAttributeType, isOptional: true),
         ]
 
         model.entities = [entity]
@@ -356,24 +313,5 @@ final class PipelineHistoryEntry: NSManagedObject {
     @NSManaged var debugStatus: String?
     @NSManaged var customVocabulary: String?
     @NSManaged var audioFileName: String?
-    @NSManaged var transcriptionDurationMs: NSNumber?
-    @NSManaged var contextDurationMs: NSNumber?
-    @NSManaged var postProcessingDurationMs: NSNumber?
-    @NSManaged var totalDurationMs: NSNumber?
-    @NSManaged var recordingDurationMs: NSNumber?
-    @NSManaged var audioFileSizeBytes: NSNumber?
-    @NSManaged var contextCaptureDurationMs: NSNumber?
-    @NSManaged var contextScreenshotDurationMs: NSNumber?
-    @NSManaged var contextLlmInferenceDurationMs: NSNumber?
-    @NSManaged var transcriptionProvider: String?
-    @NSManaged var postProcessingModel: String?
-    @NSManaged var pasteDurationMs: NSNumber?
-    @NSManaged var screenshotWindowListMs: NSNumber?
-    @NSManaged var screenshotWindowSearchMs: NSNumber?
-    @NSManaged var screenshotCaptureMs: NSNumber?
-    @NSManaged var screenshotScContentMs: NSNumber?
-    @NSManaged var screenshotEncodeMs: NSNumber?
-    @NSManaged var screenshotMethod: String?
-    @NSManaged var screenshotImageWidth: NSNumber?
-    @NSManaged var screenshotImageHeight: NSNumber?
+    @NSManaged var metricsJSON: String?
 }

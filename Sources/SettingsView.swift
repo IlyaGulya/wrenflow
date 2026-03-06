@@ -1397,6 +1397,7 @@ struct RunLogEntryView: View {
     @State private var isExpanded = false
     @State private var showContextPrompt = false
     @State private var showPostProcessingPrompt = false
+    @State private var showAllMetrics = false
 
     private var isError: Bool {
         item.postProcessingStatus.hasPrefix("Error:")
@@ -1421,7 +1422,7 @@ struct RunLogEntryView: View {
                             HStack(spacing: 6) {
                                 Text(item.timestamp.formatted(date: .numeric, time: .standard))
                                     .font(.subheadline.weight(.semibold))
-                                if let total = item.totalDurationMs {
+                                if let total = item.metrics.double("pipeline.totalMs") {
                                     Text(formatDurationMs(total))
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
@@ -1510,11 +1511,26 @@ struct RunLogEntryView: View {
                         PipelineStepView(
                             number: 1,
                             title: "Record Audio",
-                            durationMs: item.recordingDurationMs,
+                            durationMs: item.metrics.double("recording.durationMs"),
                             content: {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    if let size = item.audioFileSizeBytes {
-                                        Text("File size: \(formatFileSize(size))")
+                                    if let size = item.metrics.int("recording.fileSizeBytes") {
+                                        Text("File size: \(formatFileSize(Int64(size)))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    if let reused = item.metrics.bool("engine.reused") {
+                                        Text("Engine: \(reused ? "reused" : "new")")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    if let initMs = item.metrics.double("engine.initMs") {
+                                        Text("Engine init: \(formatDurationMs(initMs))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    if let firstMs = item.metrics.double("engine.firstBufferMs") {
+                                        Text("First buffer: \(formatDurationMs(firstMs))")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                     }
@@ -1526,12 +1542,12 @@ struct RunLogEntryView: View {
                         PipelineStepView(
                             number: 2,
                             title: "Capture Context",
-                            durationMs: item.contextCaptureDurationMs ?? item.contextDurationMs,
+                            durationMs: item.metrics.double("context.totalMs") ?? item.metrics.double("context.resolutionMs"),
                             content: {
                                 VStack(alignment: .leading, spacing: 6) {
-                                    if item.contextScreenshotDurationMs != nil || item.contextLlmInferenceDurationMs != nil {
+                                    if item.metrics.double("context.screenshotMs") != nil || item.metrics.double("context.llmMs") != nil {
                                         HStack(spacing: 12) {
-                                            if let screenshotMs = item.contextScreenshotDurationMs {
+                                            if let screenshotMs = item.metrics.double("context.screenshotMs") {
                                                 HStack(spacing: 3) {
                                                     Text("Screenshot:")
                                                         .font(.caption2)
@@ -1541,7 +1557,7 @@ struct RunLogEntryView: View {
                                                         .foregroundStyle(.secondary)
                                                 }
                                             }
-                                            if let llmMs = item.contextLlmInferenceDurationMs {
+                                            if let llmMs = item.metrics.double("context.llmMs") {
                                                 HStack(spacing: 3) {
                                                     Text("LLM:")
                                                         .font(.caption2)
@@ -1606,10 +1622,10 @@ struct RunLogEntryView: View {
                         PipelineStepView(
                             number: 3,
                             title: "Transcribe Audio",
-                            durationMs: item.transcriptionDurationMs,
+                            durationMs: item.metrics.double("transcription.durationMs"),
                             content: {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    if let provider = item.transcriptionProvider {
+                                    if let provider = item.metrics.string("transcription.provider") {
                                         Text("Provider: \(provider)")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
@@ -1635,10 +1651,10 @@ struct RunLogEntryView: View {
                         PipelineStepView(
                             number: 4,
                             title: "Post-Process",
-                            durationMs: item.postProcessingDurationMs,
+                            durationMs: item.metrics.double("postProcessing.durationMs"),
                             content: {
                                 VStack(alignment: .leading, spacing: 6) {
-                                    if let model = item.postProcessingModel {
+                                    if let model = item.metrics.string("postProcessing.model") {
                                         Text("Model: \(model)")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
@@ -1703,7 +1719,7 @@ struct RunLogEntryView: View {
                         )
 
                         // Step 5: Paste (only shown if paste happened)
-                        if let pasteMs = item.pasteDurationMs {
+                        if let pasteMs = item.metrics.double("paste.durationMs") {
                             PipelineStepView(
                                 number: 5,
                                 title: "Paste",
@@ -1714,6 +1730,45 @@ struct RunLogEntryView: View {
                                         .foregroundStyle(.secondary)
                                 }
                             )
+                        }
+                    }
+
+                    // All Metrics dump
+                    if !item.metrics.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Button {
+                                showAllMetrics.toggle()
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text(showAllMetrics ? "Hide All Metrics" : "All Metrics")
+                                        .font(.caption.weight(.semibold))
+                                    Image(systemName: showAllMetrics ? "chevron.up" : "chevron.down")
+                                        .font(.caption2)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Color.accentColor)
+
+                            if showAllMetrics {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    ForEach(item.metrics.allKeys, id: \.self) { key in
+                                        if let value = item.metrics[key] {
+                                            HStack(spacing: 0) {
+                                                Text(key)
+                                                    .font(.system(.caption2, design: .monospaced))
+                                                    .foregroundStyle(.secondary)
+                                                    .frame(width: 180, alignment: .leading)
+                                                Text(value.displayValue)
+                                                    .font(.system(.caption2, design: .monospaced))
+                                            }
+                                        }
+                                    }
+                                }
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color(nsColor: .controlBackgroundColor))
+                                .cornerRadius(4)
+                            }
                         }
                     }
                 }

@@ -110,6 +110,11 @@ struct RecordingResult {
     let fileURL: URL
     let durationMs: Double
     let fileSizeBytes: Int64
+    let engineInitMs: Double?       // nil if engine was reused
+    let engineReused: Bool
+    let inputSampleRate: Double
+    let bufferCount: Int
+    let firstBufferMs: Double?      // engine start → first buffer
 }
 
 enum AudioRecorderError: LocalizedError {
@@ -138,6 +143,9 @@ class AudioRecorder: NSObject, ObservableObject {
     private var storedInputFormat: AVAudioFormat?
     private var realtimeConverter: AVAudioConverter?
     private var targetFormat: AVAudioFormat?
+    private var engineInitMs: Double?
+    private var engineReused: Bool = false
+    private var firstBufferMs: Double?
 
     @Published var isRecording = false
     /// Thread-safe flag read from the audio tap callback.
@@ -155,6 +163,9 @@ class AudioRecorder: NSObject, ObservableObject {
         firstBufferLogged = false
         bufferCount = 0
         readyFired = false
+        engineInitMs = nil
+        engineReused = false
+        firstBufferMs = nil
 
         os_log(.info, log: recordingLog, "startRecording() entered")
 
@@ -165,6 +176,7 @@ class AudioRecorder: NSObject, ObservableObject {
 
         // Reuse existing engine if same device, otherwise build new one
         if let _ = audioEngine, currentDeviceUID == deviceUID {
+            engineReused = true
             os_log(.info, log: recordingLog, "reusing existing engine: %.3fms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)
         } else {
             // Tear down old engine if device changed
@@ -231,6 +243,7 @@ class AudioRecorder: NSObject, ObservableObject {
                 if !self.readyFired && rms > 0 {
                     self.readyFired = true
                     let elapsed = (CFAbsoluteTimeGetCurrent() - self.recordingStartTime) * 1000
+                    self.firstBufferMs = elapsed
                     os_log(.info, log: recordingLog, "FIRST non-silent buffer at %.3fms — recording ready", elapsed)
                     self.onRecordingReady?()
                 }
@@ -275,6 +288,7 @@ class AudioRecorder: NSObject, ObservableObject {
 
             self.audioEngine = engine
             self.currentDeviceUID = deviceUID
+            self.engineInitMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         }
 
         // Start engine if not already running
@@ -362,7 +376,12 @@ class AudioRecorder: NSObject, ObservableObject {
         return RecordingResult(
             fileURL: url,
             durationMs: recordingDurationMs,
-            fileSizeBytes: fileSizeBytes
+            fileSizeBytes: fileSizeBytes,
+            engineInitMs: engineInitMs,
+            engineReused: engineReused,
+            inputSampleRate: storedInputFormat?.sampleRate ?? 0,
+            bufferCount: bufferCount,
+            firstBufferMs: firstBufferMs
         )
     }
 

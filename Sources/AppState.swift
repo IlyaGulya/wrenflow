@@ -953,6 +953,38 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
                     let processingDurationMs = (CFAbsoluteTimeGetCurrent() - pipelineStart) * 1000
                     let finalTotalDurationMs = recordingDurationMs + processingDurationMs
+
+                    var metrics = PipelineMetrics()
+                    metrics.set("recording.durationMs", recordingDurationMs)
+                    metrics.set("recording.fileSizeBytes", Int(audioFileSizeBytes))
+                    metrics.set("transcription.durationMs", transcriptionDurationMs)
+                    metrics.set("transcription.provider", capturedTranscriptionProvider)
+                    metrics.set("context.totalMs", appContext.totalCaptureDurationMs)
+                    metrics.set("context.resolutionMs", contextDurationMs)
+                    metrics.set("context.screenshotMs", appContext.screenshotDurationMs)
+                    metrics.set("context.llmMs", appContext.llmInferenceDurationMs)
+                    metrics.set("postProcessing.durationMs", postProcessingDurationMs)
+                    metrics.set("postProcessing.model", capturedPostProcessingModel)
+                    metrics.set("postProcessing.skipped", postProcessingService == nil)
+                    metrics.set("paste.durationMs", pasteDurationMs)
+                    metrics.set("pipeline.totalMs", finalTotalDurationMs)
+                    metrics.set("pipeline.processingMs", processingDurationMs)
+                    metrics.set("pipeline.outcome", trimmedFinalTranscript.isEmpty ? "empty" : "pasted" as String)
+                    metrics.set("screenshot.windowListMs", appContext.screenshotWindowListMs)
+                    metrics.set("screenshot.windowSearchMs", appContext.screenshotWindowSearchMs)
+                    metrics.set("screenshot.captureMs", appContext.screenshotCaptureMs)
+                    metrics.set("screenshot.scContentMs", appContext.screenshotScContentMs)
+                    metrics.set("screenshot.encodeMs", appContext.screenshotEncodeMs)
+                    metrics.set("screenshot.method", appContext.screenshotMethod)
+                    metrics.set("screenshot.width", appContext.screenshotImageWidth)
+                    metrics.set("screenshot.height", appContext.screenshotImageHeight)
+                    // Engine metrics from recording result
+                    metrics.set("engine.initMs", recordingResult.engineInitMs)
+                    metrics.set("engine.reused", recordingResult.engineReused)
+                    metrics.set("engine.inputSampleRate", recordingResult.inputSampleRate)
+                    metrics.set("engine.bufferCount", recordingResult.bufferCount)
+                    metrics.set("engine.firstBufferMs", recordingResult.firstBufferMs)
+
                     self.recordPipelineHistoryEntry(
                         rawTranscript: trimmedRawTranscript,
                         postProcessedTranscript: trimmedFinalTranscript,
@@ -961,23 +993,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         context: appContext,
                         processingStatus: processingStatus,
                         audioFileName: savedAudioFileName,
-                        transcriptionDurationMs: transcriptionDurationMs,
-                        contextDurationMs: contextDurationMs,
-                        postProcessingDurationMs: postProcessingDurationMs,
-                        totalDurationMs: finalTotalDurationMs,
-                        recordingDurationMs: recordingDurationMs,
-                        audioFileSizeBytes: audioFileSizeBytes,
-                        transcriptionProvider: capturedTranscriptionProvider,
-                        postProcessingModel: capturedPostProcessingModel,
-                        pasteDurationMs: pasteDurationMs,
-                        screenshotWindowListMs: appContext.screenshotWindowListMs,
-                        screenshotWindowSearchMs: appContext.screenshotWindowSearchMs,
-                        screenshotCaptureMs: appContext.screenshotCaptureMs,
-                        screenshotScContentMs: appContext.screenshotScContentMs,
-                        screenshotEncodeMs: appContext.screenshotEncodeMs,
-                        screenshotMethod: appContext.screenshotMethod,
-                        screenshotImageWidth: appContext.screenshotImageWidth,
-                        screenshotImageHeight: appContext.screenshotImageHeight
+                        metrics: metrics
                     )
 
                     self.audioRecorder.cleanup()
@@ -1003,6 +1019,25 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     self.lastContextScreenshotDataURL = resolvedContext.screenshotDataURL
                     self.lastContextScreenshotStatus = resolvedContext.screenshotError
                         ?? "available (\(resolvedContext.screenshotMimeType ?? "image"))"
+                    var errorMetrics = PipelineMetrics()
+                    errorMetrics.set("recording.durationMs", recordingDurationMs)
+                    errorMetrics.set("recording.fileSizeBytes", Int(audioFileSizeBytes))
+                    errorMetrics.set("transcription.provider", capturedTranscriptionProvider)
+                    errorMetrics.set("postProcessing.model", capturedPostProcessingModel)
+                    errorMetrics.set("pipeline.outcome", "error" as String)
+                    errorMetrics.set("screenshot.windowListMs", resolvedContext.screenshotWindowListMs)
+                    errorMetrics.set("screenshot.windowSearchMs", resolvedContext.screenshotWindowSearchMs)
+                    errorMetrics.set("screenshot.captureMs", resolvedContext.screenshotCaptureMs)
+                    errorMetrics.set("screenshot.scContentMs", resolvedContext.screenshotScContentMs)
+                    errorMetrics.set("screenshot.encodeMs", resolvedContext.screenshotEncodeMs)
+                    errorMetrics.set("screenshot.method", resolvedContext.screenshotMethod)
+                    errorMetrics.set("screenshot.width", resolvedContext.screenshotImageWidth)
+                    errorMetrics.set("screenshot.height", resolvedContext.screenshotImageHeight)
+                    errorMetrics.set("engine.initMs", recordingResult.engineInitMs)
+                    errorMetrics.set("engine.reused", recordingResult.engineReused)
+                    errorMetrics.set("engine.inputSampleRate", recordingResult.inputSampleRate)
+                    errorMetrics.set("engine.bufferCount", recordingResult.bufferCount)
+                    errorMetrics.set("engine.firstBufferMs", recordingResult.firstBufferMs)
                     self.recordPipelineHistoryEntry(
                         rawTranscript: "",
                         postProcessedTranscript: "",
@@ -1010,18 +1045,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         context: resolvedContext,
                         processingStatus: "Error: \(error.localizedDescription)",
                         audioFileName: savedAudioFileName,
-                        recordingDurationMs: recordingDurationMs,
-                        audioFileSizeBytes: audioFileSizeBytes,
-                        transcriptionProvider: capturedTranscriptionProvider,
-                        postProcessingModel: capturedPostProcessingModel,
-                        screenshotWindowListMs: resolvedContext.screenshotWindowListMs,
-                        screenshotWindowSearchMs: resolvedContext.screenshotWindowSearchMs,
-                        screenshotCaptureMs: resolvedContext.screenshotCaptureMs,
-                        screenshotScContentMs: resolvedContext.screenshotScContentMs,
-                        screenshotEncodeMs: resolvedContext.screenshotEncodeMs,
-                        screenshotMethod: resolvedContext.screenshotMethod,
-                        screenshotImageWidth: resolvedContext.screenshotImageWidth,
-                        screenshotImageHeight: resolvedContext.screenshotImageHeight
+                        metrics: errorMetrics
                     )
                     self.transition(to: .error(message: error.localizedDescription))
                 }
@@ -1037,23 +1061,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         context: AppContext,
         processingStatus: String,
         audioFileName: String? = nil,
-        transcriptionDurationMs: Double? = nil,
-        contextDurationMs: Double? = nil,
-        postProcessingDurationMs: Double? = nil,
-        totalDurationMs: Double? = nil,
-        recordingDurationMs: Double? = nil,
-        audioFileSizeBytes: Int64? = nil,
-        transcriptionProvider: String? = nil,
-        postProcessingModel: String? = nil,
-        pasteDurationMs: Double? = nil,
-        screenshotWindowListMs: Double? = nil,
-        screenshotWindowSearchMs: Double? = nil,
-        screenshotCaptureMs: Double? = nil,
-        screenshotScContentMs: Double? = nil,
-        screenshotEncodeMs: Double? = nil,
-        screenshotMethod: String? = nil,
-        screenshotImageWidth: Int? = nil,
-        screenshotImageHeight: Int? = nil
+        metrics: PipelineMetrics
     ) {
         let newEntry = PipelineHistoryItem(
             timestamp: Date(),
@@ -1070,26 +1078,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             debugStatus: debugStatusMessage,
             customVocabulary: customVocabulary,
             audioFileName: audioFileName,
-            transcriptionDurationMs: transcriptionDurationMs,
-            contextDurationMs: contextDurationMs,
-            postProcessingDurationMs: postProcessingDurationMs,
-            totalDurationMs: totalDurationMs,
-            recordingDurationMs: recordingDurationMs,
-            audioFileSizeBytes: audioFileSizeBytes,
-            contextCaptureDurationMs: context.totalCaptureDurationMs,
-            contextScreenshotDurationMs: context.screenshotDurationMs,
-            contextLlmInferenceDurationMs: context.llmInferenceDurationMs,
-            transcriptionProvider: transcriptionProvider,
-            postProcessingModel: postProcessingModel,
-            pasteDurationMs: pasteDurationMs,
-            screenshotWindowListMs: screenshotWindowListMs,
-            screenshotWindowSearchMs: screenshotWindowSearchMs,
-            screenshotCaptureMs: screenshotCaptureMs,
-            screenshotScContentMs: screenshotScContentMs,
-            screenshotEncodeMs: screenshotEncodeMs,
-            screenshotMethod: screenshotMethod,
-            screenshotImageWidth: screenshotImageWidth,
-            screenshotImageHeight: screenshotImageHeight
+            metrics: metrics
         )
         do {
             let removedAudioFileNames = try pipelineHistoryStore.append(newEntry, maxCount: maxPipelineHistoryCount)

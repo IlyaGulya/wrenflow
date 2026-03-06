@@ -35,6 +35,13 @@ Do NOT run the binary directly from `.build/debug/FreeFlow` — always use `make
 - `TranscriptionService.swift` — Groq (Whisper) cloud transcription
 - `HotkeyManager.swift` — global hotkey monitoring
 
+## Data Storage
+
+- Debug app SQLite: `~/Library/Application Support/FreeFlow Debug/PipelineHistory.sqlite`
+- Release app SQLite: `~/Library/Application Support/FreeFlow/PipelineHistory.sqlite`
+- CoreData uses `Z`-prefixed tables (e.g. `ZPIPELINEHISTORYENTRY`) and `Z`-prefixed columns (e.g. `ZMETRICSJSON`)
+- Pipeline metrics stored as JSON in `metricsJSON` column via `PipelineMetrics` (Codable)
+
 ## Architecture Notes
 
 - SwiftUI app with `@EnvironmentObject` AppState
