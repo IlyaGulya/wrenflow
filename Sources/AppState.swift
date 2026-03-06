@@ -993,9 +993,21 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     metrics.set("engine.initMs", recordingResult.engineInitMs)
                     metrics.set("engine.reused", recordingResult.engineReused)
                     metrics.set("engine.warmedUp", recordingResult.engineWarmedUp)
+                    metrics.set("engine.startMs", recordingResult.engineStartMs)
                     metrics.set("engine.inputSampleRate", recordingResult.inputSampleRate)
                     metrics.set("engine.bufferCount", recordingResult.bufferCount)
-                    metrics.set("engine.firstBufferMs", recordingResult.firstBufferMs)
+                    metrics.set("engine.firstTapCallbackMs", recordingResult.firstTapCallbackMs)
+                    metrics.set("engine.firstNonSilentBufferMs", recordingResult.firstNonSilentBufferMs)
+                    metrics.set("engine.firstBufferFrames", recordingResult.firstBufferFrames)
+                    metrics.set("engine.armedMs", recordingResult.armedMs)
+                    metrics.set("engine.fileReadyMs", recordingResult.fileReadyMs)
+                    // HAL metrics
+                    metrics.set("hal.bufferFrames", recordingResult.halBufferFrames)
+                    metrics.set("hal.bufferDurationMs", recordingResult.halBufferDurationMs)
+                    metrics.set("hal.minFrames", recordingResult.halMinFrames)
+                    metrics.set("hal.maxFrames", recordingResult.halMaxFrames)
+                    metrics.set("hal.bufferSetTo", recordingResult.halBufferSetTo)
+                    metrics.set("hal.bufferActual", recordingResult.halBufferActual)
 
                     self.recordPipelineHistoryEntry(
                         rawTranscript: trimmedRawTranscript,
@@ -1048,9 +1060,20 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     errorMetrics.set("engine.initMs", recordingResult.engineInitMs)
                     errorMetrics.set("engine.reused", recordingResult.engineReused)
                     errorMetrics.set("engine.warmedUp", recordingResult.engineWarmedUp)
+                    errorMetrics.set("engine.startMs", recordingResult.engineStartMs)
                     errorMetrics.set("engine.inputSampleRate", recordingResult.inputSampleRate)
                     errorMetrics.set("engine.bufferCount", recordingResult.bufferCount)
-                    errorMetrics.set("engine.firstBufferMs", recordingResult.firstBufferMs)
+                    errorMetrics.set("engine.firstTapCallbackMs", recordingResult.firstTapCallbackMs)
+                    errorMetrics.set("engine.firstNonSilentBufferMs", recordingResult.firstNonSilentBufferMs)
+                    errorMetrics.set("engine.firstBufferFrames", recordingResult.firstBufferFrames)
+                    errorMetrics.set("engine.armedMs", recordingResult.armedMs)
+                    errorMetrics.set("engine.fileReadyMs", recordingResult.fileReadyMs)
+                    errorMetrics.set("hal.bufferFrames", recordingResult.halBufferFrames)
+                    errorMetrics.set("hal.bufferDurationMs", recordingResult.halBufferDurationMs)
+                    errorMetrics.set("hal.minFrames", recordingResult.halMinFrames)
+                    errorMetrics.set("hal.maxFrames", recordingResult.halMaxFrames)
+                    errorMetrics.set("hal.bufferSetTo", recordingResult.halBufferSetTo)
+                    errorMetrics.set("hal.bufferActual", recordingResult.halBufferActual)
                     self.recordPipelineHistoryEntry(
                         rawTranscript: "",
                         postProcessedTranscript: "",
