@@ -1,48 +1,42 @@
 <p align="center">
-  <img src="Resources/AppIcon-Source.png" width="128" height="128" alt="FreeFlow icon">
+  <img src="Resources/AppIcon-Source.png" width="128" height="128" alt="Wrenflow icon">
 </p>
 
-<h1 align="center">FreeFlow</h1>
+<h1 align="center">Wrenflow</h1>
 
 <p align="center">
-  Free and open source alternative to <a href="https://wisprflow.ai">Wispr Flow</a>, <a href="https://superwhisper.com">Superwhisper</a>, and <a href="https://monologue.to">Monologue</a>.
+  Open-source speech-to-text for macOS.<br>
+  Hold a key, speak, release — text appears at your cursor in ~200ms.
 </p>
 
 <p align="center">
-  <a href="https://github.com/zachlatta/freeflow/releases/latest/download/FreeFlow.dmg"><b>⬇ Download FreeFlow.dmg</b></a><br>
-  <sub>Works on all Macs (Apple Silicon + Intel)</sub>
+  <a href="https://github.com/IlyaGulya/wrenflow/releases/latest/download/Wrenflow.dmg"><b>Download Wrenflow.dmg</b></a><br>
+  <sub>macOS 14+ &middot; Apple Silicon + Intel</sub>
 </p>
 
 ---
 
-<p align="center">
-  <img src="Resources/demo.gif" alt="FreeFlow demo" width="600">
-</p>
+Wrenflow is a free and open source alternative to [Wispr Flow](https://wisprflow.ai/), [Superwhisper](https://superwhisper.com/), and [Monologue](https://www.monologue.to/).
 
-I like the concept of apps like [Wispr Flow](https://wisprflow.ai/), [Superwhisper](https://superwhisper.com/), and [Monologue](https://www.monologue.to/) that use AI to add accurate and easy-to-use transcription to your computer, but they all charge fees of ~$10/month when the underlying AI models are free to use or cost pennies.
+1. Download the app from above
+2. Press and hold `Fn` anytime to start recording and have whatever you say pasted into the current text field
 
-So over the weekend I vibe-coded my own free version!
+Transcription runs entirely on your Mac using [Parakeet TDT](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) via CoreML. No API key required. Nothing leaves your computer.
 
-It's called FreeFlow. Here's how it works:
+Optionally, you can enable LLM post-processing for context-aware cleanup — it reads the names of people you're replying to, adapts to your current app, and corrects spelling accordingly. This requires a [Groq](https://groq.com/) API key (free tier available) and is off by default.
 
-1. Download the app from above or [click here](https://github.com/zachlatta/freeflow/releases/latest/download/FreeFlow.dmg)
-2. Get a free Groq API key from [groq.com](https://groq.com/)
-3. Press and hold `Fn` anytime to start recording and have whatever you say pasted into the current text field
+There's also a CLI tool (`wrenflow start | stop | toggle | status`) for scripting and automation.
 
-One of the cool features is that it's context aware. If you're replying to an email, it'll read the names of the people you're replying to and make sure to spell their names correctly. Same with if you're dictating into a terminal or another app. This is the same thing as Monologue's "Deep Context" feature.
+## Build
 
-An added bonus is that there's no FreeFlow server, so no data is stored or retained - making it more privacy friendly than the SaaS apps. The only information that leaves your computer are the API calls to Groq's transcription and LLM API (LLM is for post-processing the transcription to adapt to context).
+```bash
+make run    # Build and launch
+```
 
-### FAQ
+## Acknowledgments
 
-**Why does this use Groq instead of a local transcription model?**
-
-I love this idea, and originally planned to build FreeFlow using local models, but to have post-processing (that's where you get correctly spelled names when replying to emails / etc), you need to have a local LLM too.
-
-If you do that, the total pipeline takes too long for the UX to be good (5-10 seconds per transcription instead of <1s). I also had concerns around battery life.
-
-Some day!
+Thanks to [Zach Latta](https://github.com/zachlatta) and [FreeFlow](https://github.com/zachlatta/freeflow) — the project that started it all.
 
 ## License
 
-Licensed under the MIT license.
+MIT

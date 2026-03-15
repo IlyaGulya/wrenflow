@@ -103,7 +103,7 @@ struct GeneralSettingsView: View {
     @State private var modelFetchFailed = false
     @StateObject private var githubCache = GitHubMetadataCache.shared
     @ObservedObject private var updateManager = UpdateManager.shared
-    private let freeflowRepoURL = URL(string: "https://github.com/zachlatta/freeflow")!
+    private let freeflowRepoURL = URL(string: "https://github.com/IlyaGulya/wrenflow")!
 
     var body: some View {
         ScrollView {
@@ -115,7 +115,7 @@ struct GeneralSettingsView: View {
                         .aspectRatio(contentMode: .fit)
                         .frame(width: 64, height: 64)
 
-                    Text("FreeFlow")
+                    Text("Wrenflow")
                         .font(.system(size: 20, weight: .bold, design: .rounded))
 
                     Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")")
@@ -139,7 +139,7 @@ struct GeneralSettingsView: View {
                             Button {
                                 openURL(freeflowRepoURL)
                             } label: {
-                                Text("zachlatta/freeflow")
+                                Text("IlyaGulya/wrenflow")
                                     .font(.system(.caption, design: .monospaced).weight(.medium))
                             }
                             .buttonStyle(.plain)
@@ -284,7 +284,7 @@ struct GeneralSettingsView: View {
 
     private var startupSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Toggle("Launch FreeFlow at login", isOn: $appState.launchAtLogin)
+            Toggle("Launch Wrenflow at login", isOn: $appState.launchAtLogin)
 
             if SMAppService.mainApp.status == .requiresApproval {
                 HStack(spacing: 6) {
@@ -399,7 +399,7 @@ struct GeneralSettingsView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "arrow.down.circle.fill")
                                 .foregroundStyle(.blue)
-                            Text("A new version of FreeFlow is available!")
+                            Text("A new version of Wrenflow is available!")
                                 .font(.caption.weight(.semibold))
                             Spacer()
                             Button("Update Now") {
@@ -666,7 +666,7 @@ struct GeneralSettingsView: View {
 
     private var cliSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Control FreeFlow from the command line or a joystick app.")
+            Text("Control Wrenflow from the command line or a joystick app.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -688,7 +688,7 @@ struct GeneralSettingsView: View {
                 }
             }
 
-            Text("Usage: freeflow start | stop | toggle | status")
+            Text("Usage: wrenflow start | stop | toggle | status")
                 .font(.caption2.monospaced())
                 .foregroundStyle(.tertiary)
         }
@@ -1120,11 +1120,11 @@ struct PromptsSettingsView: View {
         let vocabulary = appState.customVocabulary
 
         let context = AppContext(
-            appName: "FreeFlow Settings",
-            bundleIdentifier: "com.zachlatta.freeflow",
+            appName: "Wrenflow Settings",
+            bundleIdentifier: "me.gulya.wrenflow",
             windowTitle: "System Prompt Test",
             selectedText: nil,
-            currentActivity: "User is testing the system prompt in FreeFlow settings.",
+            currentActivity: "User is testing the system prompt in Wrenflow settings.",
             contextPrompt: nil,
             screenshotDataURL: nil,
             screenshotMimeType: nil,
@@ -1173,7 +1173,7 @@ struct PromptsSettingsView: View {
             && appState.customContextPromptLastModified < AppContextService.defaultContextPromptDate
 
         return VStack(alignment: .leading, spacing: 10) {
-            Text("Controls how FreeFlow infers your current activity from app metadata and screenshots.")
+            Text("Controls how Wrenflow infers your current activity from app metadata and screenshots.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

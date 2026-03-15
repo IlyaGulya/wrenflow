@@ -8,7 +8,7 @@ struct SetupView: View {
     var onComplete: () -> Void
     @EnvironmentObject var appState: AppState
     @Environment(\.openURL) private var openURL
-    private let freeflowRepoURL = URL(string: "https://github.com/zachlatta/freeflow")!
+    private let freeflowRepoURL = URL(string: "https://github.com/IlyaGulya/wrenflow")!
     private enum SetupStep: Int, CaseIterable {
         case welcome = 0
         case transcriptionProvider
@@ -193,7 +193,7 @@ struct SetupView: View {
                 .frame(width: 128, height: 128)
 
             VStack(spacing: 6) {
-                Text("Welcome to FreeFlow")
+                Text("Welcome to Wrenflow")
                     .font(.system(size: 30, weight: .bold, design: .rounded))
 
                 Text("Dictate text anywhere on your Mac.\nHold a key to record, release to transcribe.")
@@ -218,7 +218,7 @@ struct SetupView: View {
                     Button {
                         openURL(freeflowRepoURL)
                     } label: {
-                        Text("zachlatta/freeflow")
+                        Text("IlyaGulya/wrenflow")
                             .font(.system(.caption, design: .monospaced).weight(.medium))
                     }
                     .buttonStyle(.plain)
@@ -450,7 +450,7 @@ struct SetupView: View {
                 .font(.title)
                 .fontWeight(.bold)
 
-            Text("FreeFlow needs access to your microphone to record audio for transcription.")
+            Text("Wrenflow needs access to your microphone to record audio for transcription.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -490,7 +490,7 @@ struct SetupView: View {
                 .font(.title)
                 .fontWeight(.bold)
 
-            Text("FreeFlow needs Accessibility access to paste transcribed text into your apps.")
+            Text("Wrenflow needs Accessibility access to paste transcribed text into your apps.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -543,12 +543,12 @@ struct SetupView: View {
                 .font(.title)
                 .fontWeight(.bold)
 
-            Text("FreeFlow intelligently adapts the transcription to the current app you're working in (ex. spelling names in an email correctly).")
+            Text("Wrenflow intelligently adapts the transcription to the current app you're working in (ex. spelling names in an email correctly).")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("It needs this permission to see which app you're working in and any in-progress work. Nothing is stored on FreeFlow's servers (FreeFlow doesn't have servers).")
+            Text("It needs this permission to see which app you're working in and any in-progress work. Nothing is stored on any servers (Wrenflow doesn't have servers).")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .font(.callout)
@@ -670,7 +670,7 @@ struct SetupView: View {
                 .font(.title)
                 .fontWeight(.bold)
 
-            Text("Start FreeFlow automatically when you log in so it's always ready.")
+            Text("Start Wrenflow automatically when you log in so it's always ready.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -679,7 +679,7 @@ struct SetupView: View {
                 Image(systemName: "sunrise.fill")
                     .frame(width: 24)
                     .foregroundStyle(.blue)
-                Toggle("Launch FreeFlow at login", isOn: $appState.launchAtLogin)
+                Toggle("Launch Wrenflow at login", isOn: $appState.launchAtLogin)
             }
             .padding(12)
             .background(Color(nsColor: .controlBackgroundColor))
@@ -794,7 +794,7 @@ struct SetupView: View {
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                         } else {
-                            Text("Perfect — FreeFlow is ready to go.")
+                            Text("Perfect — Wrenflow is ready to go.")
                                 .font(.title2)
                                 .fontWeight(.semibold)
 
@@ -839,7 +839,7 @@ struct SetupView: View {
                 .font(.title)
                 .fontWeight(.bold)
 
-            Text("FreeFlow lives in your menu bar.")
+            Text("Wrenflow lives in your menu bar.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
 
@@ -1165,7 +1165,7 @@ class GitHubMetadataCache: ObservableObject {
 
     private var lastFetchDate: Date?
     private let cacheDuration: TimeInterval = 5 * 60 // 5 minutes
-    private let repoAPIURL = URL(string: "https://api.github.com/repos/zachlatta/freeflow")!
+    private let repoAPIURL = URL(string: "https://api.github.com/repos/IlyaGulya/wrenflow")!
 
     private init() {}
 
@@ -1188,7 +1188,7 @@ class GitHubMetadataCache: ObservableObject {
             if count > 0 {
                 let perPage = 100
                 let lastPage = max(1, Int(ceil(Double(count) / Double(perPage))))
-                let stargazersURL = URL(string: "https://api.github.com/repos/zachlatta/freeflow/stargazers?per_page=\(perPage)&page=\(lastPage)")!
+                let stargazersURL = URL(string: "https://api.github.com/repos/IlyaGulya/wrenflow/stargazers?per_page=\(perPage)&page=\(lastPage)")!
                 var request = URLRequest(url: stargazersURL)
                 request.setValue("application/vnd.github.v3.star+json", forHTTPHeaderField: "Accept")
                 let starredResult = try await URLSession.shared.data(for: request)

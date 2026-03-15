@@ -1,7 +1,7 @@
 import AppKit
 
 enum CLIInstaller {
-    static let installPath = "/usr/local/bin/freeflow"
+    static let installPath = "/usr/local/bin/wrenflow"
 
     static var isInstalled: Bool {
         guard let bundlePath = bundledCLIPath else { return false }
@@ -62,7 +62,7 @@ enum CLIInstaller {
             } else {
                 showAlert(
                     title: "CLI Installed",
-                    message: "The freeflow command has been installed to \(dest).\n\nUsage:\n  freeflow start\n  freeflow stop\n  freeflow toggle\n  freeflow status",
+                    message: "The freeflow command has been installed to \(dest).\n\nUsage:\n  wrenflow start\n  freeflow stop\n  wrenflow toggle\n  freeflow status",
                     style: .informational
                 )
             }

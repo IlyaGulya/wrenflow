@@ -3,7 +3,7 @@ import AVFoundation
 import os.log
 import FluidAudio
 
-private let ltLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "LocalTranscription")
+private let ltLog = OSLog(subsystem: "me.gulya.wrenflow", category: "LocalTranscription")
 
 enum LocalTranscriptionState: Equatable {
     case notLoaded

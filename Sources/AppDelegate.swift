@@ -80,7 +80,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "FreeFlow"
+        window.title = "Wrenflow"
         window.contentView = hostingView
         window.isReleasedWhenClosed = false
         window.center()
@@ -112,7 +112,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "FreeFlow"
+        window.title = "Wrenflow"
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.contentView = NSHostingView(rootView: setupView)
@@ -146,25 +146,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         center.addObserver(
             self,
             selector: #selector(handleDistributedStartRecording),
-            name: .init("com.freeflow.start-recording"),
+            name: .init("me.gulya.wrenflow.start-recording"),
             object: nil
         )
         center.addObserver(
             self,
             selector: #selector(handleDistributedStopRecording),
-            name: .init("com.freeflow.stop-recording"),
+            name: .init("me.gulya.wrenflow.stop-recording"),
             object: nil
         )
         center.addObserver(
             self,
             selector: #selector(handleDistributedToggleRecording),
-            name: .init("com.freeflow.toggle-recording"),
+            name: .init("me.gulya.wrenflow.toggle-recording"),
             object: nil
         )
         center.addObserver(
             self,
             selector: #selector(handleDistributedStatusRequest),
-            name: .init("com.freeflow.status-request"),
+            name: .init("me.gulya.wrenflow.status-request"),
             object: nil
         )
     }
@@ -193,7 +193,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func sendAck(_ command: String) {
         let state = appState.isRecording ? "recording" : "idle"
         DistributedNotificationCenter.default().postNotificationName(
-            .init("com.freeflow.ack"),
+            .init("me.gulya.wrenflow.ack"),
             object: "\(command):\(state)",
             userInfo: nil,
             deliverImmediately: true
@@ -203,7 +203,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func handleDistributedStatusRequest() {
         let state = appState.isRecording ? "recording" : "idle"
         DistributedNotificationCenter.default().postNotificationName(
-            .init("com.freeflow.status-response"),
+            .init("me.gulya.wrenflow.status-response"),
             object: state,
             userInfo: nil,
             deliverImmediately: true
@@ -227,7 +227,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "FreeFlow"
+        window.title = "Wrenflow"
         window.contentView = NSHostingView(rootView: view)
         window.isReleasedWhenClosed = false
         window.center()

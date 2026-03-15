@@ -1,7 +1,7 @@
 import Foundation
 import os.log
 
-private let ppLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "PostProcessing")
+private let ppLog = OSLog(subsystem: "me.gulya.wrenflow", category: "PostProcessing")
 
 enum PostProcessingError: LocalizedError {
     case requestFailed(Int, String)

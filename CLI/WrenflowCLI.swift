@@ -1,13 +1,13 @@
 import Foundation
 
 let notifications: [String: String] = [
-    "start": "com.freeflow.start-recording",
-    "stop": "com.freeflow.stop-recording",
-    "toggle": "com.freeflow.toggle-recording",
+    "start": "me.gulya.wrenflow.start-recording",
+    "stop": "me.gulya.wrenflow.stop-recording",
+    "toggle": "me.gulya.wrenflow.toggle-recording",
 ]
 
 func printUsage() {
-    let name = (CommandLine.arguments.first as NSString?)?.lastPathComponent ?? "freeflow"
+    let name = (CommandLine.arguments.first as NSString?)?.lastPathComponent ?? "wrenflow"
     fputs("""
     Usage: \(name) <command>
 
@@ -25,7 +25,7 @@ func handleStatus() {
     var receivedResponse = false
 
     let observer = center.addObserver(
-        forName: .init("com.freeflow.status-response"),
+        forName: .init("me.gulya.wrenflow.status-response"),
         object: nil,
         queue: nil
     ) { notification in
@@ -36,7 +36,7 @@ func handleStatus() {
     }
 
     center.postNotificationName(
-        .init("com.freeflow.status-request"),
+        .init("me.gulya.wrenflow.status-request"),
         object: nil,
         userInfo: nil,
         deliverImmediately: true
@@ -46,7 +46,7 @@ func handleStatus() {
     center.removeObserver(observer)
 
     if !receivedResponse {
-        fputs("No response from FreeFlow (is it running?)\n", stderr)
+        fputs("No response from Wrenflow (is it running?)\n", stderr)
         exit(1)
     }
 }
@@ -66,7 +66,7 @@ if command == "status" {
 
     // Subscribe to ack BEFORE sending the command to avoid race
     let observer = center.addObserver(
-        forName: .init("com.freeflow.ack"),
+        forName: .init("me.gulya.wrenflow.ack"),
         object: nil,
         queue: nil
     ) { notification in
@@ -90,7 +90,7 @@ if command == "status" {
     center.removeObserver(observer)
 
     if !received {
-        fputs("No response from FreeFlow (is it running?)\n", stderr)
+        fputs("No response from Wrenflow (is it running?)\n", stderr)
         exit(1)
     }
 } else {

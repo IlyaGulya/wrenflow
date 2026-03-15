@@ -1,8 +1,8 @@
-APP_NAME ?= FreeFlow Debug
-BUNDLE_ID ?= com.ilyagulya.freeflow.debug
+APP_NAME ?= Wrenflow Debug
+BUNDLE_ID ?= me.gulya.wrenflow.debug
 BUILD_DIR = build
 APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
-CODESIGN_IDENTITY ?= FreeFlow Debug
+CODESIGN_IDENTITY ?= -
 CONTENTS = $(APP_BUNDLE)/Contents
 MACOS_DIR = $(CONTENTS)/MacOS
 
@@ -20,10 +20,10 @@ $(MACOS_DIR)/$(APP_NAME): $(SOURCES) Info.plist $(ICON_ICNS)
 	@mkdir -p "$(MACOS_DIR)" "$(RESOURCES)"
 ifeq ($(ARCH),universal)
 	swift build -c release --arch arm64 --arch x86_64
-	@cp .build/apple/Products/Release/FreeFlow "$(MACOS_DIR)/$(APP_NAME)"
+	@cp .build/apple/Products/Release/Wrenflow "$(MACOS_DIR)/$(APP_NAME)"
 else
 	swift build -c debug
-	@cp "$$(swift build -c debug --show-bin-path)/FreeFlow" "$(MACOS_DIR)/$(APP_NAME)"
+	@cp "$$(swift build -c debug --show-bin-path)/Wrenflow" "$(MACOS_DIR)/$(APP_NAME)"
 endif
 	@cp Info.plist "$(CONTENTS)/"
 	@plutil -replace CFBundleName -string "$(APP_NAME)" "$(CONTENTS)/Info.plist"
@@ -31,9 +31,9 @@ endif
 	@plutil -replace CFBundleExecutable -string "$(APP_NAME)" "$(CONTENTS)/Info.plist"
 	@plutil -replace CFBundleIdentifier -string "$(BUNDLE_ID)" "$(CONTENTS)/Info.plist"
 	@cp $(ICON_ICNS) "$(RESOURCES)/"
-	swift build -c debug --product FreeFlowCLI
-	@cp "$$(swift build -c debug --show-bin-path)/FreeFlowCLI" "$(MACOS_DIR)/freeflow"
-	@codesign --force --sign "$(CODESIGN_IDENTITY)" --entitlements FreeFlow.entitlements "$(APP_BUNDLE)"
+	swift build -c debug --product WrenflowCLI
+	@cp "$$(swift build -c debug --show-bin-path)/WrenflowCLI" "$(MACOS_DIR)/wrenflow"
+	@codesign --force --sign "$(CODESIGN_IDENTITY)" --entitlements Wrenflow.entitlements "$(APP_BUNDLE)"
 	@echo "Built $(APP_BUNDLE)"
 
 icon: $(ICON_ICNS)
@@ -89,17 +89,17 @@ notarize:
 clean:
 	rm -rf $(BUILD_DIR) .build
 
-cli: $(BUILD_DIR)/freeflow
+cli: $(BUILD_DIR)/wrenflow
 
-$(BUILD_DIR)/freeflow: CLI/FreeFlowCLI.swift
+$(BUILD_DIR)/wrenflow: CLI/WrenflowCLI.swift
 	@mkdir -p "$(BUILD_DIR)"
-	swift build -c debug --product FreeFlowCLI
-	@cp "$$(swift build -c debug --show-bin-path)/FreeFlowCLI" "$(BUILD_DIR)/freeflow"
-	@echo "Built $(BUILD_DIR)/freeflow"
+	swift build -c debug --product WrenflowCLI
+	@cp "$$(swift build -c debug --show-bin-path)/WrenflowCLI" "$(BUILD_DIR)/wrenflow"
+	@echo "Built $(BUILD_DIR)/wrenflow"
 
 install-cli: cli
-	cp "$(BUILD_DIR)/freeflow" /usr/local/bin/freeflow
-	@echo "Installed freeflow to /usr/local/bin/freeflow"
+	cp "$(BUILD_DIR)/wrenflow" /usr/local/bin/wrenflow
+	@echo "Installed wrenflow to /usr/local/bin/wrenflow"
 
 run: all
 	@-pkill -f "$(APP_NAME)" 2>/dev/null; sleep 0.5

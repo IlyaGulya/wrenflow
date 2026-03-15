@@ -4,7 +4,7 @@ import CoreAudio
 import Foundation
 import os.log
 
-private let recordingLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "Recording")
+private let recordingLog = OSLog(subsystem: "me.gulya.wrenflow", category: "Recording")
 
 // MARK: - AUHAL Render Notify (C-function, RT-safe — no ARC, no alloc, no locks)
 // Called by AudioUnitAddRenderNotify after the input node renders each HAL buffer.
@@ -261,7 +261,7 @@ class AudioRecorder: NSObject, ObservableObject {
     fileprivate var audioEngine: AVAudioEngine?
     private var audioFile: AVAudioFile?
     private var tempFileURL: URL?
-    private let audioFileQueue = DispatchQueue(label: "com.zachlatta.freeflow.audiofile")
+    private let audioFileQueue = DispatchQueue(label: "me.gulya.wrenflow.audiofile")
     fileprivate var recordingStartTime: CFAbsoluteTime = 0
     private var firstBufferLogged = false
     private var bufferCount: Int = 0

@@ -1,7 +1,7 @@
 import Foundation
 import os.log
 
-private let tsLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "Transcription")
+private let tsLog = OSLog(subsystem: "me.gulya.wrenflow", category: "Transcription")
 
 class TranscriptionService {
     private let apiKey: String
