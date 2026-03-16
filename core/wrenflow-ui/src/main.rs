@@ -47,13 +47,19 @@ fn main() {
 /// Entry point callable from native shells.
 pub fn launch_ui(host: Arc<dyn PlatformHost>) {
     PLATFORM_HOST.set(host).ok();
-    let cfg = dioxus::desktop::Config::new()
-        .with_window(
-            dioxus::desktop::tao::window::WindowBuilder::new()
-                .with_title("Wrenflow Settings")
-                .with_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(780.0, 560.0))
-                .with_min_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(580.0, 380.0)),
-        );
+    let setup = is_setup_mode();
+    let window = if setup {
+        dioxus::desktop::tao::window::WindowBuilder::new()
+            .with_title("Wrenflow Setup")
+            .with_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(480.0, 520.0))
+            .with_resizable(false)
+    } else {
+        dioxus::desktop::tao::window::WindowBuilder::new()
+            .with_title("Wrenflow Settings")
+            .with_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(780.0, 560.0))
+            .with_min_inner_size(dioxus::desktop::tao::dpi::LogicalSize::new(580.0, 380.0))
+    };
+    let cfg = dioxus::desktop::Config::new().with_window(window);
     dioxus::LaunchBuilder::desktop().with_cfg(cfg).launch(App);
 }
 
@@ -83,6 +89,10 @@ fn App() -> Element {
                 config, api_key,
                 on_complete: move |_| {
                     let _ = config.read().save(&config_path());
+                    // In setup mode, close the window. Otherwise show settings.
+                    if is_setup_mode() {
+                        std::process::exit(0);
+                    }
                     setup_done.set(true);
                 },
             }
