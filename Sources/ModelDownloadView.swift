@@ -32,13 +32,13 @@ struct ModelDownloadView: View {
 
                 case .compiling:
                     Text("Loading model")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(Color(white: 0.15))
+                        .font(WrenflowStyle.title())
+                        .foregroundColor(WrenflowStyle.text)
 
                     HStack(spacing: 3) {
                         ForEach(0..<5, id: \.self) { i in
                             RoundedRectangle(cornerRadius: 1.5)
-                                .fill(Color(white: 0.15).opacity(0.2))
+                                .fill(WrenflowStyle.text.opacity(0.2))
                                 .frame(width: 3, height: barHeight(index: i))
                                 .animation(
                                     .easeInOut(duration: 0.5)
@@ -54,36 +54,46 @@ struct ModelDownloadView: View {
                 case .ready:
                     HStack(spacing: 8) {
                         Image(systemName: "checkmark")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(Color(red: 0.2, green: 0.7, blue: 0.4))
+                            .font(WrenflowStyle.title())
+                            .foregroundColor(WrenflowStyle.green)
                         Text("Ready")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(Color(white: 0.15))
+                            .font(WrenflowStyle.title())
+                            .foregroundColor(WrenflowStyle.text)
                     }
 
                 case .error(let message):
                     Text("Download failed")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(Color(white: 0.15))
+                        .font(WrenflowStyle.title())
+                        .foregroundColor(WrenflowStyle.text)
 
                     Text(message)
-                        .font(.system(size: 14))
-                        .foregroundColor(Color(white: 0.4))
+                        .font(WrenflowStyle.body())
+                        .foregroundColor(WrenflowStyle.textSecondary)
                         .lineLimit(2)
 
                     Button("Retry") { localTranscriptionService.initialize() }
-                        .font(.system(size: 14))
+                        .font(WrenflowStyle.body())
                 }
             }
 
             Spacer(minLength: 0)
+
+            // Cancel / close button (right edge)
+            if isBusy {
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(WrenflowStyle.textTertiary)
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(WrenflowStyle.text.opacity(0.06)))
+                }
+                .buttonStyle(.plain)
+                .help("Cancel")
+            }
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 20)
-        .frame(width: 380)
-        .fixedSize(horizontal: false, vertical: true)
-        .background(Color(white: 0.96))
-        .environment(\.colorScheme, .light)
+        .wrenflowPanel()
     }
 
     // MARK: - Download content
@@ -91,27 +101,14 @@ struct ModelDownloadView: View {
     private func downloadContent(progress: Double, status: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Downloading model")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundColor(Color(white: 0.15))
+                .font(WrenflowStyle.title())
+                .foregroundColor(WrenflowStyle.text)
 
-            // Progress bar
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Color(white: 0.15).opacity(0.08))
-                        .frame(height: 5)
-
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Color(white: 0.15).opacity(0.45))
-                        .frame(width: max(5, geo.size.width * CGFloat(progress)), height: 5)
-                        .animation(.easeInOut(duration: 0.3), value: progress)
-                }
-            }
-            .frame(height: 5)
+            WrenflowProgressBar(progress: progress)
 
             Text(status)
-                .font(.system(size: 14, design: .monospaced))
-                .foregroundColor(Color(white: 0.45))
+                .font(WrenflowStyle.mono())
+                .foregroundColor(WrenflowStyle.textSecondary)
         }
     }
 
@@ -126,5 +123,12 @@ struct ModelDownloadView: View {
     private func barHeight(index: Int) -> CGFloat {
         let heights: [CGFloat] = [12, 18, 14, 18, 12]
         return wavePhase == 0 ? 6 : heights[index]
+    }
+
+    private var isBusy: Bool {
+        switch localTranscriptionService.state {
+        case .notLoaded, .downloading, .compiling: return true
+        default: return false
+        }
     }
 }

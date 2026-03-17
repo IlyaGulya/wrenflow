@@ -224,27 +224,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         )
 
-        let hostingView = NSHostingView(rootView: view)
-        hostingView.setFrameSize(hostingView.fittingSize)
-
-        let panel = NSPanel(
-            contentRect: NSRect(origin: .zero, size: hostingView.fittingSize),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        panel.contentView = hostingView
-        panel.isReleasedWhenClosed = false
-        panel.isFloatingPanel = true
-        panel.level = .floating
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        // Round corners
-        panel.contentView?.wantsLayer = true
-        panel.contentView?.layer?.cornerRadius = 12
-        panel.contentView?.layer?.masksToBounds = true
-        panel.center()
+        let panel = NSPanel.wrenflowPanel(content: view)
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
