@@ -715,10 +715,11 @@ public struct AppConfig {
     public var customContextPrompt: String
     public var selectedHotkey: String
     public var selectedMicrophoneId: String
+    public var soundEnabled: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(transcriptionProvider: String, postProcessingEnabled: Bool, postProcessingModel: String, apiBaseUrl: String, minimumRecordingDurationMs: Double, customVocabulary: String, customSystemPrompt: String, customContextPrompt: String, selectedHotkey: String, selectedMicrophoneId: String) {
+    public init(transcriptionProvider: String, postProcessingEnabled: Bool, postProcessingModel: String, apiBaseUrl: String, minimumRecordingDurationMs: Double, customVocabulary: String, customSystemPrompt: String, customContextPrompt: String, selectedHotkey: String, selectedMicrophoneId: String, soundEnabled: Bool) {
         self.transcriptionProvider = transcriptionProvider
         self.postProcessingEnabled = postProcessingEnabled
         self.postProcessingModel = postProcessingModel
@@ -729,6 +730,7 @@ public struct AppConfig {
         self.customContextPrompt = customContextPrompt
         self.selectedHotkey = selectedHotkey
         self.selectedMicrophoneId = selectedMicrophoneId
+        self.soundEnabled = soundEnabled
     }
 }
 
@@ -769,6 +771,9 @@ extension AppConfig: Equatable, Hashable {
         if lhs.selectedMicrophoneId != rhs.selectedMicrophoneId {
             return false
         }
+        if lhs.soundEnabled != rhs.soundEnabled {
+            return false
+        }
         return true
     }
 
@@ -783,6 +788,7 @@ extension AppConfig: Equatable, Hashable {
         hasher.combine(customContextPrompt)
         hasher.combine(selectedHotkey)
         hasher.combine(selectedMicrophoneId)
+        hasher.combine(soundEnabled)
     }
 }
 
@@ -804,7 +810,8 @@ public struct FfiConverterTypeAppConfig: FfiConverterRustBuffer {
                 customSystemPrompt: FfiConverterString.read(from: &buf), 
                 customContextPrompt: FfiConverterString.read(from: &buf), 
                 selectedHotkey: FfiConverterString.read(from: &buf), 
-                selectedMicrophoneId: FfiConverterString.read(from: &buf)
+                selectedMicrophoneId: FfiConverterString.read(from: &buf), 
+                soundEnabled: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -819,6 +826,7 @@ public struct FfiConverterTypeAppConfig: FfiConverterRustBuffer {
         FfiConverterString.write(value.customContextPrompt, into: &buf)
         FfiConverterString.write(value.selectedHotkey, into: &buf)
         FfiConverterString.write(value.selectedMicrophoneId, into: &buf)
+        FfiConverterBool.write(value.soundEnabled, into: &buf)
     }
 }
 

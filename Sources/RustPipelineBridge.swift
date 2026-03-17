@@ -285,7 +285,8 @@ final class RustPipelineBridge {
             customSystemPrompt: appState.customSystemPrompt,
             customContextPrompt: appState.customContextPrompt,
             selectedHotkey: appState.selectedHotkey.rawValue,
-            selectedMicrophoneId: appState.selectedMicrophoneID
+            selectedMicrophoneId: appState.selectedMicrophoneID,
+            soundEnabled: appState.soundEnabled
         )
     }
 }

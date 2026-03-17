@@ -170,7 +170,9 @@ impl PipelineEngine {
     pub fn on_first_audio(&mut self, listener: &dyn PipelineListener) {
         if matches!(self.state, PipelineState::Starting | PipelineState::Initializing) {
             self.transition(PipelineState::Recording, listener);
-            listener.on_play_sound(PipelineSound::RecordingStarted);
+            if self.config.sound_enabled {
+                listener.on_play_sound(PipelineSound::RecordingStarted);
+            }
         }
     }
 
@@ -199,7 +201,9 @@ impl PipelineEngine {
         }
 
         self.transition(PipelineState::Transcribing { showing_indicator: false }, listener);
-        listener.on_play_sound(PipelineSound::RecordingStopped);
+        if self.config.sound_enabled {
+            listener.on_play_sound(PipelineSound::RecordingStopped);
+        }
         true
     }
 

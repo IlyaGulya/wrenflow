@@ -1,5 +1,10 @@
 // swift-tools-version: 5.9
 import PackageDescription
+import Foundation
+
+// Resolve absolute path to Rust FFI library
+let packageDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
+let rustLibDir = "\(packageDir)/core/target/debug"
 
 let package = Package(
     name: "Wrenflow",
@@ -22,7 +27,7 @@ let package = Package(
             path: "Sources",
             linkerSettings: [
                 .unsafeFlags([
-                    "-Lcore/target/debug",
+                    "-L\(rustLibDir)",
                     "-lwrenflow_ffi",
                 ]),
             ]

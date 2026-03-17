@@ -106,6 +106,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let postProcessingModelStorageKey = "post_processing_model"
     private let postProcessingEnabledStorageKey = "post_processing_enabled"
     private let minimumRecordingDurationStorageKey = "minimum_recording_duration_ms"
+    private let soundEnabledStorageKey = "sound_enabled"
     private let transcribingIndicatorDelay: TimeInterval = 1.0
     let maxPipelineHistoryCount = 20
 
@@ -235,6 +236,11 @@ final class AppState: ObservableObject, @unchecked Sendable {
             UserDefaults.standard.set(postProcessingModel, forKey: postProcessingModelStorageKey)
         }
     }
+    @Published var soundEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(soundEnabled, forKey: soundEnabledStorageKey)
+        }
+    }
     @Published var availableMicrophones: [AudioDevice] = []
 
     let audioRecorder = AudioRecorder()
@@ -296,6 +302,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.selectedTranscriptionProvider = TranscriptionProvider(rawValue: UserDefaults.standard.string(forKey: transcriptionProviderStorageKey) ?? "") ?? .local
         self.postProcessingEnabled = UserDefaults.standard.bool(forKey: postProcessingEnabledStorageKey)
         self.postProcessingModel = UserDefaults.standard.string(forKey: postProcessingModelStorageKey) ?? "meta-llama/llama-4-scout-17b-16e-instruct"
+        // Default to true if key not set (object(forKey:) returns nil for unset keys)
+        self.soundEnabled = UserDefaults.standard.object(forKey: soundEnabledStorageKey) as? Bool ?? true
 
         refreshAvailableMicrophones()
         installAudioDeviceListener()
@@ -394,12 +402,12 @@ final class AppState: ObservableObject, @unchecked Sendable {
             } else {
                 overlayManager.showRecording()
             }
-            NSSound(named: "Tink")?.play()
+            if soundEnabled { NSSound(named: "Tink")?.play() }
 
         case .transcribing(let showingIndicator):
             if !showingIndicator {
                 overlayManager.slideUpToNotch { }
-                NSSound(named: "Pop")?.play()
+                if soundEnabled { NSSound(named: "Pop")?.play() }
                 let delay = transcribingIndicatorDelay
                 transcribingIndicatorTask = Task { [weak self] in
                     do {
