@@ -4,126 +4,189 @@ struct ModelDownloadView: View {
     @ObservedObject var localTranscriptionService: LocalTranscriptionService
     var onDismiss: () -> Void
 
+    @State private var birdOffset: CGFloat = 0
+    @State private var wavePhase: Double = 0
+
     var body: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: 14) {
-                // Icon
+        ZStack {
+            // White background
+            Color.white.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                Spacer().frame(height: 36)
+
+                // Bird icon
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 56, height: 56)
+                    .opacity(0.6)
+                    .offset(y: birdOffset)
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
+                            birdOffset = -4
+                        }
+                    }
+
+                Spacer().frame(height: 20)
+
+                // Content per state
                 Group {
                     switch localTranscriptionService.state {
-                    case .ready:
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 32))
-                            .foregroundStyle(.green)
-                    case .error:
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 32))
-                            .foregroundStyle(.red)
-                    default:
-                        Image(nsImage: NSApp.applicationIconImage)
-                            .resizable()
-                            .frame(width: 40, height: 40)
-                    }
-                }
+                    case .notLoaded:
+                        downloadContent(progress: 0, status: "Preparing...")
 
-                // Title + description
-                switch localTranscriptionService.state {
-                case .notLoaded:
-                    stateContent(
-                        title: "Preparing Download",
-                        subtitle: "Setting up the speech recognition model."
-                    )
+                    case .downloading(let progress):
+                        downloadContent(progress: progress, status: downloadStatus(progress))
 
-                case .downloading(let progress):
-                    VStack(spacing: 8) {
-                        Text("Downloading Model")
-                            .font(.system(size: 14, weight: .semibold))
+                    case .compiling:
+                        VStack(spacing: 10) {
+                            Text("Loading model")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundColor(.black)
 
-                        // Progress bar
-                        ProgressView(value: progress)
-                            .progressViewStyle(.linear)
-                            .tint(.accentColor)
+                            // Animated wave bars
+                            HStack(spacing: 3) {
+                                ForEach(0..<5, id: \.self) { i in
+                                    RoundedRectangle(cornerRadius: 1.5)
+                                        .fill(Color.black.opacity(0.2))
+                                        .frame(width: 3, height: barHeight(index: i))
+                                        .animation(
+                                            .easeInOut(duration: 0.5)
+                                            .repeatForever(autoreverses: true)
+                                            .delay(Double(i) * 0.1),
+                                            value: wavePhase
+                                        )
+                                }
+                            }
+                            .frame(height: 20)
+                            .onAppear { wavePhase = 1 }
 
-                        HStack {
-                            Text("Parakeet TDT 0.6B (int8)")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text("\(Int(progress * 100))%")
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.secondary)
+                            Text("Optimizing for your device")
+                                .font(.system(size: 12))
+                                .foregroundColor(Color.black.opacity(0.35))
                         }
 
-                        Text("~640 MB · This only happens once.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.tertiary)
-                    }
+                    case .ready:
+                        VStack(spacing: 8) {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundColor(Color(red: 0.2, green: 0.7, blue: 0.4))
 
-                case .compiling:
-                    stateContent(
-                        title: "Loading Model",
-                        subtitle: "Optimizing for your device. This takes a moment."
-                    )
+                            Text("Ready")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundColor(.black)
+                        }
 
-                case .ready:
-                    stateContent(
-                        title: "Ready",
-                        subtitle: "The speech recognition model is loaded."
-                    )
+                    case .error(let message):
+                        VStack(spacing: 10) {
+                            Text("Download failed")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundColor(.black)
 
-                case .error(let message):
-                    VStack(spacing: 6) {
-                        Text("Download Failed")
-                            .font(.system(size: 14, weight: .semibold))
-                        Text(message)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .lineLimit(3)
+                            Text(message)
+                                .font(.system(size: 11))
+                                .foregroundColor(Color.black.opacity(0.4))
+                                .multilineTextAlignment(.center)
+                                .lineLimit(3)
+                                .padding(.horizontal, 20)
+
+                            Button(action: { localTranscriptionService.initialize() }) {
+                                Text("Retry")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.black)
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 6)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(Color.black.opacity(0.15), lineWidth: 1)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 20)
-            .padding(.bottom, 16)
 
-            Divider()
-
-            // Footer buttons
-            HStack {
-                if case .error = localTranscriptionService.state {
-                    Button("Retry") {
-                        localTranscriptionService.initialize()
-                    }
-                    .keyboardShortcut(.defaultAction)
-                }
                 Spacer()
-                Button(buttonLabel) {
-                    onDismiss()
+
+                // Footer
+                if !isDownloading {
+                    Button(action: onDismiss) {
+                        Text(footerLabel)
+                            .font(.system(size: 12))
+                            .foregroundColor(Color.black.opacity(0.35))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 16)
+                } else {
+                    Spacer().frame(height: 16)
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
         }
-        .frame(width: 340)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 300, height: 260)
+        .environment(\.colorScheme, .light)
     }
 
-    private var buttonLabel: String {
+    // MARK: - Download content
+
+    private func downloadContent(progress: Double, status: String) -> some View {
+        VStack(spacing: 14) {
+            Text("Downloading model")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundColor(.black)
+
+            // Thin progress bar
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.black.opacity(0.06))
+                        .frame(height: 4)
+
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.black.opacity(0.5))
+                        .frame(width: max(4, geo.size.width * CGFloat(progress)), height: 4)
+                        .animation(.easeInOut(duration: 0.3), value: progress)
+                }
+            }
+            .frame(height: 4)
+            .padding(.horizontal, 32)
+
+            // Status text
+            Text(status)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(Color.black.opacity(0.35))
+
+            Text("Parakeet TDT · ~640 MB")
+                .font(.system(size: 10))
+                .foregroundColor(Color.black.opacity(0.2))
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func downloadStatus(_ progress: Double) -> String {
+        let pct = Int(progress * 100)
+        let mbDone = Int(Double(640) * progress)
+        return "\(mbDone) / 640 MB  ·  \(pct)%"
+    }
+
+    private func barHeight(index: Int) -> CGFloat {
+        let base: CGFloat = wavePhase == 0 ? 6 : 6
+        let heights: [CGFloat] = [12, 18, 14, 18, 12]
+        return wavePhase == 0 ? base : heights[index]
+    }
+
+    private var isDownloading: Bool {
+        switch localTranscriptionService.state {
+        case .notLoaded, .downloading, .compiling: return true
+        default: return false
+        }
+    }
+
+    private var footerLabel: String {
         switch localTranscriptionService.state {
         case .ready: return "Done"
         case .error: return "Close"
         default: return "Hide"
-        }
-    }
-
-    private func stateContent(title: String, subtitle: String) -> some View {
-        VStack(spacing: 4) {
-            Text(title)
-                .font(.system(size: 14, weight: .semibold))
-            Text(subtitle)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
         }
     }
 }
