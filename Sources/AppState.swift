@@ -184,7 +184,44 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
     /// Set when startRecording() detects missing permissions.
     /// The view layer observes this and shows a sheet. Set to nil to dismiss.
-    @Published var permissionSheetKinds: [PermissionKind]?
+    @Published var permissionSheetKinds: [PermissionKind]? {
+        didSet {
+            if let kinds = permissionSheetKinds, !kinds.isEmpty {
+                showPermissionWindow(kinds: kinds)
+            }
+        }
+    }
+
+    private var permissionWindow: NSWindow?
+
+    private func showPermissionWindow(kinds: [PermissionKind]) {
+        // Don't open a second one
+        if let existing = permissionWindow, existing.isVisible {
+            existing.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let view = PermissionGateView(kinds: kinds)
+            .environmentObject(permissionState)
+            .wrenflowPanel(width: 380)
+
+        let panel = NSPanel.wrenflowPanel(content: view)
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+
+        permissionWindow = panel
+
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: panel,
+            queue: .main
+        ) { [weak self] _ in
+            self?.permissionWindow = nil
+            self?.permissionSheetKinds = nil
+        }
+    }
 
     /// Computed from permissionState for backward compat.
     var hasAccessibility: Bool {
