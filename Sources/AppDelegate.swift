@@ -224,14 +224,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         )
 
+        let hostingView = NSHostingView(rootView: view)
+        hostingView.setFrameSize(hostingView.fittingSize)
+
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 260),
+            contentRect: NSRect(origin: .zero, size: hostingView.fittingSize),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
         window.title = "Wrenflow"
-        window.contentView = NSHostingView(rootView: view)
+        window.contentView = hostingView
         window.isReleasedWhenClosed = false
         window.center()
         window.makeKeyAndOrderFront(nil)
