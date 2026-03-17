@@ -78,7 +78,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let hostingView = NSHostingView(rootView: settingsView)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 780, height: 540),
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 520),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -86,6 +86,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.title = "Wrenflow"
         window.contentView = hostingView
         window.isReleasedWhenClosed = false
+        window.backgroundColor = NSColor(white: 0.96, alpha: 1.0)
+        window.appearance = NSAppearance(named: .aqua)
         window.center()
         window.makeKeyAndOrderFront(nil)
         // Show in Dock + Cmd-Tab while settings is open

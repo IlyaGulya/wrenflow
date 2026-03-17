@@ -6,28 +6,27 @@ import ServiceManagement
 
 private struct SettingsCard<Content: View>: View {
     let title: String
-    let icon: String
     let content: Content
 
-    init(_ title: String, icon: String, @ViewBuilder content: () -> Content) {
+    init(_ title: String, @ViewBuilder content: () -> Content) {
         self.title = title
-        self.icon = icon
         self.content = content()
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(title, systemImage: icon)
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(WrenflowStyle.title(13))
+                .foregroundColor(WrenflowStyle.textSecondary)
             content
         }
-        .padding(16)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-        .cornerRadius(10)
+        .background(WrenflowStyle.surface)
+        .cornerRadius(8)
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(WrenflowStyle.border, lineWidth: 1)
         )
     }
 }
@@ -45,32 +44,49 @@ struct SettingsView: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            // Sidebar
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(SettingsTab.allCases) { tab in
                     Button {
                         appState.selectedSettingsTab = tab
                     } label: {
-                        Label(tab.title, systemImage: tab.icon)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 8)
-                            .padding(.horizontal, 10)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(appState.selectedSettingsTab == tab
-                                          ? Color.accentColor.opacity(0.15)
-                                          : Color.clear)
-                            )
+                        HStack(spacing: 6) {
+                            Image(systemName: tab.icon)
+                                .font(.system(size: 11))
+                                .foregroundColor(appState.selectedSettingsTab == tab
+                                                 ? WrenflowStyle.text
+                                                 : WrenflowStyle.textTertiary)
+                                .frame(width: 16)
+                            Text(tab.title)
+                                .font(WrenflowStyle.body(13))
+                                .foregroundColor(appState.selectedSettingsTab == tab
+                                                 ? WrenflowStyle.text
+                                                 : WrenflowStyle.textSecondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(appState.selectedSettingsTab == tab
+                                      ? WrenflowStyle.text.opacity(0.07)
+                                      : Color.clear)
+                        )
                     }
                     .buttonStyle(.plain)
                 }
                 Spacer()
             }
-            .padding(10)
-            .frame(width: 180)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .padding(8)
+            .frame(width: 150)
+            .background(WrenflowStyle.bg)
 
-            Divider()
+            // Subtle divider
+            Rectangle()
+                .fill(WrenflowStyle.border)
+                .frame(width: 1)
 
+            // Content
             Group {
                 switch appState.selectedSettingsTab {
                 case .general, .none:
@@ -82,7 +98,9 @@ struct SettingsView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(WrenflowStyle.bg)
         }
+        .environment(\.colorScheme, .light)
     }
 }
 
@@ -107,81 +125,87 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
+            VStack(spacing: 12) {
                 // App branding header
-                VStack(spacing: 12) {
+                VStack(spacing: 8) {
                     Image(nsImage: NSApp.applicationIconImage)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: 64, height: 64)
+                        .frame(width: 48, height: 48)
+                        .opacity(0.8)
 
                     Text("Wrenflow")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .font(WrenflowStyle.title(18))
+                        .foregroundColor(WrenflowStyle.text)
 
                     Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(WrenflowStyle.mono(12))
+                        .foregroundColor(WrenflowStyle.textTertiary)
 
                     // GitHub card
-                    VStack(spacing: 10) {
-                        HStack(spacing: 8) {
+                    VStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             AsyncImage(url: URL(string: "https://avatars.githubusercontent.com/u/668727")) { phase in
                                 switch phase {
                                 case .success(let image):
                                     image.resizable().aspectRatio(contentMode: .fill)
                                 default:
-                                    Color.gray.opacity(0.2)
+                                    WrenflowStyle.trackBg
                                 }
                             }
-                            .frame(width: 22, height: 22)
+                            .frame(width: 18, height: 18)
                             .clipShape(Circle())
 
                             Button {
                                 openURL(freeflowRepoURL)
                             } label: {
                                 Text("IlyaGulya/wrenflow")
-                                    .font(.system(.caption, design: .monospaced).weight(.medium))
+                                    .font(WrenflowStyle.mono(12))
+                                    .foregroundColor(WrenflowStyle.text.opacity(0.6))
                             }
                             .buttonStyle(.plain)
-                            .foregroundStyle(.blue)
 
                             Spacer()
 
-                            HStack(spacing: 4) {
+                            HStack(spacing: 3) {
                                 Image(systemName: "star.fill")
-                                    .foregroundStyle(.yellow)
-                                    .font(.caption2)
+                                    .foregroundColor(Color(red: 0.85, green: 0.65, blue: 0.1))
+                                    .font(.system(size: 9))
                                 if githubCache.isLoading {
-                                    ProgressView().scaleEffect(0.5)
+                                    ProgressView().scaleEffect(0.4)
                                 } else if let count = githubCache.starCount {
-                                    Text("\(count.formatted()) \(count == 1 ? "star" : "stars")")
-                                        .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(.secondary)
+                                    Text("\(count.formatted())")
+                                        .font(WrenflowStyle.mono(11))
+                                        .foregroundColor(WrenflowStyle.textSecondary)
                                 }
                             }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Capsule().fill(Color.yellow.opacity(0.14)))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(WrenflowStyle.text.opacity(0.05)))
 
                             Button {
                                 openURL(freeflowRepoURL)
                             } label: {
-                                HStack(spacing: 4) {
+                                HStack(spacing: 3) {
                                     Image(systemName: "star")
+                                        .font(.system(size: 10))
                                     Text("Star")
+                                        .font(WrenflowStyle.body(11))
                                 }
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(Capsule().fill(Color.yellow.opacity(0.18)))
+                                .foregroundColor(WrenflowStyle.textSecondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(WrenflowStyle.text.opacity(0.05)))
                             }
                             .buttonStyle(.plain)
                         }
 
                         if !githubCache.recentStargazers.isEmpty {
-                            Divider()
-                            HStack(spacing: 8) {
-                                HStack(spacing: -6) {
+                            Rectangle()
+                                .fill(WrenflowStyle.border)
+                                .frame(height: 1)
+                            HStack(spacing: 6) {
+                                HStack(spacing: -5) {
                                     ForEach(githubCache.recentStargazers) { star in
                                         Button {
                                             openURL(star.user.htmlUrl)
@@ -191,85 +215,86 @@ struct GeneralSettingsView: View {
                                                 case .success(let image):
                                                     image.resizable().aspectRatio(contentMode: .fill)
                                                 default:
-                                                    Color.gray.opacity(0.2)
+                                                    WrenflowStyle.trackBg
                                                 }
                                             }
-                                            .frame(width: 22, height: 22)
+                                            .frame(width: 18, height: 18)
                                             .clipShape(Circle())
-                                            .overlay(Circle().stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5))
+                                            .overlay(Circle().stroke(WrenflowStyle.surface, lineWidth: 1))
                                         }
                                         .buttonStyle(.plain)
                                     }
                                 }
                                 .clipped()
                                 Text("recently starred")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
+                                    .font(WrenflowStyle.caption(11))
+                                    .foregroundColor(WrenflowStyle.textTertiary)
                                     .fixedSize()
                                 Spacer()
                             }
                             .clipped()
                         }
                     }
-                    .padding(12)
+                    .padding(10)
                     .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(.ultraThinMaterial)
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(WrenflowStyle.surface)
                             .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(WrenflowStyle.border, lineWidth: 1)
                             )
                     )
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.top, 4)
-                .padding(.bottom, 4)
+                .padding(.top, 2)
+                .padding(.bottom, 2)
 
-                SettingsCard("Startup", icon: "power") {
+                SettingsCard("Startup") {
                     startupSection
                 }
-                SettingsCard("Updates", icon: "arrow.triangle.2.circlepath") {
+                SettingsCard("Updates") {
                     updatesSection
                 }
-                SettingsCard("Transcription", icon: "waveform") {
+                SettingsCard("Transcription") {
                     transcriptionProviderSection
                 }
                 if appState.selectedTranscriptionProvider == .local {
-                    SettingsCard("Local Transcription", icon: "waveform.badge.magnifyingglass") {
+                    SettingsCard("Local Transcription") {
                         localTranscriptionSection
                     }
                 }
-                SettingsCard("API Key", icon: "key.fill") {
+                SettingsCard("API Key") {
                     apiKeySection
                 }
                 if !appState.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    SettingsCard("Post-Processing", icon: "sparkles") {
+                    SettingsCard("Post-Processing") {
                         postProcessingSection
                     }
                     if appState.postProcessingEnabled {
-                        SettingsCard("Post-Processing Model", icon: "cpu") {
+                        SettingsCard("Post-Processing Model") {
                             postProcessingModelSection
                         }
                     }
                 }
-                SettingsCard("Push-to-Talk Key", icon: "keyboard.fill") {
+                SettingsCard("Push-to-Talk Key") {
                     hotkeySection
                 }
-                SettingsCard("Microphone", icon: "mic.fill") {
+                SettingsCard("Microphone") {
                     microphoneSection
                 }
-                SettingsCard("Custom Vocabulary", icon: "text.book.closed.fill") {
+                SettingsCard("Custom Vocabulary") {
                     vocabularySection
                 }
-                SettingsCard("Permissions", icon: "lock.shield.fill") {
+                SettingsCard("Permissions") {
                     permissionsSection
                 }
-                SettingsCard("CLI Tool", icon: "terminal.fill") {
+                SettingsCard("CLI Tool") {
                     cliSection
                 }
             }
-            .padding(24)
+            .padding(16)
         }
+        .background(WrenflowStyle.bg)
         .onAppear {
             apiKeyInput = appState.apiKey
             apiBaseURLInput = appState.apiBaseURL
@@ -283,21 +308,25 @@ struct GeneralSettingsView: View {
     // MARK: Startup
 
     private var startupSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Toggle("Launch Wrenflow at login", isOn: $appState.launchAtLogin)
+                .font(WrenflowStyle.body(13))
+                .foregroundColor(WrenflowStyle.text)
+                .toggleStyle(.switch)
+                .controlSize(.small)
 
             if SMAppService.mainApp.status == .requiresApproval {
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
+                        .foregroundColor(.orange)
+                        .font(.system(size: 10))
                     Text("Login item requires approval in System Settings.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(WrenflowStyle.caption(11))
+                        .foregroundColor(WrenflowStyle.textSecondary)
                     Button("Open Login Items Settings") {
                         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
                     }
-                    .font(.caption)
+                    .font(WrenflowStyle.caption(11))
                 }
             }
         }
@@ -306,85 +335,98 @@ struct GeneralSettingsView: View {
     // MARK: Updates
 
     private var updatesSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Toggle("Automatically check for updates", isOn: Binding(
                 get: { updateManager.autoCheckEnabled },
                 set: { updateManager.autoCheckEnabled = $0 }
             ))
+            .font(WrenflowStyle.body(13))
+            .foregroundColor(WrenflowStyle.text)
+            .toggleStyle(.switch)
+            .controlSize(.small)
 
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Button {
                     Task {
                         await updateManager.checkForUpdates(userInitiated: true)
                     }
                 } label: {
                     if updateManager.isChecking {
-                        HStack(spacing: 6) {
+                        HStack(spacing: 4) {
                             ProgressView()
                                 .controlSize(.small)
+                                .scaleEffect(0.7)
                             Text("Checking...")
+                                .font(WrenflowStyle.body(12))
                         }
                     } else {
                         Text("Check for Updates Now")
+                            .font(WrenflowStyle.body(12))
                     }
                 }
                 .disabled(updateManager.isChecking || updateManager.updateStatus != .idle)
 
                 if let lastCheck = updateManager.lastCheckDate {
                     Text("Last checked: \(lastCheck.formatted(date: .abbreviated, time: .shortened))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(WrenflowStyle.caption(11))
+                        .foregroundColor(WrenflowStyle.textTertiary)
                 }
             }
 
             if updateManager.updateAvailable {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     switch updateManager.updateStatus {
                     case .downloading:
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             Image(systemName: "arrow.down.circle.fill")
-                                .foregroundStyle(.blue)
+                                .foregroundColor(WrenflowStyle.text.opacity(0.5))
+                                .font(.system(size: 12))
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Downloading update...")
-                                    .font(.caption.weight(.semibold))
-                                ProgressView(value: updateManager.downloadProgress ?? 0)
-                                    .progressViewStyle(.linear)
+                                    .font(WrenflowStyle.body(12))
+                                    .foregroundColor(WrenflowStyle.text)
+                                WrenflowProgressBar(progress: updateManager.downloadProgress ?? 0)
                                 if let progress = updateManager.downloadProgress {
                                     Text("\(Int(progress * 100))%")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
+                                        .font(WrenflowStyle.mono(11))
+                                        .foregroundColor(WrenflowStyle.textSecondary)
                                 }
                             }
                             Spacer()
                             Button("Cancel") {
                                 updateManager.cancelDownload()
                             }
-                            .font(.caption)
+                            .font(WrenflowStyle.body(11))
                         }
 
                     case .installing:
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             ProgressView()
                                 .controlSize(.small)
+                                .scaleEffect(0.7)
                             Text("Installing update...")
-                                .font(.caption.weight(.semibold))
+                                .font(WrenflowStyle.body(12))
+                                .foregroundColor(WrenflowStyle.text)
                         }
 
                     case .readyToRelaunch:
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             ProgressView()
                                 .controlSize(.small)
+                                .scaleEffect(0.7)
                             Text("Relaunching...")
-                                .font(.caption.weight(.semibold))
+                                .font(WrenflowStyle.body(12))
+                                .foregroundColor(WrenflowStyle.text)
                         }
 
                     case .error(let message):
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.red)
+                                .foregroundColor(WrenflowStyle.red)
+                                .font(.system(size: 10))
                             Text(message)
-                                .font(.caption)
-                                .foregroundStyle(.red)
+                                .font(WrenflowStyle.caption(11))
+                                .foregroundColor(WrenflowStyle.red)
                             Spacer()
                             Button("Retry") {
                                 updateManager.updateStatus = .idle
@@ -392,58 +434,59 @@ struct GeneralSettingsView: View {
                                     updateManager.downloadAndInstall(release: release)
                                 }
                             }
-                            .font(.caption)
+                            .font(WrenflowStyle.body(11))
                         }
 
                     case .idle:
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             Image(systemName: "arrow.down.circle.fill")
-                                .foregroundStyle(.blue)
+                                .foregroundColor(WrenflowStyle.text.opacity(0.5))
+                                .font(.system(size: 12))
                             Text("A new version of Wrenflow is available!")
-                                .font(.caption.weight(.semibold))
+                                .font(WrenflowStyle.body(12))
+                                .foregroundColor(WrenflowStyle.text)
                             Spacer()
                             Button("Update Now") {
                                 if let release = updateManager.latestRelease {
                                     updateManager.downloadAndInstall(release: release)
                                 }
                             }
-                            .font(.caption)
+                            .font(WrenflowStyle.body(11))
                         }
                     }
                 }
-                .padding(10)
-                .background(Color.blue.opacity(0.1))
+                .padding(8)
+                .background(WrenflowStyle.text.opacity(0.04))
                 .cornerRadius(6)
             }
         }
     }
 
-    // MARK: Local Transcription
-
     // MARK: Transcription Provider
 
     private var transcriptionProviderSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Picker("Provider", selection: $appState.selectedTranscriptionProvider) {
                 ForEach(TranscriptionProvider.allCases) { provider in
                     Text(provider.displayName).tag(provider)
                 }
             }
             .pickerStyle(.segmented)
+            .controlSize(.small)
 
             Text(appState.selectedTranscriptionProvider.subtitle)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
 
             if appState.selectedTranscriptionProvider == .groq
                 && appState.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                HStack(spacing: 6) {
+                HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
+                        .foregroundColor(.orange)
+                        .font(.system(size: 10))
                     Text("No API key configured. Transcription will fall back to local.")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
+                        .font(WrenflowStyle.caption(11))
+                        .foregroundColor(.orange)
                 }
             }
         }
@@ -452,79 +495,78 @@ struct GeneralSettingsView: View {
     // MARK: Local Transcription
 
     private var localTranscriptionSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("On-device speech recognition using Parakeet TDT.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
 
             switch appState.localTranscriptionService.state {
             case .notLoaded:
                 HStack {
                     Text("Model not downloaded")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(WrenflowStyle.body(12))
+                        .foregroundColor(WrenflowStyle.textSecondary)
                     Spacer()
                     Button("Download") {
                         appState.localTranscriptionService.initialize()
                     }
-                    .font(.caption)
+                    .font(WrenflowStyle.body(12))
                 }
 
             case .downloading(let info):
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text("Downloading...")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(WrenflowStyle.body(12))
+                            .foregroundColor(WrenflowStyle.textSecondary)
                         Spacer()
                         Text(settingsDownloadStatus(info))
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.secondary)
+                            .font(WrenflowStyle.mono(11))
+                            .foregroundColor(WrenflowStyle.textTertiary)
                     }
-                    ProgressView(value: min(info.fraction, 1.0))
-                        .progressViewStyle(.linear)
-                        .tint(.accentColor)
+                    WrenflowProgressBar(progress: min(info.fraction, 1.0))
                     Button("Cancel") {
                         appState.localTranscriptionService.cancel()
                     }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(WrenflowStyle.body(11))
+                    .foregroundColor(WrenflowStyle.textSecondary)
                 }
 
             case .compiling:
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     ProgressView()
                         .controlSize(.small)
+                        .scaleEffect(0.7)
                     Text("Loading model...")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(WrenflowStyle.body(12))
+                        .foregroundColor(WrenflowStyle.textSecondary)
                 }
 
             case .ready:
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .font(.caption)
+                        .foregroundColor(WrenflowStyle.green)
+                        .font(.system(size: 11))
                     Text("Ready")
-                        .font(.caption)
-                        .foregroundStyle(.green)
+                        .font(WrenflowStyle.body(12))
+                        .foregroundColor(WrenflowStyle.green)
                 }
 
             case .error(let message):
                 VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 5) {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.red)
-                            .font(.caption)
+                            .foregroundColor(WrenflowStyle.red)
+                            .font(.system(size: 11))
                         Text(message)
-                            .font(.caption)
-                            .foregroundStyle(.red)
+                            .font(WrenflowStyle.caption(11))
+                            .foregroundColor(WrenflowStyle.red)
                             .lineLimit(2)
                     }
                     Button("Retry") {
                         appState.localTranscriptionService.initialize()
                     }
-                    .font(.caption)
+                    .font(WrenflowStyle.body(11))
                 }
             }
         }
@@ -545,15 +587,16 @@ struct GeneralSettingsView: View {
     // MARK: API Key
 
     private var apiKeySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Used for Groq transcription (when selected) and text cleanup (post-processing).")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
 
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 SecureField("Enter your Groq API key", text: $apiKeyInput)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(.body, design: .monospaced))
+                    .font(WrenflowStyle.mono(12))
+                    .controlSize(.small)
                     .disabled(isValidatingKey)
                     .onChange(of: apiKeyInput) { _ in
                         keyValidationError = nil
@@ -563,32 +606,46 @@ struct GeneralSettingsView: View {
                 Button(isValidatingKey ? "Validating..." : "Save") {
                     validateAndSaveKey()
                 }
+                .font(WrenflowStyle.body(12))
+                .controlSize(.small)
                 .disabled(apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isValidatingKey)
             }
 
             if let error = keyValidationError {
-                Label(error, systemImage: "xmark.circle.fill")
-                    .foregroundStyle(.red)
-                    .font(.caption)
+                HStack(spacing: 4) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 10))
+                    Text(error)
+                        .font(WrenflowStyle.caption(11))
+                }
+                .foregroundColor(WrenflowStyle.red)
             } else if keyValidationSuccess {
-                Label("API key saved", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .font(.caption)
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 10))
+                    Text("API key saved")
+                        .font(WrenflowStyle.caption(11))
+                }
+                .foregroundColor(WrenflowStyle.green)
             }
 
-            Divider()
+            Rectangle()
+                .fill(WrenflowStyle.border)
+                .frame(height: 1)
 
             Text("API Base URL")
-                .font(.caption.weight(.semibold))
+                .font(WrenflowStyle.body(12))
+                .foregroundColor(WrenflowStyle.text)
 
             Text("Change this to use a different OpenAI-compatible API provider.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
 
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 TextField("https://api.groq.com/openai/v1", text: $apiBaseURLInput)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(.body, design: .monospaced))
+                    .font(WrenflowStyle.mono(12))
+                    .controlSize(.small)
                     .onChange(of: apiBaseURLInput) { newValue in
                         let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmed.isEmpty {
@@ -600,7 +657,8 @@ struct GeneralSettingsView: View {
                     apiBaseURLInput = "https://api.groq.com/openai/v1"
                     appState.apiBaseURL = "https://api.groq.com/openai/v1"
                 }
-                .font(.caption)
+                .font(WrenflowStyle.body(11))
+                .controlSize(.small)
             }
         }
     }
@@ -629,29 +687,34 @@ struct GeneralSettingsView: View {
     // MARK: Post-Processing
 
     private var postProcessingSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Toggle("Enable LLM post-processing", isOn: $appState.postProcessingEnabled)
+                .font(WrenflowStyle.body(13))
+                .foregroundColor(WrenflowStyle.text)
+                .toggleStyle(.switch)
+                .controlSize(.small)
             Text("When enabled, an LLM cleans up transcriptions using screen context. When disabled, raw transcription is pasted directly.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
         }
     }
 
     // MARK: Post-Processing Model
 
     private var postProcessingModelSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("The LLM used to clean up raw transcriptions.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
 
             if isFetchingModels {
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     ProgressView()
                         .controlSize(.small)
+                        .scaleEffect(0.7)
                     Text("Loading models...")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(WrenflowStyle.body(12))
+                        .foregroundColor(WrenflowStyle.textSecondary)
                 }
             } else if !availableModels.isEmpty {
                 Picker("Model", selection: $appState.postProcessingModel) {
@@ -660,21 +723,25 @@ struct GeneralSettingsView: View {
                     }
                 }
                 .labelsHidden()
+                .controlSize(.small)
             } else {
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     TextField("Model ID", text: $appState.postProcessingModel)
                         .textFieldStyle(.roundedBorder)
-                        .font(.system(.body, design: .monospaced))
+                        .font(WrenflowStyle.mono(12))
+                        .controlSize(.small)
 
                     Button("Fetch Models") {
                         fetchModels()
                     }
+                    .font(WrenflowStyle.body(11))
+                    .controlSize(.small)
                 }
 
                 if modelFetchFailed {
                     Text("Could not load model list. You can type a model ID manually.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(WrenflowStyle.caption(11))
+                        .foregroundColor(WrenflowStyle.textTertiary)
                 }
             }
         }
@@ -696,7 +763,6 @@ struct GeneralSettingsView: View {
                     modelFetchFailed = true
                 } else {
                     availableModels = models
-                    // If current model isn't in the list, keep it (user may have typed a valid ID)
                 }
             }
         }
@@ -705,20 +771,25 @@ struct GeneralSettingsView: View {
     // MARK: CLI Tool
 
     private var cliSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Control Wrenflow from the command line or a joystick app.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
 
             HStack {
                 if CLIInstaller.isInstalled {
-                    Label("Installed at \(CLIInstaller.installPath)", systemImage: "checkmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.green)
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(WrenflowStyle.green)
+                            .font(.system(size: 10))
+                        Text("Installed at \(CLIInstaller.installPath)")
+                            .font(WrenflowStyle.caption(11))
+                            .foregroundColor(WrenflowStyle.green)
+                    }
                 } else {
                     Text("Not installed")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(WrenflowStyle.caption(11))
+                        .foregroundColor(WrenflowStyle.textSecondary)
                 }
 
                 Spacer()
@@ -726,23 +797,25 @@ struct GeneralSettingsView: View {
                 Button(CLIInstaller.isInstalled ? "Reinstall" : "Install to /usr/local/bin") {
                     CLIInstaller.install()
                 }
+                .font(WrenflowStyle.body(11))
+                .controlSize(.small)
             }
 
             Text("Usage: wrenflow start | stop | toggle | status")
-                .font(.caption2.monospaced())
-                .foregroundStyle(.tertiary)
+                .font(WrenflowStyle.mono(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
         }
     }
 
     // MARK: Push-to-Talk Key
 
     private var hotkeySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Hold this key to record, release to transcribe.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
 
-            VStack(spacing: 6) {
+            VStack(spacing: 4) {
                 ForEach(HotkeyOption.allCases) { option in
                     HotkeyOptionRow(
                         option: option,
@@ -756,25 +829,29 @@ struct GeneralSettingsView: View {
 
             if appState.selectedHotkey == .fnKey {
                 Text("Tip: If Fn opens Emoji picker, go to System Settings > Keyboard and change \"Press fn key to\" to \"Do Nothing\".")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                    .font(WrenflowStyle.caption(11))
+                    .foregroundColor(.orange)
             }
 
-            Divider()
+            Rectangle()
+                .fill(WrenflowStyle.border)
+                .frame(height: 1)
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text("Minimum recording duration")
-                        .font(.subheadline)
+                        .font(WrenflowStyle.body(12))
+                        .foregroundColor(WrenflowStyle.text)
                     Spacer()
                     Text("\(Int(appState.minimumRecordingDurationMs))ms")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(WrenflowStyle.mono(12))
+                        .foregroundColor(WrenflowStyle.textSecondary)
                 }
                 Slider(value: $appState.minimumRecordingDurationMs, in: 50...500, step: 50)
+                    .controlSize(.small)
                 Text("Recordings shorter than this are treated as accidental and cancelled.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(WrenflowStyle.caption(11))
+                    .foregroundColor(WrenflowStyle.textTertiary)
             }
         }
     }
@@ -782,12 +859,12 @@ struct GeneralSettingsView: View {
     // MARK: Microphone
 
     private var microphoneSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Select which microphone to use for recording.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
 
-            VStack(spacing: 6) {
+            VStack(spacing: 4) {
                 MicrophoneOptionRow(
                     name: "System Default",
                     isSelected: appState.selectedMicrophoneID == "default" || appState.selectedMicrophoneID.isEmpty,
@@ -810,35 +887,34 @@ struct GeneralSettingsView: View {
     // MARK: Custom Vocabulary
 
     private var vocabularySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Words and phrases to preserve during post-processing.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
 
             TextEditor(text: $customVocabularyInput)
-                .font(.system(.body, design: .monospaced))
-                .frame(minHeight: 80, maxHeight: 140)
+                .font(WrenflowStyle.mono(12))
+                .frame(minHeight: 60, maxHeight: 120)
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                        .stroke(WrenflowStyle.border, lineWidth: 1)
                 )
                 .onChange(of: customVocabularyInput) { newValue in
                     appState.customVocabulary = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 }
 
             Text("Separate entries with commas, new lines, or semicolons.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
         }
     }
 
     // MARK: Permissions
 
     private var permissionsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 6) {
             permissionRow(
                 title: "Microphone",
-                icon: "mic.fill",
                 granted: micPermissionGranted,
                 action: {
                     AVCaptureDevice.requestAccess(for: .audio) { granted in
@@ -851,7 +927,6 @@ struct GeneralSettingsView: View {
 
             permissionRow(
                 title: "Accessibility",
-                icon: "hand.raised.fill",
                 granted: appState.hasAccessibility,
                 action: {
                     appState.openAccessibilitySettings()
@@ -860,7 +935,6 @@ struct GeneralSettingsView: View {
 
             permissionRow(
                 title: "Screen Recording",
-                icon: "camera.viewfinder",
                 granted: appState.hasScreenRecordingPermission,
                 action: {
                     appState.requestScreenCapturePermission()
@@ -869,29 +943,32 @@ struct GeneralSettingsView: View {
         }
     }
 
-    private func permissionRow(title: String, icon: String, granted: Bool, action: @escaping () -> Void) -> some View {
+    private func permissionRow(title: String, granted: Bool, action: @escaping () -> Void) -> some View {
         HStack {
-            Image(systemName: icon)
-                .frame(width: 20)
-                .foregroundStyle(.blue)
             Text(title)
+                .font(WrenflowStyle.body(12))
+                .foregroundColor(WrenflowStyle.text)
             Spacer()
             if granted {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                Text("Granted")
-                    .font(.caption)
-                    .foregroundStyle(.green)
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(WrenflowStyle.green)
+                        .font(.system(size: 10))
+                    Text("Granted")
+                        .font(WrenflowStyle.caption(11))
+                        .foregroundColor(WrenflowStyle.green)
+                }
             } else {
                 Button("Grant Access") {
                     action()
                 }
-                .font(.caption)
+                .font(WrenflowStyle.body(11))
+                .controlSize(.small)
             }
         }
-        .padding(10)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .cornerRadius(6)
+        .padding(8)
+        .background(WrenflowStyle.bg)
+        .cornerRadius(5)
     }
 
     private func checkMicPermission() {
@@ -911,17 +988,19 @@ struct MicrophoneOptionRow: View {
         Button(action: action) {
             HStack {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(isSelected ? .blue : .secondary)
+                    .foregroundColor(isSelected ? WrenflowStyle.text : WrenflowStyle.textTertiary)
+                    .font(.system(size: 12))
                 Text(name)
-                    .foregroundStyle(.primary)
+                    .font(WrenflowStyle.body(12))
+                    .foregroundColor(WrenflowStyle.text)
                 Spacer()
             }
-            .padding(12)
-            .background(isSelected ? Color.blue.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
-            .cornerRadius(8)
+            .padding(8)
+            .background(isSelected ? WrenflowStyle.text.opacity(0.05) : WrenflowStyle.bg)
+            .cornerRadius(6)
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 1.5)
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(isSelected ? WrenflowStyle.text.opacity(0.15) : Color.clear, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -952,16 +1031,17 @@ struct PromptsSettingsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                SettingsCard("System Prompt", icon: "text.bubble.fill") {
+            VStack(spacing: 12) {
+                SettingsCard("System Prompt") {
                     systemPromptSection
                 }
-                SettingsCard("Context Prompt", icon: "eye.fill") {
+                SettingsCard("Context Prompt") {
                     contextPromptSection
                 }
             }
-            .padding(24)
+            .padding(16)
         }
+        .background(WrenflowStyle.bg)
         .onAppear {
             customSystemPromptInput = appState.customSystemPrompt.isEmpty
                 ? PostProcessingService.defaultSystemPrompt
@@ -980,61 +1060,64 @@ struct PromptsSettingsView: View {
             && !appState.customSystemPromptLastModified.isEmpty
             && appState.customSystemPromptLastModified < PostProcessingService.defaultSystemPromptDate
 
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 8) {
             Text("Controls how raw transcriptions are cleaned up.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
 
             if hasNewerDefault {
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     Image(systemName: "arrow.triangle.2.circlepath")
-                        .foregroundStyle(.blue)
+                        .foregroundColor(WrenflowStyle.text.opacity(0.5))
+                        .font(.system(size: 11))
                     Text("A newer default prompt is available.")
-                        .font(.caption.weight(.semibold))
+                        .font(WrenflowStyle.body(12))
+                        .foregroundColor(WrenflowStyle.text)
                     Spacer()
                     Button("View Default") {
                         showDefaultSystemPrompt.toggle()
                     }
-                    .font(.caption)
+                    .font(WrenflowStyle.body(11))
                     Button("Switch to Default") {
                         customSystemPromptInput = PostProcessingService.defaultSystemPrompt
                         appState.customSystemPrompt = ""
                         appState.customSystemPromptLastModified = ""
                     }
-                    .font(.caption)
+                    .font(WrenflowStyle.body(11))
                 }
-                .padding(10)
-                .background(Color.blue.opacity(0.1))
+                .padding(8)
+                .background(WrenflowStyle.text.opacity(0.04))
                 .cornerRadius(6)
             }
 
             if showDefaultSystemPrompt {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text("Default System Prompt")
-                            .font(.caption.weight(.semibold))
+                            .font(WrenflowStyle.body(12))
+                            .foregroundColor(WrenflowStyle.text)
                         Spacer()
                         Button("Hide") {
                             showDefaultSystemPrompt = false
                         }
-                        .font(.caption)
+                        .font(WrenflowStyle.body(11))
                     }
                     Text(PostProcessingService.defaultSystemPrompt)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(WrenflowStyle.mono(11))
+                        .foregroundColor(WrenflowStyle.textSecondary)
                         .textSelection(.enabled)
                 }
-                .padding(10)
-                .background(Color(nsColor: .controlBackgroundColor))
+                .padding(8)
+                .background(WrenflowStyle.bg)
                 .cornerRadius(6)
             }
 
             TextEditor(text: $customSystemPromptInput)
-                .font(.system(.body, design: .monospaced))
-                .frame(minHeight: 120, maxHeight: 200)
+                .font(WrenflowStyle.mono(12))
+                .frame(minHeight: 100, maxHeight: 180)
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                        .stroke(WrenflowStyle.border, lineWidth: 1)
                 )
                 .onChange(of: customSystemPromptInput) { newValue in
                     let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1055,13 +1138,21 @@ struct PromptsSettingsView: View {
 
             HStack {
                 if isCustom {
-                    Label("Using custom prompt", systemImage: "pencil")
-                        .font(.caption)
-                        .foregroundStyle(.blue)
+                    HStack(spacing: 4) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 10))
+                        Text("Using custom prompt")
+                            .font(WrenflowStyle.caption(11))
+                    }
+                    .foregroundColor(WrenflowStyle.text.opacity(0.6))
                 } else {
-                    Label("Using default", systemImage: "checkmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle")
+                            .font(.system(size: 10))
+                        Text("Using default")
+                            .font(WrenflowStyle.caption(11))
+                    }
+                    .foregroundColor(WrenflowStyle.textTertiary)
                 }
                 Spacer()
                 if isCustom {
@@ -1070,79 +1161,95 @@ struct PromptsSettingsView: View {
                         appState.customSystemPrompt = ""
                         appState.customSystemPromptLastModified = ""
                     }
-                    .font(.caption)
+                    .font(WrenflowStyle.body(11))
                 }
             }
 
-            Divider()
+            Rectangle()
+                .fill(WrenflowStyle.border)
+                .frame(height: 1)
 
             // Test section
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("Test System Prompt")
-                    .font(.caption.weight(.semibold))
+                    .font(WrenflowStyle.body(12))
+                    .foregroundColor(WrenflowStyle.text)
                 Text("Enter sample text to see how the current prompt cleans it up.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(WrenflowStyle.caption(11))
+                    .foregroundColor(WrenflowStyle.textTertiary)
 
                 TextEditor(text: $systemTestInput)
-                    .font(.system(.body, design: .monospaced))
-                    .frame(minHeight: 60, maxHeight: 100)
+                    .font(WrenflowStyle.mono(12))
+                    .frame(minHeight: 50, maxHeight: 80)
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                            .stroke(WrenflowStyle.border, lineWidth: 1)
                     )
 
                 Button {
                     runSystemPromptTest()
                 } label: {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 4) {
                         if systemTestRunning {
                             ProgressView()
                                 .controlSize(.small)
+                                .scaleEffect(0.7)
                             Text("Running...")
+                                .font(WrenflowStyle.body(12))
                         } else {
                             Image(systemName: "play.fill")
+                                .font(.system(size: 10))
                             Text("Test System Prompt")
+                                .font(WrenflowStyle.body(12))
                         }
                     }
                 }
                 .disabled(systemTestRunning || appState.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || systemTestInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                 if appState.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Label("API key required to test", systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 10))
+                        Text("API key required to test")
+                            .font(WrenflowStyle.caption(11))
+                    }
+                    .foregroundColor(.orange)
                 }
 
                 if let error = systemTestError {
-                    Label(error, systemImage: "xmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                    HStack(spacing: 4) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 10))
+                        Text(error)
+                            .font(WrenflowStyle.caption(11))
+                    }
+                    .foregroundColor(WrenflowStyle.red)
                 }
 
                 if let output = systemTestOutput {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 3) {
                         Text("Result:")
-                            .font(.caption.weight(.semibold))
-                        Text(output.isEmpty ? "(empty — no output)" : output)
-                            .font(.system(.caption, design: .monospaced))
+                            .font(WrenflowStyle.body(12))
+                            .foregroundColor(WrenflowStyle.text)
+                        Text(output.isEmpty ? "(empty -- no output)" : output)
+                            .font(WrenflowStyle.mono(11))
                             .textSelection(.enabled)
-                            .padding(8)
+                            .padding(6)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.green.opacity(0.08))
-                            .cornerRadius(6)
+                            .background(WrenflowStyle.green.opacity(0.08))
+                            .cornerRadius(5)
                     }
                 }
 
                 if let prompt = systemTestPrompt {
                     DisclosureGroup("Full prompt sent") {
                         Text(prompt)
-                            .font(.system(.caption2, design: .monospaced))
+                            .font(WrenflowStyle.mono(10))
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(WrenflowStyle.caption(11))
+                    .foregroundColor(WrenflowStyle.textSecondary)
                 }
             }
         }
@@ -1212,61 +1319,64 @@ struct PromptsSettingsView: View {
             && !appState.customContextPromptLastModified.isEmpty
             && appState.customContextPromptLastModified < AppContextService.defaultContextPromptDate
 
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 8) {
             Text("Controls how Wrenflow infers your current activity from app metadata and screenshots.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
 
             if hasNewerDefault {
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     Image(systemName: "arrow.triangle.2.circlepath")
-                        .foregroundStyle(.blue)
+                        .foregroundColor(WrenflowStyle.text.opacity(0.5))
+                        .font(.system(size: 11))
                     Text("A newer default prompt is available.")
-                        .font(.caption.weight(.semibold))
+                        .font(WrenflowStyle.body(12))
+                        .foregroundColor(WrenflowStyle.text)
                     Spacer()
                     Button("View Default") {
                         showDefaultContextPrompt.toggle()
                     }
-                    .font(.caption)
+                    .font(WrenflowStyle.body(11))
                     Button("Switch to Default") {
                         customContextPromptInput = AppContextService.defaultContextPrompt
                         appState.customContextPrompt = ""
                         appState.customContextPromptLastModified = ""
                     }
-                    .font(.caption)
+                    .font(WrenflowStyle.body(11))
                 }
-                .padding(10)
-                .background(Color.blue.opacity(0.1))
+                .padding(8)
+                .background(WrenflowStyle.text.opacity(0.04))
                 .cornerRadius(6)
             }
 
             if showDefaultContextPrompt {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text("Default Context Prompt")
-                            .font(.caption.weight(.semibold))
+                            .font(WrenflowStyle.body(12))
+                            .foregroundColor(WrenflowStyle.text)
                         Spacer()
                         Button("Hide") {
                             showDefaultContextPrompt = false
                         }
-                        .font(.caption)
+                        .font(WrenflowStyle.body(11))
                     }
                     Text(AppContextService.defaultContextPrompt)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(WrenflowStyle.mono(11))
+                        .foregroundColor(WrenflowStyle.textSecondary)
                         .textSelection(.enabled)
                 }
-                .padding(10)
-                .background(Color(nsColor: .controlBackgroundColor))
+                .padding(8)
+                .background(WrenflowStyle.bg)
                 .cornerRadius(6)
             }
 
             TextEditor(text: $customContextPromptInput)
-                .font(.system(.body, design: .monospaced))
-                .frame(minHeight: 120, maxHeight: 200)
+                .font(WrenflowStyle.mono(12))
+                .frame(minHeight: 100, maxHeight: 180)
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                        .stroke(WrenflowStyle.border, lineWidth: 1)
                 )
                 .onChange(of: customContextPromptInput) { newValue in
                     let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1287,13 +1397,21 @@ struct PromptsSettingsView: View {
 
             HStack {
                 if isCustom {
-                    Label("Using custom prompt", systemImage: "pencil")
-                        .font(.caption)
-                        .foregroundStyle(.blue)
+                    HStack(spacing: 4) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 10))
+                        Text("Using custom prompt")
+                            .font(WrenflowStyle.caption(11))
+                    }
+                    .foregroundColor(WrenflowStyle.text.opacity(0.6))
                 } else {
-                    Label("Using default", systemImage: "checkmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle")
+                            .font(.system(size: 10))
+                        Text("Using default")
+                            .font(WrenflowStyle.caption(11))
+                    }
+                    .foregroundColor(WrenflowStyle.textTertiary)
                 }
                 Spacer()
                 if isCustom {
@@ -1302,71 +1420,87 @@ struct PromptsSettingsView: View {
                         appState.customContextPrompt = ""
                         appState.customContextPromptLastModified = ""
                     }
-                    .font(.caption)
+                    .font(WrenflowStyle.body(11))
                 }
             }
 
-            Divider()
+            Rectangle()
+                .fill(WrenflowStyle.border)
+                .frame(height: 1)
 
             // Test section
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("Test Context Prompt")
-                    .font(.caption.weight(.semibold))
+                    .font(WrenflowStyle.body(12))
+                    .foregroundColor(WrenflowStyle.text)
                 Text("Captures a screenshot and metadata from the frontmost app, then runs the context prompt to infer activity.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(WrenflowStyle.caption(11))
+                    .foregroundColor(WrenflowStyle.textTertiary)
 
                 Button {
                     runContextPromptTest()
                 } label: {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 4) {
                         if contextTestRunning {
                             ProgressView()
                                 .controlSize(.small)
+                                .scaleEffect(0.7)
                             Text("Running...")
+                                .font(WrenflowStyle.body(12))
                         } else {
                             Image(systemName: "play.fill")
+                                .font(.system(size: 10))
                             Text("Test Context Prompt")
+                                .font(WrenflowStyle.body(12))
                         }
                     }
                 }
                 .disabled(contextTestRunning || appState.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                 if appState.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Label("API key required to test", systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 10))
+                        Text("API key required to test")
+                            .font(WrenflowStyle.caption(11))
+                    }
+                    .foregroundColor(.orange)
                 }
 
                 if let error = contextTestError {
-                    Label(error, systemImage: "xmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                    HStack(spacing: 4) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 10))
+                        Text(error)
+                            .font(WrenflowStyle.caption(11))
+                    }
+                    .foregroundColor(WrenflowStyle.red)
                 }
 
                 if let output = contextTestOutput {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 3) {
                         Text("Result:")
-                            .font(.caption.weight(.semibold))
-                        Text(output.isEmpty ? "(empty — no output)" : output)
-                            .font(.system(.caption, design: .monospaced))
+                            .font(WrenflowStyle.body(12))
+                            .foregroundColor(WrenflowStyle.text)
+                        Text(output.isEmpty ? "(empty -- no output)" : output)
+                            .font(WrenflowStyle.mono(11))
                             .textSelection(.enabled)
-                            .padding(8)
+                            .padding(6)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.green.opacity(0.08))
-                            .cornerRadius(6)
+                            .background(WrenflowStyle.green.opacity(0.08))
+                            .cornerRadius(5)
                     }
                 }
 
                 if let prompt = contextTestPrompt {
                     DisclosureGroup("Full prompt sent") {
                         Text(prompt)
-                            .font(.system(.caption2, design: .monospaced))
+                            .font(WrenflowStyle.mono(10))
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(WrenflowStyle.caption(11))
+                    .foregroundColor(WrenflowStyle.textSecondary)
                 }
             }
         }
@@ -1411,42 +1545,49 @@ struct RunLogView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Run Log")
-                        .font(.headline)
+                        .font(WrenflowStyle.title(14))
+                        .foregroundColor(WrenflowStyle.text)
                     Text("Stored locally. Only the \(appState.maxPipelineHistoryCount) most recent runs are kept.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .font(WrenflowStyle.caption(11))
+                        .foregroundColor(WrenflowStyle.textTertiary)
                 }
                 Spacer()
                 Button("Clear History") {
                     appState.clearPipelineHistory()
                 }
+                .font(WrenflowStyle.body(11))
+                .controlSize(.small)
                 .disabled(appState.pipelineHistory.isEmpty)
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 20)
-            .padding(.bottom, 12)
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
 
-            Divider()
+            Rectangle()
+                .fill(WrenflowStyle.border)
+                .frame(height: 1)
 
             if appState.pipelineHistory.isEmpty {
                 VStack {
                     Spacer()
                     Text("No runs yet. Use dictation to populate history.")
-                        .foregroundStyle(.secondary)
+                        .font(WrenflowStyle.body(13))
+                        .foregroundColor(WrenflowStyle.textTertiary)
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
             } else {
                 ScrollView {
-                    VStack(spacing: 12) {
+                    VStack(spacing: 8) {
                         ForEach(appState.pipelineHistory) { item in
                             RunLogEntryView(item: item)
                         }
                     }
-                    .padding(20)
+                    .padding(14)
                 }
             }
         }
+        .background(WrenflowStyle.bg)
     }
 }
 
@@ -1476,33 +1617,34 @@ struct RunLogEntryView: View {
                     HStack {
                         if isError {
                             Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.caption)
-                                .foregroundStyle(.red)
+                                .font(.system(size: 10))
+                                .foregroundColor(WrenflowStyle.red)
                         }
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack(spacing: 6) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 5) {
                                 Text(item.timestamp.formatted(date: .numeric, time: .standard))
-                                    .font(.subheadline.weight(.semibold))
+                                    .font(WrenflowStyle.body(12))
+                                    .foregroundColor(WrenflowStyle.text)
                                 if let total = item.metrics.double("pipeline.totalMs") {
                                     Text(formatDurationMs(total))
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                        .padding(.horizontal, 5)
+                                        .font(WrenflowStyle.mono(10))
+                                        .foregroundColor(WrenflowStyle.textTertiary)
+                                        .padding(.horizontal, 4)
                                         .padding(.vertical, 1)
-                                        .background(Color.secondary.opacity(0.1))
+                                        .background(WrenflowStyle.text.opacity(0.05))
                                         .cornerRadius(3)
                                 }
                             }
                             Text(item.postProcessedTranscript.isEmpty ? "(no transcript)" : item.postProcessedTranscript)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(WrenflowStyle.caption(11))
+                                .foregroundColor(WrenflowStyle.textSecondary)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                         }
                         Spacer()
                         Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(WrenflowStyle.textTertiary)
                             .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     }
                     .contentShape(Rectangle())
@@ -1515,58 +1657,63 @@ struct RunLogEntryView: View {
                     }
                 } label: {
                     Image(systemName: "trash")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, height: 28)
+                        .font(.system(size: 10))
+                        .foregroundColor(WrenflowStyle.textTertiary)
+                        .frame(width: 24, height: 24)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help("Delete this run")
             }
-            .padding(12)
+            .padding(10)
 
             if isExpanded {
-                Divider()
-                    .padding(.horizontal, 12)
+                Rectangle()
+                    .fill(WrenflowStyle.border)
+                    .frame(height: 1)
+                    .padding(.horizontal, 10)
 
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
                     // Audio player
                     if let audioFileName = item.audioFileName {
                         let audioURL = AppState.audioStorageDirectory().appendingPathComponent(audioFileName)
                         AudioPlayerView(audioURL: audioURL)
                     } else {
-                        HStack(spacing: 6) {
+                        HStack(spacing: 4) {
                             Image(systemName: "waveform.slash")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(.system(size: 10))
+                                .foregroundColor(WrenflowStyle.textTertiary)
                             Text("No audio recorded")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(WrenflowStyle.caption(11))
+                                .foregroundColor(WrenflowStyle.textTertiary)
                         }
                     }
 
                     // Custom vocabulary
                     if !item.customVocabulary.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 4) {
                             Text("Custom Vocabulary")
-                                .font(.caption.weight(.semibold))
-                            FlowLayout(spacing: 4) {
+                                .font(WrenflowStyle.body(11))
+                                .foregroundColor(WrenflowStyle.textSecondary)
+                            FlowLayout(spacing: 3) {
                                 ForEach(parseVocabulary(item.customVocabulary), id: \.self) { word in
                                     Text(word)
-                                        .font(.caption2)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 3)
-                                        .background(Color.accentColor.opacity(0.12))
-                                        .cornerRadius(4)
+                                        .font(WrenflowStyle.mono(10))
+                                        .foregroundColor(WrenflowStyle.text)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(WrenflowStyle.text.opacity(0.05))
+                                        .cornerRadius(3)
                                 }
                             }
                         }
                     }
 
                     // Pipeline steps
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 8) {
                         Text("Pipeline")
-                            .font(.caption.weight(.semibold))
+                            .font(WrenflowStyle.body(11))
+                            .foregroundColor(WrenflowStyle.textSecondary)
 
                         // Step 1: Recording
                         PipelineStepView(
@@ -1574,26 +1721,26 @@ struct RunLogEntryView: View {
                             title: "Record Audio",
                             durationMs: item.metrics.double("recording.durationMs"),
                             content: {
-                                VStack(alignment: .leading, spacing: 4) {
+                                VStack(alignment: .leading, spacing: 3) {
                                     if let size = item.metrics.int("recording.fileSizeBytes") {
                                         Text("File size: \(formatFileSize(Int64(size)))")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                                            .font(WrenflowStyle.caption(11))
+                                            .foregroundColor(WrenflowStyle.textSecondary)
                                     }
                                     if let reused = item.metrics.bool("engine.reused") {
                                         Text("Engine: \(reused ? "reused" : "new")")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                                            .font(WrenflowStyle.caption(11))
+                                            .foregroundColor(WrenflowStyle.textSecondary)
                                     }
                                     if let initMs = item.metrics.double("engine.initMs") {
                                         Text("Engine init: \(formatDurationMs(initMs))")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                                            .font(WrenflowStyle.caption(11))
+                                            .foregroundColor(WrenflowStyle.textSecondary)
                                     }
                                     if let firstMs = item.metrics.double("engine.firstBufferMs") {
                                         Text("First buffer: \(formatDurationMs(firstMs))")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                                            .font(WrenflowStyle.caption(11))
+                                            .foregroundColor(WrenflowStyle.textSecondary)
                                     }
                                 }
                             }
@@ -1605,27 +1752,27 @@ struct RunLogEntryView: View {
                             title: "Capture Context",
                             durationMs: item.metrics.double("context.totalMs") ?? item.metrics.double("context.resolutionMs"),
                             content: {
-                                VStack(alignment: .leading, spacing: 6) {
+                                VStack(alignment: .leading, spacing: 4) {
                                     if item.metrics.double("context.screenshotMs") != nil || item.metrics.double("context.llmMs") != nil {
-                                        HStack(spacing: 12) {
+                                        HStack(spacing: 10) {
                                             if let screenshotMs = item.metrics.double("context.screenshotMs") {
-                                                HStack(spacing: 3) {
+                                                HStack(spacing: 2) {
                                                     Text("Screenshot:")
-                                                        .font(.caption2)
-                                                        .foregroundStyle(.tertiary)
+                                                        .font(WrenflowStyle.mono(10))
+                                                        .foregroundColor(WrenflowStyle.textTertiary)
                                                     Text(formatDurationMs(screenshotMs))
-                                                        .font(.caption2)
-                                                        .foregroundStyle(.secondary)
+                                                        .font(WrenflowStyle.mono(10))
+                                                        .foregroundColor(WrenflowStyle.textSecondary)
                                                 }
                                             }
                                             if let llmMs = item.metrics.double("context.llmMs") {
-                                                HStack(spacing: 3) {
+                                                HStack(spacing: 2) {
                                                     Text("LLM:")
-                                                        .font(.caption2)
-                                                        .foregroundStyle(.tertiary)
+                                                        .font(WrenflowStyle.mono(10))
+                                                        .foregroundColor(WrenflowStyle.textTertiary)
                                                     Text(formatDurationMs(llmMs))
-                                                        .font(.caption2)
-                                                        .foregroundStyle(.secondary)
+                                                        .font(WrenflowStyle.mono(10))
+                                                        .foregroundColor(WrenflowStyle.textSecondary)
                                                 }
                                             }
                                         }
@@ -1636,7 +1783,7 @@ struct RunLogEntryView: View {
                                         Image(nsImage: image)
                                             .resizable()
                                             .aspectRatio(contentMode: .fit)
-                                            .frame(maxHeight: 120)
+                                            .frame(maxHeight: 100)
                                             .cornerRadius(4)
                                     }
 
@@ -1644,36 +1791,36 @@ struct RunLogEntryView: View {
                                         Button {
                                             showContextPrompt.toggle()
                                         } label: {
-                                            HStack(spacing: 4) {
+                                            HStack(spacing: 3) {
                                                 Text(showContextPrompt ? "Hide Prompt" : "Show Prompt")
-                                                    .font(.caption)
+                                                    .font(WrenflowStyle.caption(11))
                                                 Image(systemName: showContextPrompt ? "chevron.up" : "chevron.down")
-                                                    .font(.caption2)
+                                                    .font(.system(size: 9))
                                             }
                                         }
                                         .buttonStyle(.plain)
-                                        .foregroundStyle(Color.accentColor)
+                                        .foregroundColor(WrenflowStyle.text.opacity(0.5))
 
                                         if showContextPrompt {
                                             Text(prompt)
-                                                .font(.system(.caption2, design: .monospaced))
+                                                .font(WrenflowStyle.mono(10))
                                                 .textSelection(.enabled)
-                                                .padding(8)
+                                                .padding(6)
                                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                                .background(Color(nsColor: .controlBackgroundColor))
+                                                .background(WrenflowStyle.bg)
                                                 .cornerRadius(4)
                                         }
                                     }
 
                                     if !item.contextSummary.isEmpty {
                                         Text(item.contextSummary)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                                            .font(WrenflowStyle.caption(11))
+                                            .foregroundColor(WrenflowStyle.textSecondary)
                                             .textSelection(.enabled)
                                     } else {
                                         Text("No context captured")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                                            .font(WrenflowStyle.caption(11))
+                                            .foregroundColor(WrenflowStyle.textTertiary)
                                     }
                                 }
                             }
@@ -1685,24 +1832,24 @@ struct RunLogEntryView: View {
                             title: "Transcribe Audio",
                             durationMs: item.metrics.double("transcription.durationMs"),
                             content: {
-                                VStack(alignment: .leading, spacing: 4) {
+                                VStack(alignment: .leading, spacing: 3) {
                                     if let provider = item.metrics.string("transcription.provider") {
                                         Text("Provider: \(provider)")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                                            .font(WrenflowStyle.caption(11))
+                                            .foregroundColor(WrenflowStyle.textSecondary)
                                     }
                                     if !item.rawTranscript.isEmpty {
                                         Text(item.rawTranscript)
-                                            .font(.system(.caption, design: .monospaced))
+                                            .font(WrenflowStyle.mono(11))
                                             .textSelection(.enabled)
-                                            .padding(8)
+                                            .padding(6)
                                             .frame(maxWidth: .infinity, alignment: .leading)
-                                            .background(Color(nsColor: .controlBackgroundColor))
+                                            .background(WrenflowStyle.bg)
                                             .cornerRadius(4)
                                     } else {
                                         Text("(empty transcript)")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                                            .font(WrenflowStyle.caption(11))
+                                            .foregroundColor(WrenflowStyle.textTertiary)
                                     }
                                 }
                             }
@@ -1714,64 +1861,64 @@ struct RunLogEntryView: View {
                             title: "Post-Process",
                             durationMs: item.metrics.double("postProcessing.durationMs"),
                             content: {
-                                VStack(alignment: .leading, spacing: 6) {
+                                VStack(alignment: .leading, spacing: 4) {
                                     if let model = item.metrics.string("postProcessing.model") {
                                         Text("Model: \(model)")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                                            .font(WrenflowStyle.caption(11))
+                                            .foregroundColor(WrenflowStyle.textSecondary)
                                     }
 
                                     Text(item.postProcessingStatus)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        .font(WrenflowStyle.caption(11))
+                                        .foregroundColor(WrenflowStyle.textSecondary)
                                         .textSelection(.enabled)
 
                                     if let prompt = item.postProcessingPrompt, !prompt.isEmpty {
                                         Button {
                                             showPostProcessingPrompt.toggle()
                                         } label: {
-                                            HStack(spacing: 4) {
+                                            HStack(spacing: 3) {
                                                 Text(showPostProcessingPrompt ? "Hide Prompt" : "Show Prompt")
-                                                    .font(.caption)
+                                                    .font(WrenflowStyle.caption(11))
                                                 Image(systemName: showPostProcessingPrompt ? "chevron.up" : "chevron.down")
-                                                    .font(.caption2)
+                                                    .font(.system(size: 9))
                                             }
                                         }
                                         .buttonStyle(.plain)
-                                        .foregroundStyle(Color.accentColor)
+                                        .foregroundColor(WrenflowStyle.text.opacity(0.5))
 
                                         if showPostProcessingPrompt {
                                             Text(prompt)
-                                                .font(.system(.caption2, design: .monospaced))
+                                                .font(WrenflowStyle.mono(10))
                                                 .textSelection(.enabled)
-                                                .padding(8)
+                                                .padding(6)
                                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                                .background(Color(nsColor: .controlBackgroundColor))
+                                                .background(WrenflowStyle.bg)
                                                 .cornerRadius(4)
                                         }
                                     }
 
                                     if !item.postProcessedTranscript.isEmpty {
                                         Text(item.postProcessedTranscript)
-                                            .font(.system(.caption, design: .monospaced))
+                                            .font(WrenflowStyle.mono(11))
                                             .textSelection(.enabled)
-                                            .padding(8)
+                                            .padding(6)
                                             .frame(maxWidth: .infinity, alignment: .leading)
-                                            .background(Color(nsColor: .controlBackgroundColor))
+                                            .background(WrenflowStyle.bg)
                                             .cornerRadius(4)
                                     }
 
                                     if let reasoning = item.postProcessingReasoning, !reasoning.isEmpty {
-                                        VStack(alignment: .leading, spacing: 4) {
+                                        VStack(alignment: .leading, spacing: 3) {
                                             Text("LLM Reasoning")
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundStyle(.secondary)
+                                                .font(WrenflowStyle.body(11))
+                                                .foregroundColor(WrenflowStyle.textSecondary)
                                             Text(reasoning)
-                                                .font(.system(.caption2, design: .monospaced))
+                                                .font(WrenflowStyle.mono(10))
                                                 .textSelection(.enabled)
-                                                .padding(8)
+                                                .padding(6)
                                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                                .background(Color.blue.opacity(0.06))
+                                                .background(WrenflowStyle.text.opacity(0.03))
                                                 .cornerRadius(4)
                                         }
                                     }
@@ -1787,8 +1934,8 @@ struct RunLogEntryView: View {
                                 durationMs: pasteMs,
                                 content: {
                                     Text("Pasted to active application")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        .font(WrenflowStyle.caption(11))
+                                        .foregroundColor(WrenflowStyle.textSecondary)
                                 }
                             )
                         }
@@ -1796,51 +1943,52 @@ struct RunLogEntryView: View {
 
                     // All Metrics dump
                     if !item.metrics.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 4) {
                             Button {
                                 showAllMetrics.toggle()
                             } label: {
-                                HStack(spacing: 4) {
+                                HStack(spacing: 3) {
                                     Text(showAllMetrics ? "Hide All Metrics" : "All Metrics")
-                                        .font(.caption.weight(.semibold))
+                                        .font(WrenflowStyle.body(11))
                                     Image(systemName: showAllMetrics ? "chevron.up" : "chevron.down")
-                                        .font(.caption2)
+                                        .font(.system(size: 9))
                                 }
                             }
                             .buttonStyle(.plain)
-                            .foregroundStyle(Color.accentColor)
+                            .foregroundColor(WrenflowStyle.text.opacity(0.5))
 
                             if showAllMetrics {
-                                VStack(alignment: .leading, spacing: 2) {
+                                VStack(alignment: .leading, spacing: 1) {
                                     ForEach(item.metrics.allKeys, id: \.self) { key in
                                         if let value = item.metrics[key] {
                                             HStack(spacing: 0) {
                                                 Text(key)
-                                                    .font(.system(.caption2, design: .monospaced))
-                                                    .foregroundStyle(.secondary)
-                                                    .frame(width: 180, alignment: .leading)
+                                                    .font(WrenflowStyle.mono(10))
+                                                    .foregroundColor(WrenflowStyle.textTertiary)
+                                                    .frame(width: 160, alignment: .leading)
                                                 Text(value.displayValue)
-                                                    .font(.system(.caption2, design: .monospaced))
+                                                    .font(WrenflowStyle.mono(10))
+                                                    .foregroundColor(WrenflowStyle.textSecondary)
                                             }
                                         }
                                     }
                                 }
-                                .padding(8)
+                                .padding(6)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color(nsColor: .controlBackgroundColor))
+                                .background(WrenflowStyle.bg)
                                 .cornerRadius(4)
                             }
                         }
                     }
                 }
-                .padding(12)
+                .padding(10)
             }
         }
-        .background(Color(nsColor: .textBackgroundColor))
-        .cornerRadius(10)
+        .background(WrenflowStyle.surface)
+        .cornerRadius(8)
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(isError ? Color.red.opacity(0.4) : Color.secondary.opacity(0.2), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isError ? WrenflowStyle.red.opacity(0.3) : WrenflowStyle.border, lineWidth: 1)
         )
     }
 
@@ -1880,24 +2028,25 @@ struct PipelineStepView<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 8) {
             Text("\(number)")
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 20, height: 20)
-                .background(Circle().fill(Color.accentColor))
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(WrenflowStyle.surface)
+                .frame(width: 16, height: 16)
+                .background(Circle().fill(WrenflowStyle.text.opacity(0.35)))
 
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 5) {
                     Text(title)
-                        .font(.caption.weight(.semibold))
+                        .font(WrenflowStyle.body(11))
+                        .foregroundColor(WrenflowStyle.text)
                     if let ms = durationMs {
                         Text(formatDurationMs(ms))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 5)
+                            .font(WrenflowStyle.mono(10))
+                            .foregroundColor(WrenflowStyle.textTertiary)
+                            .padding(.horizontal, 4)
                             .padding(.vertical, 1)
-                            .background(Color.secondary.opacity(0.1))
+                            .background(WrenflowStyle.text.opacity(0.05))
                             .cornerRadius(3)
                     }
                 }
@@ -1905,9 +2054,9 @@ struct PipelineStepView<Content: View>: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(10)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-        .cornerRadius(8)
+        .padding(8)
+        .background(WrenflowStyle.bg)
+        .cornerRadius(6)
     }
 }
 
@@ -1938,33 +2087,24 @@ struct AudioPlayerView: View {
     }
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Button {
                 togglePlayback()
             } label: {
                 Image(systemName: isPlaying ? "stop.fill" : "play.fill")
-                    .font(.body)
-                    .frame(width: 28, height: 28)
-                    .background(Circle().fill(Color.accentColor.opacity(0.15)))
+                    .font(.system(size: 11))
+                    .foregroundColor(WrenflowStyle.text)
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(WrenflowStyle.text.opacity(0.08)))
             }
             .buttonStyle(.plain)
 
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(Color.secondary.opacity(0.15))
-                        .frame(height: 4)
-                    Capsule()
-                        .fill(Color.accentColor)
-                        .frame(width: max(0, geo.size.width * progress), height: 4)
-                }
-                .frame(maxHeight: .infinity, alignment: .center)
-            }
-            .frame(height: 28)
+            WrenflowProgressBar(progress: progress, height: 4)
+                .frame(height: 24)
 
             Text("\(formatDuration(elapsed)) / \(formatDuration(duration))")
-                .font(.system(.caption2, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .font(WrenflowStyle.mono(10))
+                .foregroundColor(WrenflowStyle.textTertiary)
                 .fixedSize()
         }
         .onAppear {
@@ -2070,4 +2210,3 @@ struct FlowLayout: Layout {
         return (CGSize(width: maxWidth, height: totalHeight), positions)
     }
 }
-
