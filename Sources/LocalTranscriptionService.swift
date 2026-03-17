@@ -65,13 +65,21 @@ final class LocalTranscriptionService: ObservableObject, @unchecked Sendable {
     private var engine: FfiLocalTranscriptionEngine?
     private var progressListener: SwiftModelProgressListener?
     #endif
+    private var cancelled = false
 
     private var modelDir: String {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return support.appendingPathComponent("Wrenflow/Models/parakeet-tdt").path
     }
 
+    func cancel() {
+        cancelled = true
+        state = .notLoaded
+        os_log(.info, log: ltLog, "cancelled")
+    }
+
     func initialize() {
+        cancelled = false
         guard !state.isReady && !state.isLoading else { return }
         os_log(.info, log: ltLog, "initialize() — download + load via Rust")
 
@@ -99,6 +107,12 @@ final class LocalTranscriptionService: ObservableObject, @unchecked Sendable {
                     DispatchQueue.main.async { self?.state = .error(error) }
                     return
                 }
+            }
+
+            // Check cancel
+            guard self?.cancelled != true else {
+                os_log(.info, log: ltLog, "cancelled before load")
+                return
             }
 
             // Load model

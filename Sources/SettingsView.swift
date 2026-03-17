@@ -125,7 +125,7 @@ struct GeneralSettingsView: View {
                     // GitHub card
                     VStack(spacing: 10) {
                         HStack(spacing: 8) {
-                            AsyncImage(url: URL(string: "https://avatars.githubusercontent.com/u/992248")) { phase in
+                            AsyncImage(url: URL(string: "https://avatars.githubusercontent.com/u/668727")) { phase in
                                 switch phase {
                                 case .success(let image):
                                     image.resizable().aspectRatio(contentMode: .fill)
@@ -453,47 +453,75 @@ struct GeneralSettingsView: View {
 
     private var localTranscriptionSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Speech-to-text runs entirely on your Mac using the Parakeet model.")
+            Text("On-device speech recognition using Parakeet TDT.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            HStack(spacing: 8) {
-                switch appState.localTranscriptionService.state {
-                case .notLoaded:
-                    Image(systemName: "circle")
+            switch appState.localTranscriptionService.state {
+            case .notLoaded:
+                HStack {
+                    Text("Model not downloaded")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("Not loaded")
-                        .foregroundStyle(.secondary)
-                case .downloading:
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Downloading model...")
-                        .foregroundStyle(.secondary)
-                case .compiling:
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Compiling model...")
-                        .foregroundStyle(.secondary)
-                case .ready:
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                    Text("Ready")
-                        .foregroundStyle(.green)
-                case .error(let message):
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.red)
-                    Text(message)
-                        .foregroundStyle(.red)
-                        .lineLimit(2)
-                }
-                Spacer()
-                if case .error = appState.localTranscriptionService.state {
-                    Button("Retry") {
+                    Spacer()
+                    Button("Download") {
                         appState.localTranscriptionService.initialize()
                     }
                     .font(.caption)
-                } else if case .notLoaded = appState.localTranscriptionService.state {
-                    Button("Load") {
+                }
+
+            case .downloading(let progress):
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Downloading...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(Int(progress * 100))%")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    ProgressView(value: progress)
+                        .progressViewStyle(.linear)
+                        .tint(.accentColor)
+                    Button("Cancel") {
+                        appState.localTranscriptionService.cancel()
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
+            case .compiling:
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Loading model...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+            case .ready:
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.caption)
+                    Text("Ready")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                }
+
+            case .error(let message):
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.red)
+                            .font(.caption)
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .lineLimit(2)
+                    }
+                    Button("Retry") {
                         appState.localTranscriptionService.initialize()
                     }
                     .font(.caption)

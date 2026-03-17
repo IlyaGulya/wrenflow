@@ -219,6 +219,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let view = ModelDownloadView(
             localTranscriptionService: appState.localTranscriptionService,
             onDismiss: { [weak self] in
+                self?.appState.localTranscriptionService.cancel()
                 self?.modelDownloadWindow?.close()
                 self?.modelDownloadWindow = nil
             }
