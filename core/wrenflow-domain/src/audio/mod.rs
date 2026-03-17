@@ -35,7 +35,7 @@ mod tests {
 
     #[test]
     fn pad_short_recording_to_one_second() {
-        // 0.5 seconds at 16 kHz → 8000 samples
+        // 0.5 seconds at 16 kHz -> 8000 samples
         let samples = vec![0.5f32; 8_000];
         let padded = pad_to_minimum_duration(&samples, 16_000, 1.0);
         assert_eq!(padded.len(), 16_000);

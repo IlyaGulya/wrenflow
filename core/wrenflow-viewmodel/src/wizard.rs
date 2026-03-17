@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use wrenflow_core::config::AppConfig;
+use wrenflow_core::config_store::{ConfigStore, default_config_path};
 use wrenflow_core::http_client;
 use wrenflow_core::platform::{
     OsPermissionStatus, PlatformCapabilities, PlatformHost, PermissionKind,
@@ -102,8 +103,9 @@ pub struct WizardViewModel {
 
 impl WizardViewModel {
     pub fn new(app_name: &str, host: Arc<dyn PlatformHost>) -> Self {
-        let config_path = AppConfig::default_path(app_name);
-        let config = AppConfig::load_or_default(&config_path);
+        let config_path = default_config_path(app_name);
+        let config_store = ConfigStore::new(config_path.clone());
+        let config = config_store.load_or_default();
         let caps = host.capabilities();
         let steps = WizardStep::steps_for(&caps);
         Self {
@@ -144,7 +146,8 @@ impl WizardViewModel {
     }
 
     pub fn complete(&self) {
-        let _ = self.config.save(&self.config_path);
+        let store = ConfigStore::new(self.config_path.clone());
+        let _ = store.save(&self.config);
     }
 
     // -- Permission helpers using the new generic API --

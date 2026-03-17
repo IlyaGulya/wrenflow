@@ -3,14 +3,14 @@
 //! Mirrors the smoothing logic in the Swift `drainRingBuffer` / `computeAudioLevel`
 //! methods:
 //!   - RMS of the incoming chunk
-//!   - Scaled by 10× and clamped to [0, 1]
+//!   - Scaled by 10x and clamped to [0, 1]
 //!   - Asymmetric exponential smoothing:
 //!       rise  (scaled > smoothed): `new = old * 0.3 + scaled * 0.7`
-//!       fall  (scaled ≤ smoothed): `new = old * 0.6 + scaled * 0.4`
+//!       fall  (scaled <= smoothed): `new = old * 0.6 + scaled * 0.4`
 
 /// Stateful audio-level smoother.
 ///
-/// All methods take `&mut self` — not `&self` — so there is no need for
+/// All methods take `&mut self` -- not `&self` -- so there is no need for
 /// atomics; the caller is expected to access this from a single thread
 /// (the drain / consumer thread).
 #[derive(Debug, Clone)]
@@ -81,7 +81,7 @@ mod tests {
 
     #[test]
     fn rms_dc() {
-        // All samples = 0.5 → RMS = 0.5
+        // All samples = 0.5 -> RMS = 0.5
         let samples = vec![0.5f32; 1000];
         let rms = compute_rms(&samples);
         assert!((rms - 0.5).abs() < 1e-5, "expected 0.5, got {rms}");
@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn rms_full_scale_sine() {
-        // A full-scale sine wave has RMS = 1/√2 ≈ 0.7071
+        // A full-scale sine wave has RMS = 1/sqrt(2) ~ 0.7071
         let n = 44_100usize;
         let samples: Vec<f32> = (0..n)
             .map(|i| (2.0 * std::f64::consts::PI * 440.0 * i as f64 / 44_100.0).sin() as f32)
@@ -106,13 +106,13 @@ mod tests {
     fn level_rises_fast_falls_slow() {
         let mut lv = AudioLevel::new();
 
-        // Loud burst: scaled = 1.0 → rises quickly
+        // Loud burst: scaled = 1.0 -> rises quickly
         let loud = vec![0.1f32; 1000]; // rms=0.1, scaled=1.0
         let after_loud = lv.process(&loud);
         // After one frame: 0.0 * 0.3 + 1.0 * 0.7 = 0.7
         assert!((after_loud - 0.7).abs() < 0.001, "rise: expected 0.7, got {after_loud}");
 
-        // Silence: scaled = 0.0 → falls slowly
+        // Silence: scaled = 0.0 -> falls slowly
         let silence = vec![0.0f32; 1000];
         let after_silence = lv.process(&silence);
         // 0.7 * 0.6 + 0.0 * 0.4 = 0.42
@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn level_clamped_at_one() {
         let mut lv = AudioLevel::new();
-        // Very loud signal (rms > 0.1 → scaled = 1.0)
+        // Very loud signal (rms > 0.1 -> scaled = 1.0)
         let loud = vec![1.0f32; 1000];
         let v = lv.process(&loud);
         assert!(v <= 1.0, "level must not exceed 1.0, got {v}");

@@ -1,7 +1,7 @@
 //! Simple linear-interpolation resampler.
 //!
 //! Converts mono f32 audio at an arbitrary input sample rate to 16 000 Hz
-//! mono f32 — matching what the Swift `AVAudioConverter` pipeline produces
+//! mono f32 -- matching what the Swift `AVAudioConverter` pipeline produces
 //! before WAV encoding.
 //!
 //! Linear interpolation is adequate for speech (not music): Parakeet is
@@ -73,10 +73,10 @@ mod tests {
 
     #[test]
     fn downsample_44100_to_16000_length() {
-        // 1 second of audio at 44.1 kHz → should produce ~16000 output frames
+        // 1 second of audio at 44.1 kHz -> should produce ~16000 output frames
         let src = vec![0.5f32; 44_100];
         let dst = resample_to_16khz(&src, 44_100);
-        // Allow ±1 frame due to ceiling arithmetic
+        // Allow +/-1 frame due to ceiling arithmetic
         assert!(
             (dst.len() as i64 - 16_000_i64).abs() <= 1,
             "expected ~16000 frames, got {}",
@@ -110,9 +110,9 @@ mod tests {
 
     #[test]
     fn linear_interpolation_midpoint() {
-        // Two-sample input: [0.0, 1.0], upsample 1→2 (ratio=0.5)
+        // Two-sample input: [0.0, 1.0], upsample 1->2 (ratio=0.5)
         // out_len = ceil(2 / 0.5) = 4
-        // positions: 0.0→0.0, 0.5→0.5, 1.0→1.0, 1.5→1.0 (hold)
+        // positions: 0.0->0.0, 0.5->0.5, 1.0->1.0, 1.5->1.0 (hold)
         let src = vec![0.0f32, 1.0f32];
         let dst = resample(&src, 1, 2);
         assert_eq!(dst.len(), 4);

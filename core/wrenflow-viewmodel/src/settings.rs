@@ -6,11 +6,15 @@
 
 use std::sync::Arc;
 use wrenflow_core::config::AppConfig;
-use wrenflow_core::history::{HistoryEntry, HistoryStore};
+use wrenflow_core::config_store::{ConfigStore, default_config_path};
+use wrenflow_core::history::HistoryEntry;
+use wrenflow_core::history_store::HistoryStore;
 use wrenflow_core::http_client;
-use wrenflow_core::models::{self, GroqModel};
+use wrenflow_core::models::GroqModel;
+use wrenflow_core::models_infra;
 use wrenflow_core::platform::PlatformHost;
 use wrenflow_core::post_processing;
+use wrenflow_core::post_processing_infra;
 
 // ---------------------------------------------------------------------------
 // Settings ViewModel
@@ -55,8 +59,9 @@ impl SettingsViewModel {
         app_name: &str,
         host: Arc<dyn PlatformHost>,
     ) -> Self {
-        let config_path = AppConfig::default_path(app_name);
-        let config = AppConfig::load_or_default(&config_path);
+        let config_path = default_config_path(app_name);
+        let config_store = ConfigStore::new(config_path.clone());
+        let config = config_store.load_or_default();
         let history_db_path = config_path
             .parent()
             .unwrap()
@@ -90,7 +95,8 @@ impl SettingsViewModel {
     // -- Config persistence --
 
     pub fn save_config(&self) {
-        let _ = self.config.save(&self.config_path);
+        let store = ConfigStore::new(self.config_path.clone());
+        let _ = store.save(&self.config);
     }
 
     // -- API Key --
@@ -117,7 +123,7 @@ impl SettingsViewModel {
             base_url.trim()
         };
         let client = http_client::build_client().map_err(|e| format!("{e}"))?;
-        models::fetch_models(&client, api_key.trim(), base_url)
+        models_infra::fetch_models(&client, api_key.trim(), base_url)
             .await
             .map_err(|e| format!("{e}"))
     }
@@ -161,7 +167,7 @@ impl SettingsViewModel {
             base_url.trim()
         };
         let client = http_client::build_client().map_err(|e| format!("{e}"))?;
-        let result = post_processing::post_process(
+        let result = post_processing_infra::post_process(
             &client,
             api_key.trim(),
             test_input,

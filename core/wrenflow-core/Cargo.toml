@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+wrenflow-domain = { path = "../wrenflow-domain" }
 uniffi.workspace = true
 serde.workspace = true
 serde_json.workspace = true

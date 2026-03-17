@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "wrenflow-domain",
     "wrenflow-core",
     "wrenflow-ffi",
     "wrenflow-viewmodel",

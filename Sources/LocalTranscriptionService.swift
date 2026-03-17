@@ -1,7 +1,5 @@
 import Foundation
-import AVFoundation
 import os.log
-import FluidAudio
 
 private let ltLog = OSLog(subsystem: "me.gulya.wrenflow", category: "LocalTranscription")
 
@@ -42,57 +40,73 @@ enum LocalTranscriptionError: LocalizedError {
     }
 }
 
+/// Local transcription using Rust parakeet-rs via FFI.
+/// Replaces the previous FluidAudio (CoreML) implementation.
 final class LocalTranscriptionService: ObservableObject, @unchecked Sendable {
     @Published var state: LocalTranscriptionState = .notLoaded
 
-    private var asrManager: AsrManager?
+    #if canImport(wrenflow_ffiFFI)
+    private var engine: FfiLocalTranscriptionEngine?
+    #endif
+
+    /// Model directory path (parakeet-rs downloads/caches models here).
+    private var modelDir: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/Application Support/Wrenflow/Models/parakeet-tdt"
+    }
 
     func initialize() {
         guard !state.isReady && !state.isLoading else { return }
-        os_log(.info, log: ltLog, "initialize() — starting model download/load")
-        state = .downloading
+        os_log(.info, log: ltLog, "initialize() — loading model via Rust parakeet-rs")
+        state = .compiling
 
-        Task {
-            do {
-                os_log(.info, log: ltLog, "downloading model files...")
-                let targetDir = try await AsrModels.download(version: .v3)
-                await MainActor.run { self.state = .compiling }
+        #if canImport(wrenflow_ffiFFI)
+        Task.detached { [weak self] in
+            guard let self else { return }
+            let eng = FfiLocalTranscriptionEngine()
 
-                os_log(.info, log: ltLog, "model files downloaded, loading/compiling CoreML models...")
-                let models = try await AsrModels.load(from: targetDir, version: .v3)
-                os_log(.info, log: ltLog, "models loaded, initializing AsrManager")
-                let manager = AsrManager(config: .default)
-                try await manager.initialize(models: models)
+            // Create model dir if needed
+            try? FileManager.default.createDirectory(
+                atPath: self.modelDir, withIntermediateDirectories: true)
+
+            if let error = eng.initialize(modelDir: self.modelDir) {
+                os_log(.error, log: ltLog, "model init failed: %{public}@", error)
                 await MainActor.run {
-                    self.asrManager = manager
-                    self.state = .ready
+                    self.state = .error(error)
                 }
-                os_log(.info, log: ltLog, "AsrManager ready")
-            } catch {
-                os_log(.error, log: ltLog, "model initialization failed: %{public}@", error.localizedDescription)
+            } else {
+                os_log(.info, log: ltLog, "model ready")
                 await MainActor.run {
-                    self.state = .error(error.localizedDescription)
+                    self.engine = eng
+                    self.state = .ready
                 }
             }
         }
+        #else
+        state = .error("Rust FFI not available — local transcription disabled")
+        #endif
     }
 
     func transcribe(fileURL: URL) async throws -> String {
-        guard let manager = asrManager, state.isReady else {
+        #if canImport(wrenflow_ffiFFI)
+        guard let engine = engine, state.isReady else {
             throw LocalTranscriptionError.modelNotReady
         }
 
-        os_log(.info, log: ltLog, "transcribe() starting for file: %{public}@", fileURL.lastPathComponent)
-        let startTime = CFAbsoluteTimeGetCurrent()
+        os_log(.info, log: ltLog, "transcribe() starting for: %{public}@", fileURL.lastPathComponent)
+        let start = CFAbsoluteTimeGetCurrent()
 
-        do {
-            let result = try await manager.transcribe(fileURL)
-            let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-            os_log(.info, log: ltLog, "transcription completed in %.1fms: '%{public}@'", elapsed, result.text)
-            return result.text
-        } catch {
-            os_log(.error, log: ltLog, "transcription failed: %{public}@", error.localizedDescription)
-            throw LocalTranscriptionError.transcriptionFailed(error.localizedDescription)
+        let result = engine.transcribeFile(filePath: fileURL.path)
+        if let error = result.error {
+            os_log(.error, log: ltLog, "transcription failed: %{public}@", error)
+            throw LocalTranscriptionError.transcriptionFailed(error)
         }
+
+        let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        os_log(.info, log: ltLog, "transcription done in %.1fms: '%{public}@'", elapsed, result.text)
+        return result.text
+        #else
+        throw LocalTranscriptionError.transcriptionFailed("Rust FFI not available")
+        #endif
     }
 }

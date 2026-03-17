@@ -7,6 +7,9 @@ use parakeet_rs::Transcriber;
 use std::path::Path;
 use thiserror::Error;
 
+// Re-export the domain ModelState type
+pub use wrenflow_domain::transcription::local::ModelState;
+
 #[derive(Debug, Error)]
 pub enum LocalTranscriptionError {
     #[error("Model not loaded")]
@@ -15,25 +18,6 @@ pub enum LocalTranscriptionError {
     TranscriptionFailed(String),
     #[error("Audio too short (minimum 1 second required)")]
     AudioTooShort,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ModelState {
-    NotLoaded,
-    Downloading,
-    Compiling,
-    Ready,
-    Error(String),
-}
-
-impl ModelState {
-    pub fn is_ready(&self) -> bool {
-        matches!(self, Self::Ready)
-    }
-
-    pub fn is_loading(&self) -> bool {
-        matches!(self, Self::Downloading | Self::Compiling)
-    }
 }
 
 /// Local transcription engine using parakeet-rs.

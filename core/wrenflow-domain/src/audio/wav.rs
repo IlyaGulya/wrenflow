@@ -1,6 +1,6 @@
 //! WAV encoder.
 //!
-//! Produces **PCM Int16, mono, 16 kHz** WAV files — the exact format that the
+//! Produces **PCM Int16, mono, 16 kHz** WAV files -- the exact format that the
 //! Swift `AVAudioFile` pipeline writes before handing the file to Parakeet.
 //!
 //! WAV format reference:
@@ -24,7 +24,7 @@ const CHANNELS: u16 = 1;
 /// Output sample rate.
 const SAMPLE_RATE: u32 = 16_000;
 
-/// Encode `samples` (f32, –1.0 … +1.0) as a 16 kHz mono PCM Int16 WAV file
+/// Encode `samples` (f32, -1.0 ... +1.0) as a 16 kHz mono PCM Int16 WAV file
 /// and write the complete byte stream to `writer`.
 ///
 /// The function clamps samples to the Int16 range to avoid overflow.
@@ -56,7 +56,7 @@ pub fn encode_wav<W: Write>(writer: &mut W, samples: &[f32]) -> Result<(), WavEr
     writer.write_all(b"data")?;
     writer.write_all(&data_size.to_le_bytes())?;
 
-    // Convert f32 → i16 (clamp to avoid overflow)
+    // Convert f32 -> i16 (clamp to avoid overflow)
     for &s in samples {
         let v = (s * i16::MAX as f32)
             .round()
@@ -73,36 +73,6 @@ pub fn encode_wav_to_vec(samples: &[f32]) -> Result<Vec<u8>, WavError> {
     let mut buf = Vec::with_capacity(capacity);
     encode_wav(&mut buf, samples)?;
     Ok(buf)
-}
-
-/// Decode a 16kHz mono PCM Int16 WAV file to f32 samples.
-pub fn decode_wav_f32(path: &std::path::Path) -> Result<Vec<f32>, WavError> {
-    let data = std::fs::read(path).map_err(WavError::Io)?;
-    if data.len() < 44 {
-        return Err(WavError::Io(io::Error::new(io::ErrorKind::InvalidData, "WAV file too short")));
-    }
-    if &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
-        return Err(WavError::Io(io::Error::new(io::ErrorKind::InvalidData, "Not a WAV file")));
-    }
-    let bits_per_sample = u16::from_le_bytes([data[34], data[35]]);
-    let data_len = u32::from_le_bytes([data[40], data[41], data[42], data[43]]) as usize;
-    let audio_data = &data[44..44 + data_len.min(data.len() - 44)];
-
-    let samples: Vec<f32> = if bits_per_sample == 16 {
-        audio_data
-            .chunks_exact(2)
-            .map(|chunk| {
-                let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-                sample as f32 / i16::MAX as f32
-            })
-            .collect()
-    } else {
-        return Err(WavError::Io(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Unsupported bits per sample: {bits_per_sample}"),
-        )));
-    };
-    Ok(samples)
 }
 
 /// Parse the WAV header of a byte slice and return (sample_rate, channels,
@@ -138,7 +108,7 @@ mod tests {
         assert_eq!(ch, 1);
         assert_eq!(bps, 16);
         assert_eq!(data_offset, 44);
-        assert_eq!(data_len, 16_000 * 2); // 16 000 frames × 2 bytes
+        assert_eq!(data_len, 16_000 * 2); // 16 000 frames x 2 bytes
         assert_eq!(wav.len(), 44 + 16_000 * 2);
     }
 
@@ -165,7 +135,7 @@ mod tests {
 
     #[test]
     fn positive_full_scale() {
-        // +1.0 f32 → i16::MAX (32767)
+        // +1.0 f32 -> i16::MAX (32767)
         let samples = vec![1.0f32];
         let wav = encode_wav_to_vec(&samples).unwrap();
         let v = i16::from_le_bytes([wav[44], wav[45]]);
@@ -174,7 +144,7 @@ mod tests {
 
     #[test]
     fn negative_full_scale() {
-        // −1.0 f32 → −32767 (symmetric around i16::MAX)
+        // -1.0 f32 -> -32767 (symmetric around i16::MAX)
         let samples = vec![-1.0f32];
         let wav = encode_wav_to_vec(&samples).unwrap();
         let v = i16::from_le_bytes([wav[44], wav[45]]);

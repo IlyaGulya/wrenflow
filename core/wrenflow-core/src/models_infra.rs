@@ -1,29 +1,10 @@
-//! Fetch available models from the Groq API
+//! Fetch available models from the Groq API — infrastructure (IO).
 
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
+use serde::Deserialize;
 
+use wrenflow_domain::models::{GroqModel, ModelsError};
 use crate::http_client::GROQ_BASE_URL;
-
-#[derive(Debug, Error)]
-pub enum ModelsError {
-    #[error("Empty API key")]
-    EmptyApiKey,
-    #[error("HTTP error: {0}")]
-    Http(#[from] reqwest::Error),
-    #[error("API returned status {0}")]
-    ApiError(u16),
-    #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
-}
-
-/// A Groq model entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GroqModel {
-    pub id: String,
-    pub owned_by: String,
-}
 
 #[derive(Deserialize)]
 struct ModelsResponse {
@@ -38,7 +19,7 @@ struct RawGroqModel {
 
 /// Fetch available chat/text models from the Groq API.
 ///
-/// Excludes whisper, distil-whisper, playai, tts, and known vision-only models —
+/// Excludes whisper, distil-whisper, playai, tts, and known vision-only models --
 /// mirroring the filtering in `GroqModelsService.swift`.
 pub async fn fetch_models(
     client: &Client,
@@ -56,14 +37,16 @@ pub async fn fetch_models(
         .get(&url)
         .header("Authorization", format!("Bearer {}", trimmed))
         .send()
-        .await?;
+        .await
+        .map_err(|e| ModelsError::Http(e.to_string()))?;
 
     let status = response.status().as_u16();
     if status != 200 {
         return Err(ModelsError::ApiError(status));
     }
 
-    let body: ModelsResponse = response.json().await?;
+    let body: ModelsResponse = response.json().await
+        .map_err(|e| ModelsError::Http(e.to_string()))?;
 
     let excluded_prefixes = ["whisper", "distil-whisper", "playai", "tts"];
     let excluded_ids: std::collections::HashSet<&str> = [

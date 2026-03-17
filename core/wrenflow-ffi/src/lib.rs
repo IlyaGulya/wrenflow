@@ -188,3 +188,69 @@ impl FfiPipelineEngine {
     pub fn on_dismiss_timeout(&self) { self.inner.lock().unwrap().on_dismiss_timeout(&self.listener); }
     pub fn update_config(&self, config: AppConfig) { self.inner.lock().unwrap().update_config(config.into()); }
 }
+
+// ---------------------------------------------------------------------------
+// Local Transcription Engine (wraps parakeet-rs)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum ModelState {
+    NotLoaded,
+    Downloading,
+    Compiling,
+    Ready,
+    Error { message: String },
+}
+
+impl From<wrenflow_core::transcription::local::ModelState> for ModelState {
+    fn from(s: wrenflow_core::transcription::local::ModelState) -> Self {
+        match s {
+            wrenflow_core::transcription::local::ModelState::NotLoaded => Self::NotLoaded,
+            wrenflow_core::transcription::local::ModelState::Downloading => Self::Downloading,
+            wrenflow_core::transcription::local::ModelState::Compiling => Self::Compiling,
+            wrenflow_core::transcription::local::ModelState::Ready => Self::Ready,
+            wrenflow_core::transcription::local::ModelState::Error(msg) => Self::Error { message: msg },
+        }
+    }
+}
+
+#[derive(uniffi::Object)]
+pub struct FfiLocalTranscriptionEngine {
+    inner: std::sync::Mutex<wrenflow_core::transcription_local::LocalTranscriptionEngine>,
+}
+
+#[uniffi::export]
+impl FfiLocalTranscriptionEngine {
+    #[uniffi::constructor]
+    pub fn new() -> Self {
+        Self {
+            inner: std::sync::Mutex::new(wrenflow_core::transcription_local::LocalTranscriptionEngine::new()),
+        }
+    }
+
+    pub fn state(&self) -> ModelState {
+        self.inner.lock().unwrap().state().clone().into()
+    }
+
+    /// Initialize the model from a directory path. Returns error message or nil.
+    pub fn initialize(&self, model_dir: String) -> Option<String> {
+        match self.inner.lock().unwrap().initialize(std::path::Path::new(&model_dir), None) {
+            Ok(()) => None,
+            Err(e) => Some(e.to_string()),
+        }
+    }
+
+    /// Transcribe a WAV file. Returns text, or error message if failed.
+    pub fn transcribe_file(&self, file_path: String) -> TranscribeResult {
+        match self.inner.lock().unwrap().transcribe_file(std::path::Path::new(&file_path)) {
+            Ok(text) => TranscribeResult { text, error: None },
+            Err(e) => TranscribeResult { text: String::new(), error: Some(e.to_string()) },
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TranscribeResult {
+    pub text: String,
+    pub error: Option<String>,
+}
