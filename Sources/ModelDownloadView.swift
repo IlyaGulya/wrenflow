@@ -115,8 +115,12 @@ struct ModelDownloadView: View {
     // MARK: - Helpers
 
     private func downloadStatus(_ progress: Double) -> String {
-        let pct = min(Int(progress * 100), 100)
-        return "\(pct)%"
+        if progress > 0 {
+            let pct = min(Int(progress * 100), 100)
+            return "\(pct)%"
+        } else {
+            return "Starting..."
+        }
     }
 
     private func barHeight(index: Int) -> CGFloat {

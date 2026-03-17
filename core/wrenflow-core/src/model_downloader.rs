@@ -12,7 +12,7 @@ pub fn is_model_present(model: &ModelInfo, model_dir: &Path) -> bool {
 
 /// Download model files from HuggingFace.
 /// Supports cancellation via `cancel_flag`.
-/// Queries actual file sizes via HEAD requests (no hardcoded sizes).
+/// Gets total size from Content-Length of each GET response.
 pub async fn download_model(
     model: &ModelInfo,
     model_dir: &Path,
@@ -35,27 +35,21 @@ pub async fn download_model(
 
     let files = &model.expected_files;
     let total_files = files.len();
-
-    // Query total size via HEAD requests
+    let mut bytes_so_far: u64 = 0;
     let mut total_bytes: u64 = 0;
+    let mut total_known = false;
+
+    // Count already-downloaded file sizes
     for filename in files {
         let dest = model_dir.join(filename);
         if dest.exists() {
             if let Ok(meta) = std::fs::metadata(&dest) {
-                total_bytes += meta.len();
-            }
-            continue;
-        }
-        let url = format!("https://huggingface.co/{}/resolve/main/{}", model.repo_id, filename);
-        if let Ok(resp) = client.head(&url).send().await {
-            if let Some(len) = resp.content_length() {
-                total_bytes += len;
+                let size = meta.len();
+                bytes_so_far += size;
+                total_bytes += size;
             }
         }
     }
-    let total_bytes = if total_bytes > 0 { Some(total_bytes) } else { None };
-
-    let mut bytes_so_far: u64 = 0;
 
     for (i, filename) in files.iter().enumerate() {
         if cancel_flag.load(Ordering::Relaxed) {
@@ -66,12 +60,9 @@ pub async fn download_model(
 
         // Skip if already exists
         if dest.exists() {
-            if let Ok(meta) = std::fs::metadata(&dest) {
-                bytes_so_far += meta.len();
-            }
             listener.on_progress(DownloadProgress {
                 bytes_downloaded: bytes_so_far,
-                total_bytes,
+                total_bytes: if total_known { Some(total_bytes) } else { None },
                 current_file: filename.clone(),
                 files_completed: i + 1,
                 files_total: total_files,
@@ -82,14 +73,6 @@ pub async fn download_model(
         let url = format!("https://huggingface.co/{}/resolve/main/{}", model.repo_id, filename);
         log::info!("Downloading {} → {:?}", url, dest);
 
-        listener.on_progress(DownloadProgress {
-            bytes_downloaded: bytes_so_far,
-            total_bytes,
-            current_file: filename.clone(),
-            files_completed: i,
-            files_total: total_files,
-        });
-
         let response = client.get(&url)
             .send()
             .await
@@ -99,7 +82,22 @@ pub async fn download_model(
             return Err(format!("Download {filename}: HTTP {}", response.status()));
         }
 
-        // Write to temp file, rename on completion (atomic)
+        // Get file size from Content-Length header
+        let file_size = response.content_length();
+        if let Some(size) = file_size {
+            total_bytes += size;
+            total_known = true;
+        }
+
+        listener.on_progress(DownloadProgress {
+            bytes_downloaded: bytes_so_far,
+            total_bytes: if total_known { Some(total_bytes) } else { None },
+            current_file: filename.clone(),
+            files_completed: i,
+            files_total: total_files,
+        });
+
+        // Write to temp file
         let tmp_dest = model_dir.join(format!("{filename}.tmp"));
         let mut file = std::fs::File::create(&tmp_dest)
             .map_err(|e| format!("Create {filename}: {e}"))?;
@@ -120,7 +118,7 @@ pub async fn download_model(
 
             listener.on_progress(DownloadProgress {
                 bytes_downloaded: bytes_so_far,
-                total_bytes,
+                total_bytes: if total_known { Some(total_bytes) } else { None },
                 current_file: filename.clone(),
                 files_completed: i,
                 files_total: total_files,
@@ -133,7 +131,7 @@ pub async fn download_model(
 
         listener.on_progress(DownloadProgress {
             bytes_downloaded: bytes_so_far,
-            total_bytes,
+            total_bytes: if total_known { Some(total_bytes) } else { None },
             current_file: filename.clone(),
             files_completed: i + 1,
             files_total: total_files,
