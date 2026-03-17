@@ -8,9 +8,11 @@ pub use wrenflow_domain::audio;
 pub use wrenflow_domain::transcription;
 pub use wrenflow_domain::post_processing;
 pub use wrenflow_domain::models;
+pub use wrenflow_domain::model_management;
 
 // Infrastructure modules (IO, network, persistence)
 pub mod http_client;
+pub mod model_downloader;
 pub mod config_store;
 pub mod history_store;
 pub mod models_infra;
