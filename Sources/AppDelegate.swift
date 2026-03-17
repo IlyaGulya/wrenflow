@@ -88,6 +88,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.isReleasedWhenClosed = false
         window.center()
         window.makeKeyAndOrderFront(nil)
+        // Show in Dock + Cmd-Tab while settings is open
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
 
         settingsWindow = window
@@ -98,6 +100,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             queue: .main
         ) { [weak self] _ in
             self?.settingsWindow = nil
+            // Back to menu bar only (hide from Dock + Cmd-Tab)
+            if self?.modelDownloadWindow == nil {
+                NSApp.setActivationPolicy(.accessory)
+            }
         }
     }
 
@@ -227,6 +233,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let panel = NSPanel.wrenflowPanel(content: view)
         panel.makeKeyAndOrderFront(nil)
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
 
         modelDownloadWindow = panel
@@ -237,6 +244,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             queue: .main
         ) { [weak self] _ in
             self?.modelDownloadWindow = nil
+            if self?.settingsWindow == nil {
+                NSApp.setActivationPolicy(.accessory)
+            }
         }
 
         // Auto-close when model becomes ready

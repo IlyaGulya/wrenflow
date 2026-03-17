@@ -247,7 +247,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     let hotkeyManager = HotkeyManager()
     let overlayManager = RecordingOverlayManager()
     let localTranscriptionService = LocalTranscriptionService()
-    private var accessibilityTimer: Timer?
+    private var localTranscriptionCancellable: AnyCancellable?
     private var audioLevelCancellable: AnyCancellable?
     private var debugOverlayTimer: Timer?
     private var transcribingIndicatorTask: Task<Void, Never>?
@@ -307,6 +307,11 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
         refreshAvailableMicrophones()
         installAudioDeviceListener()
+
+        // Forward localTranscriptionService changes to trigger SwiftUI updates
+        localTranscriptionCancellable = localTranscriptionService.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
 
         // Only initialize local transcription if already chosen; otherwise deferred to setup wizard
         if selectedTranscriptionProvider == .local && hasCompletedSetup {
