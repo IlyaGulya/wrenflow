@@ -293,7 +293,13 @@ final class AppState: ObservableObject, @unchecked Sendable {
             localTranscriptionService.initialize()
         }
 
-        // Pre-warm audio engine (creates engine, installs tap, calls prepare() — no mic indicator)
+        // Pre-warm audio engine only after setup is complete
+        if hasCompletedSetup {
+            warmUpAudioEngine()
+        }
+    }
+
+    func warmUpAfterSetup() {
         warmUpAudioEngine()
     }
 

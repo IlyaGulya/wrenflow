@@ -101,13 +101,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func showSetupWindow() {
         NSApp.setActivationPolicy(.regular)
 
-        let setupView = SetupView(onComplete: { [weak self] in
+        let setupView = SetupAccordionView(onComplete: { [weak self] in
             self?.completeSetup()
         })
         .environmentObject(appState)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 480),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 560),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -130,6 +130,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupWindow?.close()
         setupWindow = nil
         NSApp.setActivationPolicy(.accessory)
+        appState.warmUpAfterSetup()
         appState.startHotkeyMonitoring()
         appState.startAccessibilityPolling()
         Task { @MainActor in
