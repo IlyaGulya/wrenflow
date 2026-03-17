@@ -38,6 +38,11 @@ jobs:
           toolchain: stable
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: core -> target
+
       - name: Build Rust FFI (release, universal)
         run: |
           cd core

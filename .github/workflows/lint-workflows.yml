@@ -20,16 +20,18 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: actionlint
-        uses: reviewdog/action-actionlint@05c08f7ee23a2e5db23b73e8d74bf5d5b6a0db53 # v1.65.0
-        with:
-          reporter: github-pr-review
-          fail_level: error
+      - name: Install actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          echo "$PWD" >> "$GITHUB_PATH"
+
+      - name: Run actionlint
+        run: actionlint
 
       - name: Install ghalint
         run: |
           GHALINT_VERSION="v1.3.0"
           curl -sSfL "https://github.com/suzuki-shunsuke/ghalint/releases/download/${GHALINT_VERSION}/ghalint_linux_amd64.tar.gz" | tar xz -C /usr/local/bin ghalint
 
-      - name: ghalint
+      - name: Run ghalint
         run: ghalint run
