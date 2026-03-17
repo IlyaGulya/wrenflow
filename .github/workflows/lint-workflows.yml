@@ -20,18 +20,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install actionlint
+      - name: actionlint
         run: |
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
-          echo "$PWD" >> "$GITHUB_PATH"
-
-      - name: Run actionlint
-        run: actionlint
+          ./actionlint -color
 
       - name: Install ghalint
         run: |
-          GHALINT_VERSION="v1.3.0"
-          curl -sSfL "https://github.com/suzuki-shunsuke/ghalint/releases/download/${GHALINT_VERSION}/ghalint_linux_amd64.tar.gz" | tar xz -C /usr/local/bin ghalint
+          curl -sSfL "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.5.5/ghalint_linux_amd64.tar.gz" | tar xz -C /usr/local/bin ghalint
 
-      - name: Run ghalint
+      - name: ghalint
         run: ghalint run
