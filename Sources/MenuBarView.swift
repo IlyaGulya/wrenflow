@@ -133,9 +133,9 @@ struct MenuBarView: View {
                 }
                 ForEach(appState.availableMicrophones) { device in
                     Button {
-                        appState.selectedMicrophoneID = device.uid
+                        appState.selectedMicrophoneID = device.id
                     } label: {
-                        if appState.selectedMicrophoneID == device.uid {
+                        if appState.selectedMicrophoneID == device.id {
                             Text("✓ \(device.name)")
                         } else {
                             Text("  \(device.name)")

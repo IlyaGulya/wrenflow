@@ -1,18 +1,5 @@
 // RustPipelineBridge.swift
 // Bridges the Rust FfiPipelineEngine (via UniFFI) into the Swift AppState world.
-//
-// This entire file is compiled only when the Rust FFI C module is available.
-// Until the Rust static library is linked into the Swift build (Package.swift),
-// this file compiles to nothing. The existing Swift pipeline FSM in AppState
-// remains the active code path.
-//
-// When wrenflow_ffiFFI becomes importable (Step 7 of migration):
-//   1. Remove "Generated" from Package.swift exclude list
-//   2. Add linker flags for libwrenflow_ffi.a
-//   3. Resolve naming conflicts (PipelineState, PostProcessingResult)
-//   4. Wire AppState to use RustPipelineBridge instead of the Swift FSM
-
-#if canImport(wrenflow_ffiFFI)
 
 import Foundation
 import AppKit
@@ -485,17 +472,9 @@ extension AppState {
     }
 }
 
-#endif // canImport(wrenflow_ffiFFI)
-
-// MARK: - Stub property for AppState
-
-// This extension is always compiled. It provides the rustPipelineBridge
-// property on AppState so other code can reference it without #if guards.
+// MARK: - Stored property for AppState
 
 extension AppState {
-    /// When the Rust FFI is available, this holds the bridge.
-    /// When not available, it's always nil and the existing Swift FSM is used.
-    #if canImport(wrenflow_ffiFFI)
     private static let _rustBridgeKey = "rustPipelineBridge"
 
     // Store in a computed property backed by objc associated object
@@ -508,17 +487,44 @@ extension AppState {
             objc_setAssociatedObject(self, &AssociatedKeys.rustBridge, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         }
     }
-    #else
-    var rustPipelineBridge: AnyObject? {
-        get { return nil }
-        // swiftlint:disable:next unused_setter_value
-        set { /* no-op when Rust FFI not available */ }
-    }
-    #endif
 }
 
-#if canImport(wrenflow_ffiFFI)
 private enum AssociatedKeys {
     static var rustBridge = 0
 }
-#endif
+
+// MARK: - SwiftAudioCaptureListener
+
+/// Implements the Rust FfiAudioCaptureListener protocol, forwarding
+/// audio-capture events to Swift closures.
+final class SwiftAudioCaptureListener: FfiAudioCaptureListener, @unchecked Sendable {
+    private let _onAudioLevel: (Float) -> Void
+    private let _onRecordingReady: () -> Void
+    private let _onError: (String) -> Void
+
+    init(
+        onRecordingReady: @escaping () -> Void,
+        onAudioLevel: @escaping (Float) -> Void,
+        onError: @escaping (String) -> Void
+    ) {
+        self._onRecordingReady = onRecordingReady
+        self._onAudioLevel = onAudioLevel
+        self._onError = onError
+    }
+
+    func onAudioLevel(level: Float) {
+        _onAudioLevel(level)
+    }
+
+    func onRecordingReady() {
+        _onRecordingReady()
+    }
+
+    func onError(message: String) {
+        _onError(message)
+    }
+}
+
+// MARK: - FfiAudioDeviceInfo Identifiable conformance
+
+extension FfiAudioDeviceInfo: Identifiable {}

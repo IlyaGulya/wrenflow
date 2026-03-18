@@ -426,8 +426,8 @@ struct GeneralSettingsView: View {
                 ForEach(appState.availableMicrophones) { device in
                     MicrophoneOptionRow(
                         name: device.name,
-                        isSelected: appState.selectedMicrophoneID == device.uid,
-                        action: { appState.selectedMicrophoneID = device.uid }
+                        isSelected: appState.selectedMicrophoneID == device.id,
+                        action: { appState.selectedMicrophoneID = device.id }
                     )
                 }
             }

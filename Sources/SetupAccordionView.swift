@@ -533,16 +533,27 @@ struct SetupAccordionView: View {
                 print("[SetupWizard] onKeyDown fired, testPhase=\(testPhase)")
                 guard testPhase == .idle || testPhase == .done else { return }
                 if testPhase == .done { resetTest() }
-                do {
-                    let recorder = appState.audioRecorder
-                    try recorder.startRecording(deviceUID: appState.selectedMicrophoneID)
-                    testAudioLevelCancellable = recorder.$audioLevel.receive(on: DispatchQueue.main).sink { testAudioLevel = $0 }
+                let deviceUID = appState.selectedMicrophoneID
+                let deviceId = (deviceUID.isEmpty || deviceUID == "default") ? nil : deviceUID
+                let listener = SwiftAudioCaptureListener(
+                    onRecordingReady: { },
+                    onAudioLevel: { level in
+                        DispatchQueue.main.async { testAudioLevel = level }
+                    },
+                    onError: { message in
+                        DispatchQueue.main.async {
+                            testError = message
+                            withAnimation { testPhase = .done }
+                        }
+                    }
+                )
+                if let error = appState.audioCapture.startRecording(deviceId: deviceId, listener: listener) {
+                    print("[SetupWizard] Recording error: \(error)")
+                    testError = error
+                    withAnimation { testPhase = .done }
+                } else {
                     print("[SetupWizard] Recording started")
                     withAnimation { testPhase = .recording }
-                } catch {
-                    print("[SetupWizard] Recording error: \(error)")
-                    testError = error.localizedDescription
-                    withAnimation { testPhase = .done }
                 }
             }
         }
@@ -550,15 +561,15 @@ struct SetupAccordionView: View {
             DispatchQueue.main.async {
                 print("[SetupWizard] onKeyUp fired, testPhase=\(testPhase)")
                 guard testPhase == .recording else { return }
-                let recorder = appState.audioRecorder
-                let result = recorder.stopRecording()
+                let result = appState.audioCapture.stopRecording()
                 testAudioLevelCancellable?.cancel(); testAudioLevel = 0
                 withAnimation { testPhase = .transcribing }
-                guard let url = result?.fileURL else {
+                guard let filePath = result?.filePath else {
                     print("[SetupWizard] No audio file from recorder")
                     testError = "No audio recorded."
                     withAnimation { testPhase = .done }; return
                 }
+                let url = URL(fileURLWithPath: filePath)
                 print("[SetupWizard] Transcribing \(url.lastPathComponent), model state: \(appState.localTranscriptionService.state)")
                 Task {
                     do {

@@ -383,14 +383,13 @@ final class AppState: ObservableObject, @unchecked Sendable {
             UserDefaults.standard.set(soundEnabled, forKey: soundEnabledStorageKey)
         }
     }
-    @Published var availableMicrophones: [AudioDevice] = []
+    @Published var availableMicrophones: [FfiAudioDeviceInfo] = []
 
-    let audioRecorder = AudioRecorder()
+    let audioCapture = FfiAudioCapture()
     let hotkeyManager = HotkeyManager()
     let overlayManager = RecordingOverlayManager()
     let localTranscriptionService = LocalTranscriptionService()
     private var localTranscriptionCancellable: AnyCancellable?
-    private var audioLevelCancellable: AnyCancellable?
     private var debugOverlayTimer: Timer?
     private var transcribingIndicatorTask: Task<Void, Never>?
     private var contextService: AppContextService
@@ -466,9 +465,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
 
         // Initialize Rust pipeline bridge
-        #if canImport(wrenflow_ffiFFI)
         self.rustPipelineBridge = RustPipelineBridge(appState: self, overlayManager: overlayManager)
-        #endif
     }
 
     func warmUpAfterSetup() {
@@ -479,7 +476,11 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private func warmUpAudioEngine() {
         let deviceUID = selectedMicrophoneID
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.audioRecorder.warmUp(deviceUID: deviceUID)
+            guard let self else { return }
+            let deviceId = (deviceUID.isEmpty || deviceUID == "default") ? nil : deviceUID
+            if let error = self.audioCapture.warmUp(deviceId: deviceId) {
+                os_log(.error, log: recordingLog, "warmUp failed: %{public}@", error)
+            }
         }
     }
 
@@ -498,8 +499,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             initTimerSource?.cancel()
             initTimerSource = nil
         case .recording:
-            audioLevelCancellable?.cancel()
-            audioLevelCancellable = nil
+            break
         case .transcribing, .postProcessing:
             transcribingIndicatorTask?.cancel()
             transcribingIndicatorTask = nil
@@ -523,8 +523,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
         // Enter actions
         switch newState {
         case .idle:
-            audioLevelCancellable?.cancel()
-            audioLevelCancellable = nil
             if oldState != .idle {
                 overlayManager.dismiss()
             }
@@ -775,7 +773,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
 
     func refreshAvailableMicrophones() {
-        availableMicrophones = AudioDevice.availableInputDevices()
+        availableMicrophones = audioCapture.listInputDevices()
     }
 
     private func installAudioDeviceListener() {
@@ -816,181 +814,91 @@ final class AppState: ObservableObject, @unchecked Sendable {
         hotkeyManager.start(option: selectedHotkey)
     }
 
-    private var canStartRecording: Bool {
-        switch pipelineState {
-        case .idle, .pasting, .error: return true
-        default: return false
-        }
-    }
-
     private func handleHotkeyDown() {
         os_log(.info, log: recordingLog, "handleHotkeyDown() fired, pipelineState=%{public}@", String(describing: pipelineState))
 
-        #if canImport(wrenflow_ffiFFI)
-        if let bridge = rustPipelineBridge {
-            // Check permissions first
-            permissionState.refresh()
-            let missing = permissionState.missingRequired
-            if !missing.isEmpty {
-                permissionSheetKinds = missing
-                return
-            }
-            // Delegate to Rust FSM
-            if bridge.handleHotkeyDown() {
-                // Rust accepted → start audio recording
-                beginRecordingForRust()
-            }
+        guard let bridge = rustPipelineBridge else { return }
+        // Check permissions first
+        permissionState.refresh()
+        let missing = permissionState.missingRequired
+        if !missing.isEmpty {
+            permissionSheetKinds = missing
             return
         }
-        #endif
-
-        // Fallback: Swift FSM
-        guard canStartRecording else { return }
-        if pipelineState != .idle { transition(to: .idle) }
-        startRecording()
+        // Delegate to Rust FSM
+        if bridge.handleHotkeyDown() {
+            // Rust accepted → start audio recording
+            beginRecordingForRust()
+        }
     }
 
     private func handleHotkeyUp() {
-        #if canImport(wrenflow_ffiFFI)
-        if let bridge = rustPipelineBridge {
-            guard pipelineState.isRecording else { return }
-            let result = audioRecorder.stopRecording()
-            let durationMs = result?.durationMs ?? 0
-            if bridge.handleHotkeyUp(recordingDurationMs: durationMs) {
-                // Rust accepted → run transcription
-                if let fileURL = result?.fileURL {
-                    runTranscriptionForRust(fileURL: fileURL, bridge: bridge)
-                }
-            }
-            return
-        }
-        #endif
-
-        // Fallback: Swift FSM
+        guard let bridge = rustPipelineBridge else { return }
         guard pipelineState.isRecording else { return }
-        stopAndTranscribe()
+        let result = audioCapture.stopRecording()
+        let durationMs = result?.durationMs ?? 0
+        if bridge.handleHotkeyUp(recordingDurationMs: durationMs) {
+            // Rust accepted → run transcription
+            if let filePath = result?.filePath {
+                runTranscriptionForRust(fileURL: URL(fileURLWithPath: filePath), bridge: bridge)
+            }
+        }
     }
 
     func startRecordingFromCLI() {
-        guard canStartRecording else { return }
-        if pipelineState != .idle {
-            transition(to: .idle)
-        }
-        startRecording()
+        handleHotkeyDown()
     }
 
     func stopRecordingFromCLI() {
-        guard pipelineState.isRecording else { return }
-        stopAndTranscribe()
+        handleHotkeyUp()
     }
 
     func toggleRecording() {
         os_log(.info, log: recordingLog, "toggleRecording() called, pipelineState=%{public}@", String(describing: pipelineState))
         if pipelineState.isRecording {
-            stopAndTranscribe()
-        } else if canStartRecording {
-            if pipelineState != .idle {
-                transition(to: .idle)
-            }
-            startRecording()
-        }
-    }
-
-    private func startRecording() {
-        let t0 = CFAbsoluteTimeGetCurrent()
-        os_log(.info, log: recordingLog, "startRecording() entered")
-
-        // Check all required permissions via single source of truth
-        permissionState.refresh()
-        let missing = permissionState.missingRequired
-        if !missing.isEmpty {
-            os_log(.info, log: recordingLog, "missing permissions: %{public}@", missing.map(\.label).joined(separator: ", "))
-            // Set the published property — the view layer reacts and shows a sheet
-            permissionSheetKinds = missing
-            return
-        }
-
-        os_log(.info, log: recordingLog, "all permissions OK: %.3fms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)
-        beginRecording()
-        os_log(.info, log: recordingLog, "startRecording() finished: %.3fms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)
-    }
-
-    private func beginRecording() {
-        os_log(.info, log: recordingLog, "beginRecording() entered")
-        errorMessage = nil
-        hasShownScreenshotPermissionAlert = false
-        transition(to: .starting)
-
-        let deviceUID = selectedMicrophoneID
-        audioRecorder.onRecordingReady = { [weak self] in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                guard self.pipelineState == .starting || self.pipelineState == .initializing else { return }
-                os_log(.info, log: recordingLog, "first real audio — transitioning to waveform")
-                self.transition(to: .recording)
-            }
-        }
-
-        // Start engine on background thread so UI isn't blocked
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
-            let t0 = CFAbsoluteTimeGetCurrent()
-            do {
-                try self.audioRecorder.startRecording(deviceUID: deviceUID)
-                os_log(.info, log: recordingLog, "audioRecorder.startRecording() done: %.3fms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)
-                DispatchQueue.main.async {
-                    if self.postProcessingEnabled {
-                        self.startContextCapture()
-                    }
-                    self.audioLevelCancellable = self.audioRecorder.$audioLevel
-                        .receive(on: DispatchQueue.main)
-                        .sink { [weak self] level in
-                            self?.overlayManager.updateAudioLevel(level)
-                        }
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    let msg = self.formattedRecordingStartError(error)
-                    self.showError(.audio(msg))
-                    self.transition(to: .error(message: msg))
-                }
-            }
+            handleHotkeyUp()
+        } else {
+            handleHotkeyDown()
         }
     }
 
     // MARK: - Rust bridge recording helpers
 
-    #if canImport(wrenflow_ffiFFI)
     /// Start audio recording for the Rust pipeline (no Swift FSM transition).
     private func beginRecordingForRust() {
         errorMessage = nil
         hasShownScreenshotPermissionAlert = false
         let deviceUID = selectedMicrophoneID
+        let deviceId = (deviceUID.isEmpty || deviceUID == "default") ? nil : deviceUID
 
-        audioRecorder.onRecordingReady = { [weak self] in
-            DispatchQueue.main.async {
-                self?.rustPipelineBridge?.onFirstAudio()
-            }
-        }
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
-            do {
-                try self.audioRecorder.startRecording(deviceUID: deviceUID)
+        let listener = SwiftAudioCaptureListener(
+            onRecordingReady: { [weak self] in
                 DispatchQueue.main.async {
-                    if self.postProcessingEnabled { self.startContextCapture() }
-                    self.audioLevelCancellable = self.audioRecorder.$audioLevel
-                        .receive(on: DispatchQueue.main)
-                        .sink { [weak self] level in self?.overlayManager.updateAudioLevel(level) }
+                    self?.rustPipelineBridge?.onFirstAudio()
                 }
-            } catch {
+            },
+            onAudioLevel: { [weak self] level in
                 DispatchQueue.main.async {
-                    let msg = self.formattedRecordingStartError(error)
-                    self.showError(.audio(msg))
-                    self.rustPipelineBridge?.onPipelineError(message: msg)
+                    self?.overlayManager.updateAudioLevel(level)
+                }
+            },
+            onError: { [weak self] message in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.showError(.audio(message))
+                    self.rustPipelineBridge?.onPipelineError(message: message)
                 }
             }
+        )
+
+        if let error = audioCapture.startRecording(deviceId: deviceId, listener: listener) {
+            let msg = "Failed to start recording: \(error)"
+            showError(.audio(msg))
+            rustPipelineBridge?.onPipelineError(message: msg)
+            return
         }
+
+        if postProcessingEnabled { startContextCapture() }
     }
 
     /// Run transcription and report result back to Rust engine.
@@ -1067,334 +975,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         durationMs: 0,
                         status: "Error: \(error.localizedDescription)"
                     )
-                }
-            }
-        }
-    }
-    #endif
-
-    private func formattedRecordingStartError(_ error: Error) -> String {
-        if let recorderError = error as? AudioRecorderError {
-            return "Failed to start recording: \(recorderError.localizedDescription)"
-        }
-
-        let lower = error.localizedDescription.lowercased()
-        if lower.contains("operation couldn't be completed") || lower.contains("operation could not be completed") {
-            return "Failed to start recording: Audio input error. Verify microphone access is granted and a working mic is selected in System Settings > Sound > Input."
-        }
-
-        let nsError = error as NSError
-        if nsError.domain == NSOSStatusErrorDomain {
-            return "Failed to start recording (audio subsystem error \(nsError.code)). Check microphone permissions and selected input device."
-        }
-
-        return "Failed to start recording: \(error.localizedDescription)"
-    }
-
-    private func stopAndTranscribe() {
-        debugStatusMessage = "Preparing audio"
-        let sessionContext = capturedContext
-        let inFlightContextTask = contextCaptureTask
-        capturedContext = nil
-        contextCaptureTask = nil
-        lastRawTranscript = ""
-        lastPostProcessedTranscript = ""
-        lastContextSummary = ""
-        lastPostProcessingStatus = ""
-        lastPostProcessingPrompt = ""
-        lastPostProcessingReasoning = ""
-        lastContextScreenshotDataURL = nil
-        lastContextScreenshotStatus = "No screenshot"
-
-        guard let recordingResult = audioRecorder.stopRecording() else {
-            os_log(.info, log: recordingLog, "stopRecording() returned nil — treating as accidental tap")
-            audioRecorder.cleanup()
-            inFlightContextTask?.cancel()
-            transition(to: .idle)
-            return
-        }
-        let fileURL = recordingResult.fileURL
-        let recordingDurationMs = recordingResult.durationMs
-        let audioFileSizeBytes = recordingResult.fileSizeBytes
-        os_log(.info, log: recordingLog, "stopRecording() returned file: %{public}@, duration=%.1fms, size=%lld bytes", fileURL.path, recordingDurationMs, audioFileSizeBytes)
-
-        if recordingDurationMs < minimumRecordingDurationMs {
-            os_log(.info, log: recordingLog, "recording too short (%.0fms < %.0fms) — dismissing",
-                   recordingDurationMs, minimumRecordingDurationMs)
-            audioRecorder.cleanup()
-            inFlightContextTask?.cancel()
-            transition(to: .idle)
-            return
-        }
-
-        if audioFileSizeBytes < 1000 {
-            os_log(.error, log: recordingLog, "WARNING: audio file suspiciously small (%lld bytes), transcription may fail", audioFileSizeBytes)
-        }
-        let savedAudioFileName = Self.saveAudioFile(from: fileURL)
-        debugStatusMessage = "Transcribing audio"
-        errorMessage = nil
-        transition(to: .transcribing(showingIndicator: false))
-
-        os_log(.info, log: recordingLog, "creating post-processing service, apiBaseURL=%{public}@, model=%{public}@, enabled=%{public}@", apiBaseURL, postProcessingModel, postProcessingEnabled ? "true" : "false")
-        let capturedPostProcessingModel = postProcessingModel
-        let capturedPostProcessingEnabled = postProcessingEnabled
-        let postProcessingService = (!capturedPostProcessingEnabled || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            ? nil
-            : PostProcessingService(apiKey: apiKey, baseURL: apiBaseURL, model: postProcessingModel)
-
-        Task {
-            do {
-                let pipelineStart = CFAbsoluteTimeGetCurrent()
-
-                // Stage 1: Transcription (always local)
-                let transcriptionStart = CFAbsoluteTimeGetCurrent()
-                let rawTranscript = try await self.localTranscriptionService.transcribe(fileURL: fileURL)
-                let transcriptionDurationMs = (CFAbsoluteTimeGetCurrent() - transcriptionStart) * 1000
-                os_log(.info, log: recordingLog, "transcription took %.1fms", transcriptionDurationMs)
-
-                os_log(.info, log: recordingLog, "rawTranscript: '%{public}@'", rawTranscript)
-
-                // Stage 2: Context resolution + Post-processing (only if enabled)
-                let contextDurationMs: Double
-                let postProcessingDurationMs: Double
-                let appContext: AppContext
-                let finalTranscript: String
-                let processingStatus: String
-                let postProcessingPrompt: String
-                let postProcessingReasoning: String
-
-                if let postProcessingService {
-                    // Transition to postProcessing state, carrying over indicator visibility
-                    await MainActor.run { [weak self] in
-                        guard let self else { return }
-                        if case .transcribing(let indicatorShowing) = self.pipelineState {
-                            self.transition(to: .postProcessing(showingIndicator: indicatorShowing))
-                        }
-                        self.debugStatusMessage = "Resolving context"
-                    }
-
-                    // Context resolution
-                    let contextStart = CFAbsoluteTimeGetCurrent()
-                    if let sessionContext {
-                        os_log(.info, log: recordingLog, "using sessionContext for post-processing")
-                        appContext = sessionContext
-                    } else if let inFlightContext = await inFlightContextTask?.value {
-                        os_log(.info, log: recordingLog, "using inFlightContext for post-processing")
-                        appContext = inFlightContext
-                    } else {
-                        os_log(.info, log: recordingLog, "using fallbackContext for post-processing")
-                        appContext = fallbackContextAtStop()
-                    }
-                    contextDurationMs = (CFAbsoluteTimeGetCurrent() - contextStart) * 1000
-                    os_log(.info, log: recordingLog, "context resolution took %.1fms", contextDurationMs)
-                    os_log(.info, log: recordingLog, "appContext: app=%{public}@, window=%{public}@, activity=%{public}@", appContext.appName ?? "nil", appContext.windowTitle ?? "nil", appContext.currentActivity)
-
-                    await MainActor.run { [weak self] in
-                        self?.debugStatusMessage = "Running post-processing"
-                    }
-
-                    // LLM post-processing
-                    let postProcessingStart = CFAbsoluteTimeGetCurrent()
-                    do {
-                        let postProcessingResult = try await postProcessingService.postProcess(
-                            transcript: rawTranscript,
-                            context: appContext,
-                            customVocabulary: customVocabulary,
-                            customSystemPrompt: customSystemPrompt
-                        )
-                        finalTranscript = postProcessingResult.transcript
-                        processingStatus = "Post-processing succeeded"
-                        postProcessingPrompt = postProcessingResult.prompt
-                        postProcessingReasoning = postProcessingResult.reasoning
-                        os_log(.info, log: recordingLog, "post-processing reasoning: %{public}@", postProcessingReasoning)
-                    } catch {
-                        os_log(.error, log: recordingLog, "post-processing FAILED: %{public}@", error.localizedDescription)
-                        finalTranscript = rawTranscript
-                        processingStatus = "Post-processing failed, using raw transcript"
-                        postProcessingPrompt = ""
-                        postProcessingReasoning = "Error: \(error.localizedDescription)"
-                    }
-                    postProcessingDurationMs = (CFAbsoluteTimeGetCurrent() - postProcessingStart) * 1000
-                } else {
-                    // Post-processing disabled or no API key — use raw transcript directly
-                    inFlightContextTask?.cancel()
-                    appContext = fallbackContextAtStop()
-                    contextDurationMs = 0
-                    postProcessingDurationMs = 0
-                    finalTranscript = rawTranscript
-                    postProcessingPrompt = ""
-                    if !capturedPostProcessingEnabled {
-                        os_log(.info, log: recordingLog, "post-processing disabled — using raw transcript")
-                        processingStatus = "Post-processing disabled"
-                        postProcessingReasoning = "Post-processing disabled by user"
-                    } else {
-                        os_log(.info, log: recordingLog, "no API key — skipping post-processing, using raw transcript")
-                        processingStatus = "Post-processing skipped (no API key)"
-                        postProcessingReasoning = "No API key configured"
-                    }
-                }
-
-                let totalDurationMs = (CFAbsoluteTimeGetCurrent() - pipelineStart) * 1000
-                os_log(.info, log: recordingLog, "post-processing took %.1fms, total pipeline %.1fms", postProcessingDurationMs, totalDurationMs)
-
-                await MainActor.run {
-                    self.lastContextSummary = appContext.contextSummary
-                    self.lastContextScreenshotDataURL = appContext.screenshotDataURL
-                    self.lastContextScreenshotStatus = appContext.screenshotError
-                        ?? "available (\(appContext.screenshotMimeType ?? "image"))"
-                    let trimmedRawTranscript = rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let trimmedFinalTranscript = finalTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-                    self.lastPostProcessingPrompt = postProcessingPrompt
-                    self.lastPostProcessingReasoning = postProcessingReasoning
-                    self.lastRawTranscript = trimmedRawTranscript
-                    self.lastPostProcessedTranscript = trimmedFinalTranscript
-                    self.lastPostProcessingStatus = processingStatus
-                    self.lastTranscript = trimmedFinalTranscript
-                    self.debugStatusMessage = "Done"
-
-                    os_log(.info, log: recordingLog, "finalTranscript: '%{public}@'", trimmedFinalTranscript)
-                    var pasteDurationMs: Double? = nil
-                    if trimmedFinalTranscript.isEmpty {
-                        os_log(.info, log: recordingLog, "transcript empty — dismissing")
-                        self.transition(to: .idle)
-                    } else {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(trimmedFinalTranscript, forType: .string)
-                        os_log(.info, log: recordingLog, "clipboard set, pasting")
-
-                        let pasteStart = CFAbsoluteTimeGetCurrent()
-                        self.pasteAtCursor()
-                        pasteDurationMs = (CFAbsoluteTimeGetCurrent() - pasteStart) * 1000
-                        os_log(.info, log: recordingLog, "pasteAtCursor() took %.1fms", pasteDurationMs ?? 0)
-
-                        self.transition(to: .pasting)
-                    }
-
-                    let processingDurationMs = (CFAbsoluteTimeGetCurrent() - pipelineStart) * 1000
-                    let finalTotalDurationMs = recordingDurationMs + processingDurationMs
-
-                    var metrics = PipelineMetrics()
-                    metrics.set("recording.durationMs", recordingDurationMs)
-                    metrics.set("recording.fileSizeBytes", Int(audioFileSizeBytes))
-                    metrics.set("transcription.durationMs", transcriptionDurationMs)
-                    metrics.set("transcription.provider", "local" as String)
-                    metrics.set("context.totalMs", appContext.totalCaptureDurationMs)
-                    metrics.set("context.resolutionMs", contextDurationMs)
-                    metrics.set("context.screenshotMs", appContext.screenshotDurationMs)
-                    metrics.set("context.llmMs", appContext.llmInferenceDurationMs)
-                    metrics.set("postProcessing.durationMs", postProcessingDurationMs)
-                    metrics.set("postProcessing.model", capturedPostProcessingModel)
-                    metrics.set("postProcessing.enabled", capturedPostProcessingEnabled)
-                    metrics.set("postProcessing.skipped", postProcessingService == nil)
-                    metrics.set("paste.durationMs", pasteDurationMs)
-                    metrics.set("pipeline.totalMs", finalTotalDurationMs)
-                    metrics.set("pipeline.processingMs", processingDurationMs)
-                    metrics.set("pipeline.outcome", trimmedFinalTranscript.isEmpty ? "empty" : "pasted" as String)
-                    metrics.set("screenshot.windowListMs", appContext.screenshotWindowListMs)
-                    metrics.set("screenshot.windowSearchMs", appContext.screenshotWindowSearchMs)
-                    metrics.set("screenshot.captureMs", appContext.screenshotCaptureMs)
-                    metrics.set("screenshot.scContentMs", appContext.screenshotScContentMs)
-                    metrics.set("screenshot.encodeMs", appContext.screenshotEncodeMs)
-                    metrics.set("screenshot.method", appContext.screenshotMethod)
-                    metrics.set("screenshot.width", appContext.screenshotImageWidth)
-                    metrics.set("screenshot.height", appContext.screenshotImageHeight)
-                    // Engine metrics from recording result
-                    metrics.set("engine.initMs", recordingResult.engineInitMs)
-                    metrics.set("engine.reused", recordingResult.engineReused)
-                    metrics.set("engine.warmedUp", recordingResult.engineWarmedUp)
-                    metrics.set("engine.startMs", recordingResult.engineStartMs)
-                    metrics.set("engine.inputSampleRate", recordingResult.inputSampleRate)
-                    metrics.set("engine.backend", recordingResult.engineBackend)
-                    metrics.set("engine.bufferCount", recordingResult.bufferCount)
-                    metrics.set("engine.firstTapCallbackMs", recordingResult.firstTapCallbackMs)
-                    metrics.set("engine.firstNonSilentBufferMs", recordingResult.firstNonSilentBufferMs)
-                    metrics.set("engine.firstBufferFrames", recordingResult.firstBufferFrames)
-                    metrics.set("engine.armedMs", recordingResult.armedMs)
-                    metrics.set("engine.fileReadyMs", recordingResult.fileReadyMs)
-                    // HAL metrics
-                    metrics.set("hal.bufferFrames", recordingResult.halBufferFrames)
-                    metrics.set("hal.bufferDurationMs", recordingResult.halBufferDurationMs)
-                    metrics.set("hal.minFrames", recordingResult.halMinFrames)
-                    metrics.set("hal.maxFrames", recordingResult.halMaxFrames)
-                    metrics.set("hal.bufferSetTo", recordingResult.halBufferSetTo)
-                    metrics.set("hal.bufferActual", recordingResult.halBufferActual)
-
-                    self.recordPipelineHistoryEntry(
-                        rawTranscript: trimmedRawTranscript,
-                        postProcessedTranscript: trimmedFinalTranscript,
-                        postProcessingPrompt: postProcessingPrompt,
-                        postProcessingReasoning: postProcessingReasoning,
-                        context: appContext,
-                        processingStatus: processingStatus,
-                        audioFileName: savedAudioFileName,
-                        metrics: metrics
-                    )
-
-                    self.audioRecorder.cleanup()
-                }
-            } catch {
-                os_log(.error, log: recordingLog, "PIPELINE ERROR: %{public}@", error.localizedDescription)
-                let resolvedContext: AppContext
-                if let sessionContext {
-                    resolvedContext = sessionContext
-                } else if let inFlightContext = await inFlightContextTask?.value {
-                    resolvedContext = inFlightContext
-                } else {
-                    resolvedContext = fallbackContextAtStop()
-                }
-                await MainActor.run {
-                    self.audioRecorder.cleanup()
-                    self.lastPostProcessedTranscript = ""
-                    self.lastRawTranscript = ""
-                    self.lastContextSummary = ""
-                    self.lastPostProcessingStatus = "Error: \(error.localizedDescription)"
-                    self.lastPostProcessingPrompt = ""
-                    self.lastPostProcessingReasoning = ""
-                    self.lastContextScreenshotDataURL = resolvedContext.screenshotDataURL
-                    self.lastContextScreenshotStatus = resolvedContext.screenshotError
-                        ?? "available (\(resolvedContext.screenshotMimeType ?? "image"))"
-                    var errorMetrics = PipelineMetrics()
-                    errorMetrics.set("recording.durationMs", recordingDurationMs)
-                    errorMetrics.set("recording.fileSizeBytes", Int(audioFileSizeBytes))
-                    errorMetrics.set("transcription.provider", "local" as String)
-                    errorMetrics.set("postProcessing.model", capturedPostProcessingModel)
-                    errorMetrics.set("pipeline.outcome", "error" as String)
-                    errorMetrics.set("screenshot.windowListMs", resolvedContext.screenshotWindowListMs)
-                    errorMetrics.set("screenshot.windowSearchMs", resolvedContext.screenshotWindowSearchMs)
-                    errorMetrics.set("screenshot.captureMs", resolvedContext.screenshotCaptureMs)
-                    errorMetrics.set("screenshot.scContentMs", resolvedContext.screenshotScContentMs)
-                    errorMetrics.set("screenshot.encodeMs", resolvedContext.screenshotEncodeMs)
-                    errorMetrics.set("screenshot.method", resolvedContext.screenshotMethod)
-                    errorMetrics.set("screenshot.width", resolvedContext.screenshotImageWidth)
-                    errorMetrics.set("screenshot.height", resolvedContext.screenshotImageHeight)
-                    errorMetrics.set("engine.initMs", recordingResult.engineInitMs)
-                    errorMetrics.set("engine.reused", recordingResult.engineReused)
-                    errorMetrics.set("engine.warmedUp", recordingResult.engineWarmedUp)
-                    errorMetrics.set("engine.startMs", recordingResult.engineStartMs)
-                    errorMetrics.set("engine.inputSampleRate", recordingResult.inputSampleRate)
-                    errorMetrics.set("engine.backend", recordingResult.engineBackend)
-                    errorMetrics.set("engine.bufferCount", recordingResult.bufferCount)
-                    errorMetrics.set("engine.firstTapCallbackMs", recordingResult.firstTapCallbackMs)
-                    errorMetrics.set("engine.firstNonSilentBufferMs", recordingResult.firstNonSilentBufferMs)
-                    errorMetrics.set("engine.firstBufferFrames", recordingResult.firstBufferFrames)
-                    errorMetrics.set("engine.armedMs", recordingResult.armedMs)
-                    errorMetrics.set("engine.fileReadyMs", recordingResult.fileReadyMs)
-                    errorMetrics.set("hal.bufferFrames", recordingResult.halBufferFrames)
-                    errorMetrics.set("hal.bufferDurationMs", recordingResult.halBufferDurationMs)
-                    errorMetrics.set("hal.minFrames", recordingResult.halMinFrames)
-                    errorMetrics.set("hal.maxFrames", recordingResult.halMaxFrames)
-                    errorMetrics.set("hal.bufferSetTo", recordingResult.halBufferSetTo)
-                    errorMetrics.set("hal.bufferActual", recordingResult.halBufferActual)
-                    self.recordPipelineHistoryEntry(
-                        rawTranscript: "",
-                        postProcessedTranscript: "",
-                        postProcessingPrompt: "",
-                        context: resolvedContext,
-                        processingStatus: "Error: \(error.localizedDescription)",
-                        audioFileName: savedAudioFileName,
-                        metrics: errorMetrics
-                    )
-                    self.transition(to: .error(message: error.localizedDescription))
                 }
             }
         }
@@ -1544,8 +1124,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
             hasShownScreenshotPermissionAlert = true
 
             // Permission errors are fatal — stop recording
-            _ = audioRecorder.stopRecording()
-            audioRecorder.cleanup()
+            _ = audioCapture.stopRecording()
+            audioCapture.cleanup()
             contextCaptureTask?.cancel()
             contextCaptureTask = nil
             capturedContext = nil
@@ -1624,15 +1204,4 @@ final class AppState: ObservableObject, @unchecked Sendable {
         NotificationCenter.default.post(name: .showSettings, object: nil)
     }
 
-    private func pasteAtCursor() {
-        let source = CGEventSource(stateID: .hidSystemState)
-
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
-        keyDown?.flags = .maskCommand
-        keyDown?.post(tap: .cgSessionEventTap)
-
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
-        keyUp?.flags = .maskCommand
-        keyUp?.post(tap: .cgSessionEventTap)
-    }
 }
