@@ -1,26 +1,24 @@
-<p align="center">
+<table align="center"><tr><td>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="Resources/logo-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset="Resources/logo-light.svg">
-    <img src="Resources/logo-light.svg" width="128" height="128" alt="Wrenflow icon">
+    <img src="Resources/logo-light.svg" width="96" height="96" alt="Wrenflow icon">
   </picture>
-</p>
-
-<h1 align="center">Wrenflow</h1>
-
-<p align="center">
-  Local-first speech-to-text for macOS.<br>
-  Hold a key, speak, release — text appears at your cursor.
-</p>
+</td><td>
+  <h1>Wrenflow</h1>
+  <p>Local-first speech-to-text.<br>Hold a key, speak, release — text appears at your cursor.</p>
+</td></tr></table>
 
 <p align="center">
-  <a href="https://github.com/IlyaGulya/wrenflow/releases/latest/download/Wrenflow.dmg"><b>Download Wrenflow.dmg</b></a><br>
-  <sub>macOS 14+ · Apple Silicon</sub>
+  <a href="https://github.com/IlyaGulya/wrenflow/releases/latest/download/Wrenflow.dmg"><b>Download for macOS</b></a><br>
+  <sub>macOS 14+ · Apple Silicon · Windows and Linux planned</sub>
 </p>
 
 ---
 
 Wrenflow is a free, open-source dictation app. A lightweight alternative to [Wispr Flow](https://wisprflow.ai/), [Superwhisper](https://superwhisper.com/), and [Monologue](https://www.monologue.to/).
+
+> **Note:** Currently tested on macOS only. The core is written in Rust for cross-platform support — Windows and Linux builds are in progress.
 
 All transcription runs on-device using [Parakeet TDT](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2). No cloud, no API key, nothing leaves your Mac.
 
