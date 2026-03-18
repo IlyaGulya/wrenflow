@@ -532,3 +532,70 @@ pub fn ffi_post_process(
         }),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Groq Models FFI
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiGroqModel {
+    pub id: String,
+    pub owned_by: String,
+}
+
+impl From<wrenflow_domain::models::GroqModel> for FfiGroqModel {
+    fn from(m: wrenflow_domain::models::GroqModel) -> Self {
+        Self {
+            id: m.id,
+            owned_by: m.owned_by,
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum FfiModelsError {
+    #[error("Empty API key")]
+    EmptyApiKey,
+    #[error("HTTP error: {message}")]
+    Http { message: String },
+    #[error("API error (status {status_code})")]
+    ApiError { status_code: u16 },
+}
+
+impl From<wrenflow_domain::models::ModelsError> for FfiModelsError {
+    fn from(e: wrenflow_domain::models::ModelsError) -> Self {
+        match e {
+            wrenflow_domain::models::ModelsError::EmptyApiKey => Self::EmptyApiKey,
+            wrenflow_domain::models::ModelsError::Http(msg) => Self::Http { message: msg },
+            wrenflow_domain::models::ModelsError::ApiError(code) => Self::ApiError { status_code: code },
+            wrenflow_domain::models::ModelsError::Json(e) => Self::Http { message: e.to_string() },
+        }
+    }
+}
+
+/// Fetch available Groq models via the Rust HTTP stack.
+///
+/// This is a blocking call that spawns a tokio runtime internally.
+/// Call from a background thread.
+#[uniffi::export]
+pub fn ffi_fetch_groq_models(api_key: String, base_url: String) -> Result<Vec<FfiGroqModel>, FfiModelsError> {
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| FfiModelsError::Http { message: format!("Failed to create runtime: {e}") })?;
+
+    rt.block_on(async {
+        let effective_base_url = if base_url.trim().is_empty() {
+            wrenflow_core::http_client::GROQ_BASE_URL
+        } else {
+            base_url.trim()
+        };
+
+        let client = wrenflow_core::http_client::build_client()
+            .map_err(|e| FfiModelsError::Http { message: format!("{e}") })?;
+
+        let models = wrenflow_core::models_infra::fetch_models(&client, api_key.trim(), effective_base_url)
+            .await
+            .map_err(FfiModelsError::from)?;
+
+        Ok(models.into_iter().map(FfiGroqModel::from).collect())
+    })
+}
