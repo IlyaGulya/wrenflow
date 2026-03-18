@@ -8,14 +8,14 @@
 
 <p align="center">
   <a href="https://github.com/IlyaGulya/wrenflow/releases/latest/download/Wrenflow.dmg"><b>Download for macOS</b></a><br>
-  <sub>macOS 14+ · Apple Silicon · Windows and Linux planned</sub>
+  <sub>macOS 14+ · Apple Silicon</sub>
 </p>
 
 ---
 
 Wrenflow is a free, open-source dictation app. A lightweight alternative to [Wispr Flow](https://wisprflow.ai/), [Superwhisper](https://superwhisper.com/), and [Monologue](https://www.monologue.to/).
 
-> **Note:** Currently tested on macOS only. The core is written in Rust for cross-platform support — Windows and Linux builds are in progress.
+> **Platform support:** macOS only for now. The core is written in Rust — Windows, Linux, iOS, and Android are planned.
 
 All transcription runs on-device using [Parakeet TDT](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2). No cloud, no API key, nothing leaves your Mac.
 
