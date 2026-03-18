@@ -1,13 +1,10 @@
-<table align="center"><tr><td>
+<p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="Resources/logo-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="Resources/logo-light.svg">
-    <img src="Resources/logo-light.svg" width="96" height="96" alt="Wrenflow icon">
+    <source media="(prefers-color-scheme: dark)" srcset="Resources/readme-header-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="Resources/readme-header-light.svg">
+    <img src="Resources/readme-header-light.svg" width="600" alt="Wrenflow — Local-first speech-to-text">
   </picture>
-</td><td>
-  <h1>Wrenflow</h1>
-  <p>Local-first speech-to-text.<br>Hold a key, speak, release — text appears at your cursor.</p>
-</td></tr></table>
+</p>
 
 <p align="center">
   <a href="https://github.com/IlyaGulya/wrenflow/releases/latest/download/Wrenflow.dmg"><b>Download for macOS</b></a><br>
