@@ -94,8 +94,10 @@ struct SettingsView: View {
                 switch appState.selectedSettingsTab {
                 case .general, .none:
                     GeneralSettingsView()
-                case .prompts:
-                    PromptsSettingsView()
+                case .models:
+                    ModelsSettingsView()
+                case .aiCleanup:
+                    AICleanupSettingsView()
                 case .runLog:
                     RunLogView()
                 }
@@ -112,16 +114,8 @@ struct SettingsView: View {
 struct GeneralSettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.openURL) private var openURL
-    @State private var apiKeyInput: String = ""
-    @State private var apiBaseURLInput: String = ""
-    @State private var isValidatingKey = false
-    @State private var keyValidationError: String?
-    @State private var keyValidationSuccess = false
     @State private var customVocabularyInput: String = ""
     @State private var micPermissionGranted = false
-    @State private var availableModels: [GroqModel] = []
-    @State private var isFetchingModels = false
-    @State private var modelFetchFailed = false
     @StateObject private var githubCache = GitHubMetadataCache.shared
     @ObservedObject private var updateManager = UpdateManager.shared
     private let freeflowRepoURL = URL(string: "https://github.com/IlyaGulya/wrenflow")!
@@ -174,12 +168,14 @@ struct GeneralSettingsView: View {
                                 Image(systemName: "star.fill")
                                     .foregroundColor(Color(red: 0.85, green: 0.65, blue: 0.1))
                                     .font(.system(size: 9))
-                                if githubCache.isLoading {
-                                    ProgressView().scaleEffect(0.4)
-                                } else if let count = githubCache.starCount {
+                                if let count = githubCache.starCount {
                                     Text("\(count.formatted())")
                                         .font(WrenflowStyle.mono(11))
                                         .foregroundColor(WrenflowStyle.textSecondary)
+                                } else {
+                                    Text("···")
+                                        .font(WrenflowStyle.mono(11))
+                                        .foregroundColor(WrenflowStyle.textTertiary)
                                 }
                             }
                             .padding(.horizontal, 6)
@@ -203,40 +199,6 @@ struct GeneralSettingsView: View {
                             .buttonStyle(.plain)
                         }
 
-                        if !githubCache.recentStargazers.isEmpty {
-                            Rectangle()
-                                .fill(WrenflowStyle.border)
-                                .frame(height: 1)
-                            HStack(spacing: 6) {
-                                HStack(spacing: -5) {
-                                    ForEach(githubCache.recentStargazers) { star in
-                                        Button {
-                                            openURL(star.user.htmlUrl)
-                                        } label: {
-                                            AsyncImage(url: star.user.avatarThumbnailUrl) { phase in
-                                                switch phase {
-                                                case .success(let image):
-                                                    image.resizable().aspectRatio(contentMode: .fill)
-                                                default:
-                                                    WrenflowStyle.trackBg
-                                                }
-                                            }
-                                            .frame(width: 18, height: 18)
-                                            .clipShape(Circle())
-                                            .overlay(Circle().stroke(WrenflowStyle.surface, lineWidth: 1))
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-                                .clipped()
-                                Text("recently starred")
-                                    .font(WrenflowStyle.caption(11))
-                                    .foregroundColor(WrenflowStyle.textTertiary)
-                                    .fixedSize()
-                                Spacer()
-                            }
-                            .clipped()
-                        }
                     }
                     .padding(10)
                     .background(
@@ -258,27 +220,6 @@ struct GeneralSettingsView: View {
                 SettingsCard("Updates") {
                     updatesSection
                 }
-                SettingsCard("Transcription") {
-                    transcriptionProviderSection
-                }
-                if appState.selectedTranscriptionProvider == .local {
-                    SettingsCard("Local Transcription") {
-                        localTranscriptionSection
-                    }
-                }
-                SettingsCard("API Key") {
-                    apiKeySection
-                }
-                if !appState.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    SettingsCard("Post-Processing") {
-                        postProcessingSection
-                    }
-                    if appState.postProcessingEnabled {
-                        SettingsCard("Post-Processing Model") {
-                            postProcessingModelSection
-                        }
-                    }
-                }
                 SettingsCard("Push-to-Talk Key") {
                     hotkeySection
                 }
@@ -299,8 +240,6 @@ struct GeneralSettingsView: View {
         }
         .background(WrenflowStyle.bg)
         .onAppear {
-            apiKeyInput = appState.apiKey
-            apiBaseURLInput = appState.apiBaseURL
             customVocabularyInput = appState.customVocabulary
             checkMicPermission()
             appState.refreshLaunchAtLoginStatus()
@@ -461,312 +400,6 @@ struct GeneralSettingsView: View {
                 .padding(8)
                 .background(WrenflowStyle.text.opacity(0.04))
                 .cornerRadius(6)
-            }
-        }
-    }
-
-    // MARK: Transcription Provider
-
-    private var transcriptionProviderSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Picker("Provider", selection: $appState.selectedTranscriptionProvider) {
-                ForEach(TranscriptionProvider.allCases) { provider in
-                    Text(provider.displayName).tag(provider)
-                }
-            }
-            .pickerStyle(.segmented)
-            .controlSize(.small)
-
-            Text(appState.selectedTranscriptionProvider.subtitle)
-                .font(WrenflowStyle.caption(11))
-                .foregroundColor(WrenflowStyle.textTertiary)
-
-            if appState.selectedTranscriptionProvider == .groq
-                && appState.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.orange)
-                        .font(.system(size: 10))
-                    Text("No API key configured. Transcription will fall back to local.")
-                        .font(WrenflowStyle.caption(11))
-                        .foregroundColor(.orange)
-                }
-            }
-        }
-    }
-
-    // MARK: Local Transcription
-
-    private var localTranscriptionSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("On-device speech recognition using Parakeet TDT.")
-                .font(WrenflowStyle.caption(11))
-                .foregroundColor(WrenflowStyle.textTertiary)
-
-            switch appState.localTranscriptionService.state {
-            case .notLoaded:
-                HStack {
-                    Text("Model not downloaded")
-                        .font(WrenflowStyle.body(12))
-                        .foregroundColor(WrenflowStyle.textSecondary)
-                    Spacer()
-                    Button("Download") {
-                        appState.localTranscriptionService.initialize()
-                    }
-                    .font(WrenflowStyle.body(12))
-                }
-
-            case .downloading(let info):
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("Downloading...")
-                            .font(WrenflowStyle.body(12))
-                            .foregroundColor(WrenflowStyle.textSecondary)
-                        Spacer()
-                        Text(settingsDownloadStatus(info))
-                            .font(WrenflowStyle.mono(11))
-                            .foregroundColor(WrenflowStyle.textTertiary)
-                    }
-                    WrenflowProgressBar(progress: min(info.fraction, 1.0))
-                    Button("Cancel") {
-                        appState.localTranscriptionService.cancel()
-                    }
-                    .font(WrenflowStyle.body(11))
-                    .foregroundColor(WrenflowStyle.textSecondary)
-                }
-
-            case .compiling:
-                HStack(spacing: 6) {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(0.7)
-                    Text("Loading model...")
-                        .font(WrenflowStyle.body(12))
-                        .foregroundColor(WrenflowStyle.textSecondary)
-                }
-
-            case .ready:
-                HStack(spacing: 5) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(WrenflowStyle.green)
-                        .font(.system(size: 11))
-                    Text("Ready")
-                        .font(WrenflowStyle.body(12))
-                        .foregroundColor(WrenflowStyle.green)
-                }
-
-            case .error(let message):
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 5) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(WrenflowStyle.red)
-                            .font(.system(size: 11))
-                        Text(message)
-                            .font(WrenflowStyle.caption(11))
-                            .foregroundColor(WrenflowStyle.red)
-                            .lineLimit(2)
-                    }
-                    Button("Retry") {
-                        appState.localTranscriptionService.initialize()
-                    }
-                    .font(WrenflowStyle.body(11))
-                }
-            }
-        }
-    }
-
-    private func settingsDownloadStatus(_ info: DownloadProgressInfo) -> String {
-        let mbDown = Int(info.bytesDownloaded / 1_000_000)
-        if let total = info.totalBytes {
-            let mbTotal = Int(total / 1_000_000)
-            let pct = min(Int(info.fraction * 100), 100)
-            return "\(mbDown)/\(mbTotal) MB · \(pct)%"
-        } else if mbDown > 0 {
-            return "\(mbDown) MB"
-        }
-        return "0%"
-    }
-
-    // MARK: API Key
-
-    private var apiKeySection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Used for Groq transcription (when selected) and text cleanup (post-processing).")
-                .font(WrenflowStyle.caption(11))
-                .foregroundColor(WrenflowStyle.textTertiary)
-
-            HStack(spacing: 6) {
-                SecureField("Enter your Groq API key", text: $apiKeyInput)
-                    .textFieldStyle(.roundedBorder)
-                    .font(WrenflowStyle.mono(12))
-                    .controlSize(.small)
-                    .disabled(isValidatingKey)
-                    .onChange(of: apiKeyInput) { _ in
-                        keyValidationError = nil
-                        keyValidationSuccess = false
-                    }
-
-                Button(isValidatingKey ? "Validating..." : "Save") {
-                    validateAndSaveKey()
-                }
-                .font(WrenflowStyle.body(12))
-                .controlSize(.small)
-                .disabled(apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isValidatingKey)
-            }
-
-            if let error = keyValidationError {
-                HStack(spacing: 4) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 10))
-                    Text(error)
-                        .font(WrenflowStyle.caption(11))
-                }
-                .foregroundColor(WrenflowStyle.red)
-            } else if keyValidationSuccess {
-                HStack(spacing: 4) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 10))
-                    Text("API key saved")
-                        .font(WrenflowStyle.caption(11))
-                }
-                .foregroundColor(WrenflowStyle.green)
-            }
-
-            Rectangle()
-                .fill(WrenflowStyle.border)
-                .frame(height: 1)
-
-            Text("API Base URL")
-                .font(WrenflowStyle.body(12))
-                .foregroundColor(WrenflowStyle.text)
-
-            Text("Change this to use a different OpenAI-compatible API provider.")
-                .font(WrenflowStyle.caption(11))
-                .foregroundColor(WrenflowStyle.textTertiary)
-
-            HStack(spacing: 6) {
-                TextField("https://api.groq.com/openai/v1", text: $apiBaseURLInput)
-                    .textFieldStyle(.roundedBorder)
-                    .font(WrenflowStyle.mono(12))
-                    .controlSize(.small)
-                    .onChange(of: apiBaseURLInput) { newValue in
-                        let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !trimmed.isEmpty {
-                            appState.apiBaseURL = trimmed
-                        }
-                    }
-
-                Button("Reset to Default") {
-                    apiBaseURLInput = "https://api.groq.com/openai/v1"
-                    appState.apiBaseURL = "https://api.groq.com/openai/v1"
-                }
-                .font(WrenflowStyle.body(11))
-                .controlSize(.small)
-            }
-        }
-    }
-
-    private func validateAndSaveKey() {
-        let key = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        let baseURL = apiBaseURLInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        isValidatingKey = true
-        keyValidationError = nil
-        keyValidationSuccess = false
-
-        Task {
-            let valid = await PostProcessingService.validateAPIKey(key, baseURL: baseURL.isEmpty ? "https://api.groq.com/openai/v1" : baseURL)
-            await MainActor.run {
-                isValidatingKey = false
-                if valid {
-                    appState.apiKey = key
-                    keyValidationSuccess = true
-                } else {
-                    keyValidationError = "Invalid API key. Please check and try again."
-                }
-            }
-        }
-    }
-
-    // MARK: Post-Processing
-
-    private var postProcessingSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Toggle("Enable LLM post-processing", isOn: $appState.postProcessingEnabled)
-                .font(WrenflowStyle.body(13))
-                .foregroundColor(WrenflowStyle.text)
-                .toggleStyle(.switch)
-                .controlSize(.small)
-            Text("When enabled, an LLM cleans up transcriptions using screen context. When disabled, raw transcription is pasted directly.")
-                .font(WrenflowStyle.caption(11))
-                .foregroundColor(WrenflowStyle.textTertiary)
-        }
-    }
-
-    // MARK: Post-Processing Model
-
-    private var postProcessingModelSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("The LLM used to clean up raw transcriptions.")
-                .font(WrenflowStyle.caption(11))
-                .foregroundColor(WrenflowStyle.textTertiary)
-
-            if isFetchingModels {
-                HStack(spacing: 5) {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(0.7)
-                    Text("Loading models...")
-                        .font(WrenflowStyle.body(12))
-                        .foregroundColor(WrenflowStyle.textSecondary)
-                }
-            } else if !availableModels.isEmpty {
-                Picker("Model", selection: $appState.postProcessingModel) {
-                    ForEach(availableModels) { model in
-                        Text(model.id).tag(model.id)
-                    }
-                }
-                .labelsHidden()
-                .controlSize(.small)
-            } else {
-                HStack(spacing: 6) {
-                    TextField("Model ID", text: $appState.postProcessingModel)
-                        .textFieldStyle(.roundedBorder)
-                        .font(WrenflowStyle.mono(12))
-                        .controlSize(.small)
-
-                    Button("Fetch Models") {
-                        fetchModels()
-                    }
-                    .font(WrenflowStyle.body(11))
-                    .controlSize(.small)
-                }
-
-                if modelFetchFailed {
-                    Text("Could not load model list. You can type a model ID manually.")
-                        .font(WrenflowStyle.caption(11))
-                        .foregroundColor(WrenflowStyle.textTertiary)
-                }
-            }
-        }
-        .onAppear {
-            if availableModels.isEmpty && !appState.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                fetchModels()
-            }
-        }
-    }
-
-    private func fetchModels() {
-        isFetchingModels = true
-        modelFetchFailed = false
-        Task {
-            let models = await GroqModelsService.fetchModels(apiKey: appState.apiKey, baseURL: appState.apiBaseURL)
-            await MainActor.run {
-                isFetchingModels = false
-                if models.isEmpty {
-                    modelFetchFailed = true
-                } else {
-                    availableModels = models
-                }
             }
         }
     }
@@ -980,6 +613,34 @@ struct GeneralSettingsView: View {
 
 }
 
+// MARK: - Hotkey Option Row
+
+struct HotkeyOptionRow: View {
+    let option: HotkeyOption
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isSelected ? .blue : .secondary)
+                Text(option.displayName)
+                    .foregroundStyle(.primary)
+                Spacer()
+            }
+            .padding(12)
+            .background(isSelected ? Color.blue.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 1.5)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 // MARK: - Microphone Option Row
 
 struct MicrophoneOptionRow: View {
@@ -1010,10 +671,126 @@ struct MicrophoneOptionRow: View {
     }
 }
 
-// MARK: - Prompts Settings
+// MARK: - Models Settings
 
-struct PromptsSettingsView: View {
+struct ModelsSettingsView: View {
     @EnvironmentObject var appState: AppState
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                SettingsCard("Local Transcription") {
+                    localTranscriptionSection
+                }
+            }
+            .padding(16)
+        }
+        .background(WrenflowStyle.bg)
+    }
+
+    private var localTranscriptionSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("On-device speech recognition using Parakeet TDT.")
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
+
+            switch appState.localTranscriptionService.state {
+            case .notLoaded:
+                HStack {
+                    Text("Model not downloaded")
+                        .font(WrenflowStyle.body(12))
+                        .foregroundColor(WrenflowStyle.textSecondary)
+                    Spacer()
+                    Button("Download") {
+                        appState.localTranscriptionService.initialize()
+                    }
+                    .font(WrenflowStyle.body(12))
+                }
+
+            case .downloading(let info):
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Downloading...")
+                            .font(WrenflowStyle.body(12))
+                            .foregroundColor(WrenflowStyle.textSecondary)
+                        Spacer()
+                        Text(settingsDownloadStatus(info))
+                            .font(WrenflowStyle.mono(11))
+                            .foregroundColor(WrenflowStyle.textTertiary)
+                    }
+                    WrenflowProgressBar(progress: min(info.fraction, 1.0))
+                    Button("Cancel") {
+                        appState.localTranscriptionService.cancel()
+                    }
+                    .font(WrenflowStyle.body(11))
+                    .foregroundColor(WrenflowStyle.textSecondary)
+                }
+
+            case .compiling:
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.7)
+                    Text("Loading model...")
+                        .font(WrenflowStyle.body(12))
+                        .foregroundColor(WrenflowStyle.textSecondary)
+                }
+
+            case .ready:
+                HStack(spacing: 5) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(WrenflowStyle.green)
+                        .font(.system(size: 11))
+                    Text("Ready")
+                        .font(WrenflowStyle.body(12))
+                        .foregroundColor(WrenflowStyle.green)
+                }
+
+            case .error(let message):
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(WrenflowStyle.red)
+                            .font(.system(size: 11))
+                        Text(message)
+                            .font(WrenflowStyle.caption(11))
+                            .foregroundColor(WrenflowStyle.red)
+                            .lineLimit(2)
+                    }
+                    Button("Retry") {
+                        appState.localTranscriptionService.initialize()
+                    }
+                    .font(WrenflowStyle.body(11))
+                }
+            }
+        }
+    }
+
+    private func settingsDownloadStatus(_ info: DownloadProgressInfo) -> String {
+        let mbDown = Int(info.bytesDownloaded / 1_000_000)
+        if let total = info.totalBytes {
+            let mbTotal = Int(total / 1_000_000)
+            let pct = min(Int(info.fraction * 100), 100)
+            return "\(mbDown)/\(mbTotal) MB · \(pct)%"
+        } else if mbDown > 0 {
+            return "\(mbDown) MB"
+        }
+        return "0%"
+    }
+}
+
+// MARK: - AI Cleanup Settings
+
+struct AICleanupSettingsView: View {
+    @EnvironmentObject var appState: AppState
+    @State private var apiKeyInput: String = ""
+    @State private var apiBaseURLInput: String = ""
+    @State private var isValidatingKey = false
+    @State private var keyValidationError: String?
+    @State private var keyValidationSuccess = false
+    @State private var availableModels: [GroqModel] = []
+    @State private var isFetchingModels = false
+    @State private var modelFetchFailed = false
     @State private var customSystemPromptInput: String = ""
     @State private var customContextPromptInput: String = ""
     @State private var showDefaultSystemPrompt = false
@@ -1035,6 +812,17 @@ struct PromptsSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
+                SettingsCard("AI Cleanup") {
+                    postProcessingToggleSection
+                }
+                SettingsCard("API Key") {
+                    apiKeySection
+                }
+                if !appState.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && appState.postProcessingEnabled {
+                    SettingsCard("Post-Processing Model") {
+                        postProcessingModelSection
+                    }
+                }
                 SettingsCard("System Prompt") {
                     systemPromptSection
                 }
@@ -1046,12 +834,198 @@ struct PromptsSettingsView: View {
         }
         .background(WrenflowStyle.bg)
         .onAppear {
+            apiKeyInput = appState.apiKey
+            apiBaseURLInput = appState.apiBaseURL
             customSystemPromptInput = appState.customSystemPrompt.isEmpty
                 ? PostProcessingService.defaultSystemPrompt
                 : appState.customSystemPrompt
             customContextPromptInput = appState.customContextPrompt.isEmpty
                 ? AppContextService.defaultContextPrompt
                 : appState.customContextPrompt
+        }
+    }
+
+    // MARK: Toggle
+
+    private var postProcessingToggleSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Enable LLM post-processing", isOn: $appState.postProcessingEnabled)
+                .font(WrenflowStyle.body(13))
+                .foregroundColor(WrenflowStyle.text)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            Text("When enabled, an LLM cleans up transcriptions using screen context. When disabled, raw transcription is pasted directly.")
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
+        }
+    }
+
+    // MARK: API Key
+
+    private var apiKeySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Used for LLM post-processing (text cleanup).")
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
+
+            HStack(spacing: 6) {
+                SecureField("Enter your API key", text: $apiKeyInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(WrenflowStyle.mono(12))
+                    .controlSize(.small)
+                    .disabled(isValidatingKey)
+                    .onChange(of: apiKeyInput) { _ in
+                        keyValidationError = nil
+                        keyValidationSuccess = false
+                    }
+
+                Button(isValidatingKey ? "Validating..." : "Save") {
+                    validateAndSaveKey()
+                }
+                .font(WrenflowStyle.body(12))
+                .controlSize(.small)
+                .disabled(apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isValidatingKey)
+            }
+
+            if let error = keyValidationError {
+                HStack(spacing: 4) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 10))
+                    Text(error)
+                        .font(WrenflowStyle.caption(11))
+                }
+                .foregroundColor(WrenflowStyle.red)
+            } else if keyValidationSuccess {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 10))
+                    Text("API key saved")
+                        .font(WrenflowStyle.caption(11))
+                }
+                .foregroundColor(WrenflowStyle.green)
+            }
+
+            Rectangle()
+                .fill(WrenflowStyle.border)
+                .frame(height: 1)
+
+            Text("API Base URL")
+                .font(WrenflowStyle.body(12))
+                .foregroundColor(WrenflowStyle.text)
+
+            Text("Change this to use a different OpenAI-compatible API provider.")
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
+
+            HStack(spacing: 6) {
+                TextField("https://api.groq.com/openai/v1", text: $apiBaseURLInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(WrenflowStyle.mono(12))
+                    .controlSize(.small)
+                    .onChange(of: apiBaseURLInput) { newValue in
+                        let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty {
+                            appState.apiBaseURL = trimmed
+                        }
+                    }
+
+                Button("Reset to Default") {
+                    apiBaseURLInput = "https://api.groq.com/openai/v1"
+                    appState.apiBaseURL = "https://api.groq.com/openai/v1"
+                }
+                .font(WrenflowStyle.body(11))
+                .controlSize(.small)
+            }
+        }
+    }
+
+    private func validateAndSaveKey() {
+        let key = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseURL = apiBaseURLInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        isValidatingKey = true
+        keyValidationError = nil
+        keyValidationSuccess = false
+
+        Task {
+            let valid = await PostProcessingService.validateAPIKey(key, baseURL: baseURL.isEmpty ? "https://api.groq.com/openai/v1" : baseURL)
+            await MainActor.run {
+                isValidatingKey = false
+                if valid {
+                    appState.apiKey = key
+                    keyValidationSuccess = true
+                } else {
+                    keyValidationError = "Invalid API key. Please check and try again."
+                }
+            }
+        }
+    }
+
+    // MARK: Post-Processing Model
+
+    private var postProcessingModelSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("The LLM used to clean up raw transcriptions.")
+                .font(WrenflowStyle.caption(11))
+                .foregroundColor(WrenflowStyle.textTertiary)
+
+            if isFetchingModels {
+                HStack(spacing: 5) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.7)
+                    Text("Loading models...")
+                        .font(WrenflowStyle.body(12))
+                        .foregroundColor(WrenflowStyle.textSecondary)
+                }
+            } else if !availableModels.isEmpty {
+                Picker("Model", selection: $appState.postProcessingModel) {
+                    ForEach(availableModels) { model in
+                        Text(model.id).tag(model.id)
+                    }
+                }
+                .labelsHidden()
+                .controlSize(.small)
+            } else {
+                HStack(spacing: 6) {
+                    TextField("Model ID", text: $appState.postProcessingModel)
+                        .textFieldStyle(.roundedBorder)
+                        .font(WrenflowStyle.mono(12))
+                        .controlSize(.small)
+
+                    Button("Fetch Models") {
+                        fetchModels()
+                    }
+                    .font(WrenflowStyle.body(11))
+                    .controlSize(.small)
+                }
+
+                if modelFetchFailed {
+                    Text("Could not load model list. You can type a model ID manually.")
+                        .font(WrenflowStyle.caption(11))
+                        .foregroundColor(WrenflowStyle.textTertiary)
+                }
+            }
+        }
+        .onAppear {
+            if availableModels.isEmpty && !appState.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                fetchModels()
+            }
+        }
+    }
+
+    private func fetchModels() {
+        isFetchingModels = true
+        modelFetchFailed = false
+        Task {
+            let models = await GroqModelsService.fetchModels(apiKey: appState.apiKey, baseURL: appState.apiBaseURL)
+            await MainActor.run {
+                isFetchingModels = false
+                if models.isEmpty {
+                    modelFetchFailed = true
+                } else {
+                    availableModels = models
+                }
+            }
         }
     }
 
@@ -1535,7 +1509,98 @@ struct PromptsSettingsView: View {
             }
         }
     }
+}
 
+// MARK: - GitHub Metadata
+
+struct GitHubRepoInfo: Decodable {
+    let stargazersCount: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case stargazersCount = "stargazers_count"
+    }
+}
+
+struct GitHubStarRecord: Decodable, Identifiable {
+    let user: GitHubStarUser
+
+    var id: Int {
+        user.id
+    }
+}
+
+struct GitHubStarUser: Decodable {
+    let id: Int
+    let login: String
+    let avatarUrl: URL
+    let htmlUrl: URL
+
+    /// Avatar URL resized to 44px (2x for 22pt display) for efficient loading
+    var avatarThumbnailUrl: URL {
+        let separator = avatarUrl.absoluteString.contains("?") ? "&" : "?"
+        return URL(string: avatarUrl.absoluteString + "\(separator)s=44") ?? avatarUrl
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case login
+        case avatarUrl = "avatar_url"
+        case htmlUrl = "html_url"
+    }
+}
+
+@MainActor
+class GitHubMetadataCache: ObservableObject {
+    static let shared = GitHubMetadataCache()
+
+    @Published var starCount: Int?
+    @Published var recentStargazers: [GitHubStarRecord] = []
+    @Published var isLoading = true
+
+    private var lastFetchDate: Date?
+    private let cacheDuration: TimeInterval = 5 * 60 // 5 minutes
+    private let repoAPIURL = URL(string: "https://api.github.com/repos/IlyaGulya/wrenflow")!
+
+    private init() {}
+
+    func fetchIfNeeded() async {
+        if let lastFetch = lastFetchDate, Date().timeIntervalSince(lastFetch) < cacheDuration {
+            return
+        }
+
+        isLoading = true
+
+        do {
+            let repoResult = try await URLSession.shared.data(from: repoAPIURL)
+            guard let repoHTTP = repoResult.1 as? HTTPURLResponse,
+                  (200..<300).contains(repoHTTP.statusCode) else {
+                throw URLError(.badServerResponse)
+            }
+            let count = try JSONDecoder().decode(GitHubRepoInfo.self, from: repoResult.0).stargazersCount
+
+            var recent: [GitHubStarRecord] = []
+            if count > 0 {
+                let perPage = 100
+                let lastPage = max(1, Int(ceil(Double(count) / Double(perPage))))
+                let stargazersURL = URL(string: "https://api.github.com/repos/IlyaGulya/wrenflow/stargazers?per_page=\(perPage)&page=\(lastPage)")!
+                var request = URLRequest(url: stargazersURL)
+                request.setValue("application/vnd.github.v3.star+json", forHTTPHeaderField: "Accept")
+                let starredResult = try await URLSession.shared.data(for: request)
+                if let starredHTTP = starredResult.1 as? HTTPURLResponse,
+                   (200..<300).contains(starredHTTP.statusCode) {
+                    let all = try JSONDecoder().decode([GitHubStarRecord].self, from: starredResult.0)
+                    recent = Array(all.suffix(15).reversed())
+                }
+            }
+
+            starCount = count
+            recentStargazers = recent
+            isLoading = false
+            lastFetchDate = Date()
+        } catch {
+            isLoading = false
+        }
+    }
 }
 
 // MARK: - Run Log

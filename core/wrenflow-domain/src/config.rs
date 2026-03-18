@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 /// All user-configurable settings. Pure data, no IO.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    pub transcription_provider: String,
     pub post_processing_enabled: bool,
     pub post_processing_model: String,
     pub api_base_url: String,
@@ -23,7 +22,6 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            transcription_provider: "local".to_string(),
             post_processing_enabled: false,
             post_processing_model: "meta-llama/llama-4-scout-17b-16e-instruct".to_string(),
             api_base_url: "https://api.groq.com/openai/v1".to_string(),

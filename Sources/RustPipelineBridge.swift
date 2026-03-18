@@ -276,7 +276,6 @@ final class RustPipelineBridge {
 
     private static func makeConfig(from appState: AppState) -> AppConfig {
         return AppConfig(
-            transcriptionProvider: appState.selectedTranscriptionProvider.rawValue,
             postProcessingEnabled: appState.postProcessingEnabled,
             postProcessingModel: appState.postProcessingModel,
             apiBaseUrl: appState.apiBaseURL,

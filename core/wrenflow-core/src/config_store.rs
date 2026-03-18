@@ -89,7 +89,6 @@ mod tests {
         let config = AppConfig::default();
         store.save(&config).unwrap();
         let loaded = store.load().unwrap();
-        assert_eq!(loaded.transcription_provider, "local");
         assert!(!loaded.post_processing_enabled);
         assert!(loaded.sound_enabled);
     }

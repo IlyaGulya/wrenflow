@@ -17,7 +17,6 @@ pub mod config_store;
 pub mod history_store;
 pub mod models_infra;
 pub mod post_processing_infra;
-pub mod transcription_cloud;
 pub mod transcription_local;
 
 // Convenience re-exports for backward compatibility

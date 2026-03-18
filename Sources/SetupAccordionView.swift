@@ -8,9 +8,7 @@ struct SetupAccordionView: View {
     @EnvironmentObject var appState: AppState
 
     private enum SetupStep: Int, CaseIterable, Identifiable {
-        case transcriptionProvider = 0
-        case apiKey
-        case micPermission
+        case micPermission = 0
         case accessibility
         case screenRecording
         case hotkey
@@ -22,8 +20,6 @@ struct SetupAccordionView: View {
 
         var label: String {
             switch self {
-            case .transcriptionProvider: return "Transcription"
-            case .apiKey: return "API Key"
             case .micPermission: return "Microphone"
             case .accessibility: return "Accessibility"
             case .screenRecording: return "Screen Recording"
@@ -36,8 +32,6 @@ struct SetupAccordionView: View {
 
         var icon: String {
             switch self {
-            case .transcriptionProvider: return "waveform"
-            case .apiKey: return "key.fill"
             case .micPermission: return "mic.fill"
             case .accessibility: return "hand.raised.fill"
             case .screenRecording: return "camera.viewfinder"
@@ -50,7 +44,7 @@ struct SetupAccordionView: View {
 
         var skippable: Bool {
             switch self {
-            case .apiKey, .vocabulary, .screenRecording, .testTranscription: return true
+            case .vocabulary, .screenRecording, .testTranscription: return true
             default: return false
             }
         }
@@ -60,9 +54,6 @@ struct SetupAccordionView: View {
     @State private var skippedSteps: Set<SetupStep> = []
     @State private var micPermissionGranted = false
     @State private var accessibilityGranted = false
-    @State private var apiKeyInput = ""
-    @State private var isValidatingKey = false
-    @State private var keyValidationError: String?
     @State private var customVocabularyInput = ""
     @State private var accessibilityTimer: Timer?
     @State private var screenRecordingTimer: Timer?
@@ -76,14 +67,9 @@ struct SetupAccordionView: View {
 
     private var steps: [SetupStep] {
         SetupStep.allCases.filter { step in
-            // Only show API key step for Groq provider
-            if step == .apiKey && appState.selectedTranscriptionProvider != .groq {
-                return false
-            }
             // Only show screen recording when an API key is available (needed for post-processing)
             if step == .screenRecording {
-                let hasKey = !apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || !appState.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                let hasKey = !appState.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 if !hasKey { return false }
             }
             return true
@@ -101,8 +87,6 @@ struct SetupAccordionView: View {
             return micPermissionGranted
         case .accessibility:
             return accessibilityGranted
-        case .apiKey:
-            return !isValidatingKey
         default:
             return true
         }
@@ -271,12 +255,13 @@ struct SetupAccordionView: View {
         }
         .frame(width: 460, height: 540)
         .onAppear {
-            apiKeyInput = appState.apiKey
             customVocabularyInput = appState.customVocabulary
             checkMicPermission()
             accessibilityGranted = AXIsProcessTrusted()
             // Permission polling is handled by appState.permissionState
             appState.startAccessibilityPolling()
+            // Always initialize local transcription early in setup
+            appState.localTranscriptionService.initialize()
         }
         .onDisappear {
             accessibilityTimer?.invalidate()
@@ -286,10 +271,6 @@ struct SetupAccordionView: View {
             // Don't call stopTestHotkeyMonitoring() here — completeSetup()
             // already called startHotkeyMonitoring() which we must not override.
             // The test step's own onDisappear handles cleanup when navigating away.
-        }
-        .onChange(of: appState.selectedTranscriptionProvider) { _ in
-            // When provider changes, clamp activeStep so it doesn't point past the new steps array
-            clampActiveStep()
         }
     }
 
@@ -335,8 +316,6 @@ struct SetupAccordionView: View {
     @ViewBuilder
     private func stepContent(for step: SetupStep) -> some View {
         switch step {
-        case .transcriptionProvider: transcriptionContent
-        case .apiKey: apiKeyContent
         case .micPermission: micPermissionContent
         case .accessibility: accessibilityContent
         case .screenRecording: screenRecordingContent
@@ -344,61 +323,6 @@ struct SetupAccordionView: View {
         case .vocabulary: vocabularyContent
         case .launchAtLogin: launchAtLoginContent
         case .testTranscription: testTranscriptionContent
-        }
-    }
-
-    // MARK: - Transcription
-
-    private var transcriptionContent: some View {
-        VStack(spacing: 6) {
-            providerOption(.local, icon: "desktopcomputer", title: "Local (Parakeet)", subtitle: "On-device. No internet needed.")
-            providerOption(.groq, icon: "cloud", title: "Groq (Whisper)", subtitle: "Fast cloud transcription. Requires key.")
-        }
-    }
-
-    private func providerOption(_ provider: TranscriptionProvider, icon: String, title: String, subtitle: String) -> some View {
-        let on = appState.selectedTranscriptionProvider == provider
-        return Button { appState.selectedTranscriptionProvider = provider } label: {
-            HStack(spacing: 8) {
-                Image(systemName: on ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(on ? Color.accentColor : Color.secondary.opacity(0.3))
-                    .font(.system(size: 14))
-                Image(systemName: icon)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 16)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title).font(.system(size: 12, weight: .medium))
-                    Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-            .padding(8)
-            .background(on ? Color.accentColor.opacity(0.06) : Color(nsColor: .controlBackgroundColor).opacity(0.4))
-            .cornerRadius(6)
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(on ? Color.accentColor.opacity(0.2) : Color.clear, lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: - API Key
-
-    private var apiKeyContent: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Required for Groq cloud transcription. Also enables post-processing.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-
-            SecureField("gsk_...", text: $apiKeyInput)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12, design: .monospaced))
-                .disabled(isValidatingKey)
-                .onChange(of: apiKeyInput) { _ in keyValidationError = nil }
-
-            if let error = keyValidationError {
-                Label(error, systemImage: "xmark.circle.fill")
-                    .font(.system(size: 11)).foregroundStyle(.red)
-            }
         }
     }
 
@@ -558,27 +482,9 @@ struct SetupAccordionView: View {
 
     // MARK: - Navigation
 
-    /// Clamp activeStep to be valid for the current steps array.
-    /// Called when provider changes, which can add/remove the API key step.
-    private func clampActiveStep() {
-        if activeStep > steps.count {
-            activeStep = steps.count
-        }
-    }
-
     private func advanceFrom(_ index: Int) {
         let step = steps[index]
         switch step {
-        case .apiKey:
-            let key = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !key.isEmpty && !isValidatingKey {
-                validateAndContinue(from: index)
-                return
-            }
-        case .transcriptionProvider:
-            if appState.selectedTranscriptionProvider == .local {
-                appState.localTranscriptionService.initialize()
-            }
         case .vocabulary:
             appState.customVocabulary = customVocabularyInput.trimmingCharacters(in: .whitespacesAndNewlines)
         case .testTranscription:
@@ -587,25 +493,6 @@ struct SetupAccordionView: View {
         }
 
         goNext(from: index)
-    }
-
-    private func validateAndContinue(from index: Int) {
-        let key = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { goNext(from: index); return }
-        isValidatingKey = true
-        keyValidationError = nil
-        Task {
-            let valid = await PostProcessingService.validateAPIKey(key, baseURL: appState.apiBaseURL)
-            await MainActor.run {
-                isValidatingKey = false
-                if valid {
-                    appState.apiKey = key
-                    goNext(from: index)
-                } else {
-                    keyValidationError = "Invalid API key."
-                }
-            }
-        }
     }
 
     private func goNext(from index: Int) {

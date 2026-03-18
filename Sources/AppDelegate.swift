@@ -40,10 +40,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // - Screen Recording: checked when post-processing needs a screenshot
 
             // Only show download dialog if model actually needs downloading
-            if appState.selectedTranscriptionProvider == .local {
-                if case .downloading = appState.localTranscriptionService.state {
-                    showModelDownloadWindow()
-                }
+            if case .downloading = appState.localTranscriptionService.state {
+                showModelDownloadWindow()
             }
         }
 

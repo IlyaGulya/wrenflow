@@ -66,7 +66,6 @@ pub struct HistoryEntry {
 
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct AppConfig {
-    pub transcription_provider: String,
     pub post_processing_enabled: bool,
     pub post_processing_model: String,
     pub api_base_url: String,
@@ -124,7 +123,7 @@ impl From<PostProcessingResult> for core::PostProcessingResult {
 
 impl From<AppConfig> for wrenflow_core::config::AppConfig {
     fn from(c: AppConfig) -> Self {
-        Self { transcription_provider: c.transcription_provider, post_processing_enabled: c.post_processing_enabled, post_processing_model: c.post_processing_model, api_base_url: c.api_base_url, minimum_recording_duration_ms: c.minimum_recording_duration_ms, custom_vocabulary: c.custom_vocabulary, custom_system_prompt: c.custom_system_prompt, custom_context_prompt: c.custom_context_prompt, selected_hotkey: c.selected_hotkey, selected_microphone_id: c.selected_microphone_id, sound_enabled: c.sound_enabled }
+        Self { post_processing_enabled: c.post_processing_enabled, post_processing_model: c.post_processing_model, api_base_url: c.api_base_url, minimum_recording_duration_ms: c.minimum_recording_duration_ms, custom_vocabulary: c.custom_vocabulary, custom_system_prompt: c.custom_system_prompt, custom_context_prompt: c.custom_context_prompt, selected_hotkey: c.selected_hotkey, selected_microphone_id: c.selected_microphone_id, sound_enabled: c.sound_enabled }
     }
 }
 

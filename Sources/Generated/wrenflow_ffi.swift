@@ -954,7 +954,6 @@ public func FfiConverterTypeFfiPipelineEngine_lower(_ value: FfiPipelineEngine) 
 
 
 public struct AppConfig {
-    public var transcriptionProvider: String
     public var postProcessingEnabled: Bool
     public var postProcessingModel: String
     public var apiBaseUrl: String
@@ -968,8 +967,7 @@ public struct AppConfig {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(transcriptionProvider: String, postProcessingEnabled: Bool, postProcessingModel: String, apiBaseUrl: String, minimumRecordingDurationMs: Double, customVocabulary: String, customSystemPrompt: String, customContextPrompt: String, selectedHotkey: String, selectedMicrophoneId: String, soundEnabled: Bool) {
-        self.transcriptionProvider = transcriptionProvider
+    public init(postProcessingEnabled: Bool, postProcessingModel: String, apiBaseUrl: String, minimumRecordingDurationMs: Double, customVocabulary: String, customSystemPrompt: String, customContextPrompt: String, selectedHotkey: String, selectedMicrophoneId: String, soundEnabled: Bool) {
         self.postProcessingEnabled = postProcessingEnabled
         self.postProcessingModel = postProcessingModel
         self.apiBaseUrl = apiBaseUrl
@@ -990,9 +988,6 @@ extension AppConfig: Sendable {}
 
 extension AppConfig: Equatable, Hashable {
     public static func ==(lhs: AppConfig, rhs: AppConfig) -> Bool {
-        if lhs.transcriptionProvider != rhs.transcriptionProvider {
-            return false
-        }
         if lhs.postProcessingEnabled != rhs.postProcessingEnabled {
             return false
         }
@@ -1027,7 +1022,6 @@ extension AppConfig: Equatable, Hashable {
     }
 
     public func hash(into hasher: inout Hasher) {
-        hasher.combine(transcriptionProvider)
         hasher.combine(postProcessingEnabled)
         hasher.combine(postProcessingModel)
         hasher.combine(apiBaseUrl)
@@ -1050,7 +1044,6 @@ public struct FfiConverterTypeAppConfig: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AppConfig {
         return
             try AppConfig(
-                transcriptionProvider: FfiConverterString.read(from: &buf), 
                 postProcessingEnabled: FfiConverterBool.read(from: &buf), 
                 postProcessingModel: FfiConverterString.read(from: &buf), 
                 apiBaseUrl: FfiConverterString.read(from: &buf), 
@@ -1065,7 +1058,6 @@ public struct FfiConverterTypeAppConfig: FfiConverterRustBuffer {
     }
 
     public static func write(_ value: AppConfig, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.transcriptionProvider, into: &buf)
         FfiConverterBool.write(value.postProcessingEnabled, into: &buf)
         FfiConverterString.write(value.postProcessingModel, into: &buf)
         FfiConverterString.write(value.apiBaseUrl, into: &buf)

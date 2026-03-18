@@ -13,7 +13,8 @@ private let recordingLog = OSLog(subsystem: "me.gulya.wrenflow", category: "Reco
 
 enum SettingsTab: String, CaseIterable, Identifiable {
     case general
-    case prompts
+    case models
+    case aiCleanup
     case runLog
 
     var id: String { rawValue }
@@ -21,37 +22,18 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .general: return "General"
-        case .prompts: return "Prompts"
+        case .models: return "Models"
+        case .aiCleanup: return "AI Cleanup"
         case .runLog: return "Run Log"
         }
     }
 
     var icon: String {
         switch self {
-        case .general: return "gearshape"
-        case .prompts: return "text.bubble"
-        case .runLog: return "clock.arrow.circlepath"
-        }
-    }
-}
-
-enum TranscriptionProvider: String, CaseIterable, Identifiable {
-    case local
-    case groq
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .local: return "Local (Parakeet)"
-        case .groq: return "Groq (Whisper)"
-        }
-    }
-
-    var subtitle: String {
-        switch self {
-        case .local: return "On-device, no internet needed"
-        case .groq: return "Cloud-based, requires API key"
+        case .general: return "gear"
+        case .models: return "cpu"
+        case .aiCleanup: return "sparkles"
+        case .runLog: return "list.bullet"
         }
     }
 }
@@ -102,7 +84,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let customContextPromptStorageKey = "custom_context_prompt"
     private let customSystemPromptLastModifiedStorageKey = "custom_system_prompt_last_modified"
     private let customContextPromptLastModifiedStorageKey = "custom_context_prompt_last_modified"
-    private let transcriptionProviderStorageKey = "transcription_provider"
     private let postProcessingModelStorageKey = "post_processing_model"
     private let postProcessingEnabledStorageKey = "post_processing_enabled"
     private let minimumRecordingDurationStorageKey = "minimum_recording_duration_ms"
@@ -294,11 +275,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
             warmUpAudioEngine()
         }
     }
-    @Published var selectedTranscriptionProvider: TranscriptionProvider {
-        didSet {
-            UserDefaults.standard.set(selectedTranscriptionProvider.rawValue, forKey: transcriptionProviderStorageKey)
-        }
-    }
     @Published var postProcessingEnabled: Bool {
         didSet {
             UserDefaults.standard.set(postProcessingEnabled, forKey: postProcessingEnabledStorageKey)
@@ -372,7 +348,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.selectedMicrophoneID = selectedMicrophoneID
         let storedMinDuration = UserDefaults.standard.double(forKey: minimumRecordingDurationStorageKey)
         self.minimumRecordingDurationMs = storedMinDuration > 0 ? storedMinDuration : 200
-        self.selectedTranscriptionProvider = TranscriptionProvider(rawValue: UserDefaults.standard.string(forKey: transcriptionProviderStorageKey) ?? "") ?? .local
         self.postProcessingEnabled = UserDefaults.standard.bool(forKey: postProcessingEnabledStorageKey)
         self.postProcessingModel = UserDefaults.standard.string(forKey: postProcessingModelStorageKey) ?? "meta-llama/llama-4-scout-17b-16e-instruct"
         // Default to true if key not set (object(forKey:) returns nil for unset keys)
@@ -386,8 +361,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.objectWillChange.send() }
 
-        // Only initialize local transcription if already chosen; otherwise deferred to setup wizard
-        if selectedTranscriptionProvider == .local && hasCompletedSetup {
+        // Initialize local transcription if setup is complete; otherwise deferred to setup wizard
+        if hasCompletedSetup {
             localTranscriptionService.initialize()
         }
 
@@ -923,28 +898,16 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
     /// Run transcription and report result back to Rust engine.
     private func runTranscriptionForRust(fileURL: URL, bridge: RustPipelineBridge) {
-        let provider = selectedTranscriptionProvider
         Task {
             do {
                 let t0 = CFAbsoluteTimeGetCurrent()
-                let transcript: String
-                switch provider {
-                case .local:
-                    transcript = try await localTranscriptionService.transcribe(fileURL: fileURL)
-                case .groq:
-                    let trimmedKey = self.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if trimmedKey.isEmpty {
-                        transcript = try await localTranscriptionService.transcribe(fileURL: fileURL)
-                    } else {
-                        transcript = try await TranscriptionService(apiKey: trimmedKey, baseURL: self.apiBaseURL).transcribe(fileURL: fileURL)
-                    }
-                }
+                let transcript = try await localTranscriptionService.transcribe(fileURL: fileURL)
                 let durationMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000
                 await MainActor.run {
                     bridge.onTranscriptionComplete(
                         rawTranscript: transcript,
                         durationMs: durationMs,
-                        provider: provider.rawValue
+                        provider: "local"
                     )
                     // If Rust says post-processing needed, run it
                     if self.postProcessingEnabled && !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1074,7 +1037,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
         transition(to: .transcribing(showingIndicator: false))
 
         os_log(.info, log: recordingLog, "creating post-processing service, apiBaseURL=%{public}@, model=%{public}@, enabled=%{public}@", apiBaseURL, postProcessingModel, postProcessingEnabled ? "true" : "false")
-        let capturedTranscriptionProvider = selectedTranscriptionProvider.rawValue
         let capturedPostProcessingModel = postProcessingModel
         let capturedPostProcessingEnabled = postProcessingEnabled
         let postProcessingService = (!capturedPostProcessingEnabled || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -1085,21 +1047,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
             do {
                 let pipelineStart = CFAbsoluteTimeGetCurrent()
 
-                // Stage 1: Transcription
+                // Stage 1: Transcription (always local)
                 let transcriptionStart = CFAbsoluteTimeGetCurrent()
-                let rawTranscript: String
-                switch self.selectedTranscriptionProvider {
-                case .local:
-                    rawTranscript = try await self.localTranscriptionService.transcribe(fileURL: fileURL)
-                case .groq:
-                    let trimmedKey = self.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if trimmedKey.isEmpty {
-                        os_log(.info, log: recordingLog, "Groq selected but no API key — falling back to local transcription")
-                        rawTranscript = try await self.localTranscriptionService.transcribe(fileURL: fileURL)
-                    } else {
-                        rawTranscript = try await TranscriptionService(apiKey: trimmedKey, baseURL: self.apiBaseURL).transcribe(fileURL: fileURL)
-                    }
-                }
+                let rawTranscript = try await self.localTranscriptionService.transcribe(fileURL: fileURL)
                 let transcriptionDurationMs = (CFAbsoluteTimeGetCurrent() - transcriptionStart) * 1000
                 os_log(.info, log: recordingLog, "transcription took %.1fms", transcriptionDurationMs)
 
@@ -1228,7 +1178,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     metrics.set("recording.durationMs", recordingDurationMs)
                     metrics.set("recording.fileSizeBytes", Int(audioFileSizeBytes))
                     metrics.set("transcription.durationMs", transcriptionDurationMs)
-                    metrics.set("transcription.provider", capturedTranscriptionProvider)
+                    metrics.set("transcription.provider", "local" as String)
                     metrics.set("context.totalMs", appContext.totalCaptureDurationMs)
                     metrics.set("context.resolutionMs", contextDurationMs)
                     metrics.set("context.screenshotMs", appContext.screenshotDurationMs)
@@ -1307,7 +1257,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     var errorMetrics = PipelineMetrics()
                     errorMetrics.set("recording.durationMs", recordingDurationMs)
                     errorMetrics.set("recording.fileSizeBytes", Int(audioFileSizeBytes))
-                    errorMetrics.set("transcription.provider", capturedTranscriptionProvider)
+                    errorMetrics.set("transcription.provider", "local" as String)
                     errorMetrics.set("postProcessing.model", capturedPostProcessingModel)
                     errorMetrics.set("pipeline.outcome", "error" as String)
                     errorMetrics.set("screenshot.windowListMs", resolvedContext.screenshotWindowListMs)
