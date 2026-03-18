@@ -7,11 +7,9 @@
     <key>CFBundleIdentifier</key>
     <string>me.gulya.wrenflow.ios</string>
     <key>CFBundleVersion</key>
-    <!-- x-release-please-version -->
-    <string>0.1.0</string>
+    <string>0.2.0</string>
     <key>CFBundleShortVersionString</key>
-    <!-- x-release-please-version -->
-    <string>0.1.0</string>
+    <string>0.2.0</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Wrenflow needs microphone access to transcribe your speech.</string>
     <key>NSSpeechRecognitionUsageDescription</key>

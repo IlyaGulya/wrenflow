@@ -10,8 +10,11 @@ release_bundle := build_dir / release_app_name + ".app"
 contents := app_bundle / "Contents"
 macos_dir := contents / "MacOS"
 resources := contents / "Resources"
+icon_svg := "Resources/logo.svg"
 icon_source := "Resources/AppIcon-Source.png"
 icon_icns := "Resources/AppIcon.icns"
+icon_bg := "#f5f3f0"
+icon_padding := "80"
 rust_dir := "core"
 
 # Signing: defaults to ad-hoc, override with env var for real signing
@@ -61,7 +64,10 @@ bundle: swift
     plutil -replace CFBundleDisplayName -string "{{app_name}}" "{{contents}}/Info.plist"
     plutil -replace CFBundleExecutable -string "{{app_name}}" "{{contents}}/Info.plist"
     plutil -replace CFBundleIdentifier -string "{{bundle_id}}" "{{contents}}/Info.plist"
+    # Inject version from Cargo.toml (source of truth) and build number from git
+    VERSION=$(grep -m1 'version = ' {{rust_dir}}/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
     BUILD_NUMBER=$(git rev-list --count HEAD)
+    plutil -replace CFBundleShortVersionString -string "$VERSION" "{{contents}}/Info.plist"
     plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "{{contents}}/Info.plist"
     cp {{icon_icns}} "{{resources}}/"
     swift build -c debug --product WrenflowCLI
@@ -102,6 +108,10 @@ release: rust-release uniffi
     plutil -replace CFBundleDisplayName -string "{{release_app_name}}" "$CONTENTS/Info.plist"
     plutil -replace CFBundleExecutable -string "{{release_app_name}}" "$CONTENTS/Info.plist"
     plutil -replace CFBundleIdentifier -string "{{release_bundle_id}}" "$CONTENTS/Info.plist"
+    VERSION=$(grep -m1 'version = ' {{rust_dir}}/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+    BUILD_NUMBER=$(git rev-list --count HEAD)
+    plutil -replace CFBundleShortVersionString -string "$VERSION" "$CONTENTS/Info.plist"
+    plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "$CONTENTS/Info.plist"
     cp {{icon_icns}} "$RES/"
 
     swift build -c release --arch arm64 --product WrenflowCLI
@@ -132,8 +142,25 @@ install-cli: cli
     cp "{{build_dir}}/wrenflow" /usr/local/bin/wrenflow
     @echo "Installed to /usr/local/bin/wrenflow"
 
+# Generate AppIcon-Source.png from SVG (requires rsvg-convert + imagemagick)
+icon-source:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    SIZE=1024
+    ICON_SIZE=$((SIZE * {{icon_padding}} / 100))
+    # Render SVG keeping aspect ratio, then pad to square
+    rsvg-convert "{{icon_svg}}" --keep-aspect-ratio -w "$ICON_SIZE" -h "$ICON_SIZE" -o /tmp/wrenflow_icon_fg.png
+    # Pad to exact square with transparency
+    magick /tmp/wrenflow_icon_fg.png -gravity center -background none -extent "${ICON_SIZE}x${ICON_SIZE}" /tmp/wrenflow_icon_fg_sq.png
+    # Colorize: white SVG -> dark icon matching WrenflowStyle text color (0.15 = #262626)
+    magick /tmp/wrenflow_icon_fg_sq.png -fill "#262626" -colorize 100 /tmp/wrenflow_icon_fg_dark.png
+    # Shift slightly right (+20px) to visually center the asymmetric bird
+    magick -size "${SIZE}x${SIZE}" "xc:{{icon_bg}}" /tmp/wrenflow_icon_fg_dark.png -geometry +20+0 -gravity center -composite "{{icon_source}}"
+    rm -f /tmp/wrenflow_icon_fg.png /tmp/wrenflow_icon_fg_sq.png /tmp/wrenflow_icon_fg_dark.png
+    echo "Generated {{icon_source}}"
+
 # Generate app icon from source PNG
-icon:
+icon: icon-source
     @mkdir -p {{build_dir}}/AppIcon.iconset
     @sips -z 16 16 {{icon_source}} --out {{build_dir}}/AppIcon.iconset/icon_16x16.png > /dev/null
     @sips -z 32 32 {{icon_source}} --out {{build_dir}}/AppIcon.iconset/icon_16x16@2x.png > /dev/null

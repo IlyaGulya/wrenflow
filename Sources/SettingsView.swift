@@ -49,6 +49,36 @@ struct SettingsView: View {
                 // Space for traffic light buttons
                 Spacer().frame(height: 12)
 
+                // App icon + name
+                VStack(spacing: 4) {
+                    Image(nsImage: {
+                        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+                           let img = NSImage(contentsOf: url) {
+                            return img
+                        }
+                        return NSApp.applicationIconImage
+                    }())
+                        .resizable()
+                        .interpolation(.high)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 64, height: 64)
+                        .opacity(0.6)
+                    Text("Wrenflow")
+                        .font(WrenflowStyle.body(12))
+                        .foregroundColor(WrenflowStyle.text)
+                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")")
+                        .font(WrenflowStyle.mono(10))
+                        .foregroundColor(WrenflowStyle.textTertiary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 8)
+
+                Rectangle()
+                    .fill(WrenflowStyle.border)
+                    .frame(height: 1)
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 6)
+
                 ForEach(SettingsTab.allCases) { tab in
                     Button {
                         appState.selectedSettingsTab = tab
@@ -81,22 +111,6 @@ struct SettingsView: View {
                 }
                 Spacer()
 
-                // Branding at bottom of sidebar
-                VStack(spacing: 4) {
-                    Image(nsImage: NSApp.applicationIconImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 28, height: 28)
-                        .opacity(0.5)
-                    Text("Wrenflow")
-                        .font(WrenflowStyle.body(11))
-                        .foregroundColor(WrenflowStyle.textTertiary)
-                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")")
-                        .font(WrenflowStyle.mono(10))
-                        .foregroundColor(WrenflowStyle.textTertiary.opacity(0.6))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.bottom, 8)
             }
             .padding(8)
             .frame(width: 150)
