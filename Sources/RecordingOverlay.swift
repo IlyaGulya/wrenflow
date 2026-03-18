@@ -35,7 +35,6 @@ private func makeOverlayPanel(width: CGFloat, height: CGFloat) -> NSPanel {
     return panel
 }
 
-/// Wraps a SwiftUI view in an NSView for use as panel content.
 private func makeNotchContent<V: View>(
     width: CGFloat,
     height: CGFloat,
@@ -44,8 +43,13 @@ private func makeNotchContent<V: View>(
 ) -> NSView {
     let shaped = rootView
         .frame(width: width, height: height)
-        .background(Color.black)
+        .background(Color(white: 0.96))
         .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: cornerRadius, bottomTrailingRadius: cornerRadius))
+        .overlay(
+            UnevenRoundedRectangle(bottomLeadingRadius: cornerRadius, bottomTrailingRadius: cornerRadius)
+                .stroke(Color(white: 0.0).opacity(0.08), lineWidth: 0.5)
+        )
+        .environment(\.colorScheme, .light)
 
     let hosting = NSHostingView(rootView: shaped)
     hosting.frame = NSRect(x: 0, y: 0, width: width, height: height)
@@ -60,13 +64,11 @@ class RecordingOverlayManager {
     private var transcribingPanel: NSPanel?
     private var overlayState = RecordingOverlayState()
 
-    /// Whether the main screen has a camera housing (notch).
     private var screenHasNotch: Bool {
         guard let screen = NSScreen.main else { return false }
         return screen.safeAreaInsets.top > 0
     }
 
-    /// Width of the camera housing (notch) in points, or 0 if no notch.
     private var notchWidth: CGFloat {
         guard let screen = NSScreen.main, screenHasNotch else { return 0 }
         guard let leftArea = screen.auxiliaryTopLeftArea,
@@ -114,7 +116,6 @@ class RecordingOverlayManager {
         DispatchQueue.main.async { self._dismiss() }
     }
 
-    /// Height of the notch area (menu bar inset) that the panel extends into.
     private var notchOverlap: CGFloat {
         guard let screen = NSScreen.main else { return 0 }
         return screen.frame.maxY - screen.visibleFrame.maxY
@@ -124,19 +125,13 @@ class RecordingOverlayManager {
         let hasNotch = screenHasNotch
         let panelWidth: CGFloat = hasNotch ? max(notchWidth, 120) : 120
         let contentHeight: CGFloat = 32
-        // On notch screens, extend the panel up into the menu bar to connect with the notch
         let overlap = hasNotch ? notchOverlap : 0
         let panelHeight = contentHeight + overlap
 
         if let panel = overlayWindow {
             guard let screen = NSScreen.main else { return }
             let x = panelX(screen, width: panelWidth)
-            let y: CGFloat
-            if hasNotch {
-                y = screen.frame.maxY - panelHeight
-            } else {
-                y = screen.frame.maxY - panelHeight
-            }
+            let y = screen.frame.maxY - panelHeight
             panel.setFrame(NSRect(x: x, y: y, width: panelWidth, height: panelHeight), display: true)
             panel.alphaValue = 1
             panel.orderFrontRegardless()
@@ -144,7 +139,7 @@ class RecordingOverlayManager {
         }
 
         let panel = makeOverlayPanel(width: panelWidth, height: panelHeight)
-        panel.hasShadow = false
+        panel.hasShadow = true
 
         let view = RecordingOverlayView(state: overlayState)
         panel.contentView = makeNotchContent(
@@ -163,7 +158,6 @@ class RecordingOverlayManager {
             panel.alphaValue = 1
             panel.orderFrontRegardless()
 
-            // Spring-like drop: overshoots slightly then settles
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.18
                 ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.34, 1.56, 0.64, 1.0)
@@ -211,7 +205,7 @@ class RecordingOverlayManager {
         let panelHeight = contentHeight + overlap
 
         let panel = makeOverlayPanel(width: panelWidth, height: panelHeight)
-        panel.hasShadow = false
+        panel.hasShadow = true
 
         let view = TranscribingIndicatorView()
         panel.contentView = makeNotchContent(
@@ -268,7 +262,7 @@ class RecordingOverlayManager {
     }
 }
 
-// MARK: - Waveform Views
+// MARK: - Waveform
 
 struct WaveformBar: View {
     let amplitude: CGFloat
@@ -278,7 +272,7 @@ struct WaveformBar: View {
 
     var body: some View {
         Capsule()
-            .fill(.white)
+            .fill(Color(white: 0.15).opacity(0.6))
             .frame(width: 3, height: minHeight + (maxHeight - minHeight) * amplitude)
     }
 }
@@ -318,7 +312,7 @@ struct InitializingDotsView: View {
         HStack(spacing: 4) {
             ForEach(0..<3, id: \.self) { index in
                 Circle()
-                    .fill(.white.opacity(activeDot == index ? 0.9 : 0.25))
+                    .fill(Color(white: 0.15).opacity(activeDot == index ? 0.7 : 0.15))
                     .frame(width: 4.5, height: 4.5)
                     .animation(.easeInOut(duration: 0.4), value: activeDot)
             }
@@ -364,7 +358,7 @@ struct TranscribingIndicatorView: View {
         HStack(spacing: 4) {
             ForEach(0..<3, id: \.self) { index in
                 Circle()
-                    .fill(.white.opacity(animatingDot == index ? 0.9 : 0.25))
+                    .fill(Color(white: 0.15).opacity(animatingDot == index ? 0.7 : 0.15))
                     .frame(width: 4.5, height: 4.5)
                     .animation(.easeInOut(duration: 0.4), value: animatingDot)
             }
@@ -377,9 +371,7 @@ struct TranscribingIndicatorView: View {
     private func startDotAnimation() {
         dotAnimationTimer?.invalidate()
         dotAnimationTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
-            DispatchQueue.main.async {
-                animatingDot = (animatingDot + 1) % 3
-            }
+            DispatchQueue.main.async { animatingDot = (animatingDot + 1) % 3 }
         }
     }
 
