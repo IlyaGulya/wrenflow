@@ -45,7 +45,7 @@ struct SettingsView: View {
     var body: some View {
         HStack(spacing: 0) {
             // Sidebar
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(spacing: 2) {
                 // Space for traffic light buttons
                 Spacer().frame(height: 12)
 
@@ -65,8 +65,8 @@ struct SettingsView: View {
                                 .foregroundColor(appState.selectedSettingsTab == tab
                                                  ? WrenflowStyle.text
                                                  : WrenflowStyle.textSecondary)
+                            Spacer()
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 6)
                         .padding(.horizontal, 8)
                         .background(
@@ -75,6 +75,7 @@ struct SettingsView: View {
                                       ? WrenflowStyle.text.opacity(0.07)
                                       : Color.clear)
                         )
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
@@ -1713,11 +1714,13 @@ struct RunLogEntryView: View {
 
                     // Pipeline steps
                     VStack(alignment: .leading, spacing: 8) {
+                        let ppEnabled = item.metrics.bool("postProcessing.enabled") == true
+
                         Text("Pipeline")
                             .font(WrenflowStyle.body(11))
                             .foregroundColor(WrenflowStyle.textSecondary)
 
-                        // Step 1: Recording
+                        // Recording
                         PipelineStepView(
                             number: 1,
                             title: "Record Audio",
@@ -1748,7 +1751,8 @@ struct RunLogEntryView: View {
                             }
                         )
 
-                        // Step 2: Context Capture
+                        // Context Capture (hidden when post-processing disabled)
+                        if ppEnabled {
                         PipelineStepView(
                             number: 2,
                             title: "Capture Context",
@@ -1827,10 +1831,11 @@ struct RunLogEntryView: View {
                                 }
                             }
                         )
+                        }
 
-                        // Step 3: Transcribe Audio
+                        // Transcribe Audio
                         PipelineStepView(
-                            number: 3,
+                            number: ppEnabled ? 3 : 2,
                             title: "Transcribe Audio",
                             durationMs: item.metrics.double("transcription.durationMs"),
                             content: {
@@ -1857,81 +1862,83 @@ struct RunLogEntryView: View {
                             }
                         )
 
-                        // Step 4: Post-Process
-                        PipelineStepView(
-                            number: 4,
-                            title: "Post-Process",
-                            durationMs: item.metrics.double("postProcessing.durationMs"),
-                            content: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    if let model = item.metrics.string("postProcessing.model") {
-                                        Text("Model: \(model)")
+                        // Post-Process (hidden when disabled)
+                        if ppEnabled {
+                            PipelineStepView(
+                                number: 4,
+                                title: "Post-Process",
+                                durationMs: item.metrics.double("postProcessing.durationMs"),
+                                content: {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        if let model = item.metrics.string("postProcessing.model") {
+                                            Text("Model: \(model)")
+                                                .font(WrenflowStyle.caption(11))
+                                                .foregroundColor(WrenflowStyle.textSecondary)
+                                        }
+
+                                        Text(item.postProcessingStatus)
                                             .font(WrenflowStyle.caption(11))
                                             .foregroundColor(WrenflowStyle.textSecondary)
-                                    }
+                                            .textSelection(.enabled)
 
-                                    Text(item.postProcessingStatus)
-                                        .font(WrenflowStyle.caption(11))
-                                        .foregroundColor(WrenflowStyle.textSecondary)
-                                        .textSelection(.enabled)
+                                        if let prompt = item.postProcessingPrompt, !prompt.isEmpty {
+                                            Button {
+                                                showPostProcessingPrompt.toggle()
+                                            } label: {
+                                                HStack(spacing: 3) {
+                                                    Text(showPostProcessingPrompt ? "Hide Prompt" : "Show Prompt")
+                                                        .font(WrenflowStyle.caption(11))
+                                                    Image(systemName: showPostProcessingPrompt ? "chevron.up" : "chevron.down")
+                                                        .font(.system(size: 9))
+                                                }
+                                            }
+                                            .buttonStyle(.plain)
+                                            .foregroundColor(WrenflowStyle.text.opacity(0.5))
 
-                                    if let prompt = item.postProcessingPrompt, !prompt.isEmpty {
-                                        Button {
-                                            showPostProcessingPrompt.toggle()
-                                        } label: {
-                                            HStack(spacing: 3) {
-                                                Text(showPostProcessingPrompt ? "Hide Prompt" : "Show Prompt")
-                                                    .font(WrenflowStyle.caption(11))
-                                                Image(systemName: showPostProcessingPrompt ? "chevron.up" : "chevron.down")
-                                                    .font(.system(size: 9))
+                                            if showPostProcessingPrompt {
+                                                Text(prompt)
+                                                    .font(WrenflowStyle.mono(10))
+                                                    .textSelection(.enabled)
+                                                    .padding(6)
+                                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                                    .background(WrenflowStyle.bg)
+                                                    .cornerRadius(4)
                                             }
                                         }
-                                        .buttonStyle(.plain)
-                                        .foregroundColor(WrenflowStyle.text.opacity(0.5))
 
-                                        if showPostProcessingPrompt {
-                                            Text(prompt)
-                                                .font(WrenflowStyle.mono(10))
+                                        if !item.postProcessedTranscript.isEmpty {
+                                            Text(item.postProcessedTranscript)
+                                                .font(WrenflowStyle.mono(11))
                                                 .textSelection(.enabled)
                                                 .padding(6)
                                                 .frame(maxWidth: .infinity, alignment: .leading)
                                                 .background(WrenflowStyle.bg)
                                                 .cornerRadius(4)
                                         }
-                                    }
 
-                                    if !item.postProcessedTranscript.isEmpty {
-                                        Text(item.postProcessedTranscript)
-                                            .font(WrenflowStyle.mono(11))
-                                            .textSelection(.enabled)
-                                            .padding(6)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .background(WrenflowStyle.bg)
-                                            .cornerRadius(4)
-                                    }
-
-                                    if let reasoning = item.postProcessingReasoning, !reasoning.isEmpty {
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text("LLM Reasoning")
-                                                .font(WrenflowStyle.body(11))
-                                                .foregroundColor(WrenflowStyle.textSecondary)
-                                            Text(reasoning)
-                                                .font(WrenflowStyle.mono(10))
-                                                .textSelection(.enabled)
-                                                .padding(6)
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-                                                .background(WrenflowStyle.text.opacity(0.03))
-                                                .cornerRadius(4)
+                                        if let reasoning = item.postProcessingReasoning, !reasoning.isEmpty {
+                                            VStack(alignment: .leading, spacing: 3) {
+                                                Text("LLM Reasoning")
+                                                    .font(WrenflowStyle.body(11))
+                                                    .foregroundColor(WrenflowStyle.textSecondary)
+                                                Text(reasoning)
+                                                    .font(WrenflowStyle.mono(10))
+                                                    .textSelection(.enabled)
+                                                    .padding(6)
+                                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                                    .background(WrenflowStyle.text.opacity(0.03))
+                                                    .cornerRadius(4)
+                                            }
                                         }
                                     }
                                 }
-                            }
-                        )
+                            )
+                        }
 
-                        // Step 5: Paste (only shown if paste happened)
+                        // Paste (only shown if paste happened)
                         if let pasteMs = item.metrics.double("paste.durationMs") {
                             PipelineStepView(
-                                number: 5,
+                                number: ppEnabled ? 5 : 3,
                                 title: "Paste",
                                 durationMs: pasteMs,
                                 content: {

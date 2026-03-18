@@ -980,6 +980,18 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
+    func savePipelineEntry(_ item: PipelineHistoryItem) {
+        do {
+            let removedAudioFileNames = try pipelineHistoryStore.append(item, maxCount: maxPipelineHistoryCount)
+            for audioFileName in removedAudioFileNames {
+                Self.deleteAudioFile(audioFileName)
+            }
+            pipelineHistory = pipelineHistoryStore.loadAllHistory()
+        } catch {
+            errorMessage = "Unable to save run history entry: \(error.localizedDescription)"
+        }
+    }
+
     private func recordPipelineHistoryEntry(
         rawTranscript: String,
         postProcessedTranscript: String,

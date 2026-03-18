@@ -431,12 +431,8 @@ extension AppState {
         lastPostProcessingStatus = entry.postProcessingStatus
         debugStatusMessage = entry.debugStatus
 
-        // Persist via the existing store
-        // (In Step 7, this may be refactored so Rust owns persistence)
-        pipelineHistory.insert(item, at: 0)
-        if pipelineHistory.count > maxPipelineHistoryCount {
-            pipelineHistory = Array(pipelineHistory.prefix(maxPipelineHistoryCount))
-        }
+        // Persist to SQLite via AppState
+        savePipelineEntry(item)
     }
 
     // MARK: - Private helpers for Rust bridge
