@@ -149,6 +149,9 @@ release:
         echo "WARNING: Release build with ad-hoc signing. Set WRENFLOW_CODESIGN_IDENTITY for proper signing."
         codesign --force --sign - --entitlements Wrenflow.entitlements "$BUNDLE"
     else
+        # Sign CLI binary individually (required for notarization)
+        codesign --force --sign "$IDENTITY" --options runtime --entitlements Wrenflow.entitlements --timestamp "$MACOS/wrenflow-cli"
+        # Sign the whole bundle
         codesign --force --sign "$IDENTITY" --options runtime --entitlements Wrenflow.entitlements --timestamp "$BUNDLE"
     fi
     echo "Built $BUNDLE"

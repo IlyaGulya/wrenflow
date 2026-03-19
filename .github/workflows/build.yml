@@ -124,17 +124,27 @@ jobs:
         run: just dmg
 
       - name: Notarize DMG
-        if: steps.skip.outputs.skip != 'true' && env.IS_RELEASE == 'true' && env.HAS_NOTARIZE == 'true'
+        if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true' && env.HAS_NOTARIZE == 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
-          xcrun notarytool submit build/Wrenflow.dmg \
+          SUBMIT_OUT=$(xcrun notarytool submit build/Wrenflow.dmg \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_PASSWORD" \
-            --wait --timeout 600
+            --wait --timeout 600 2>&1) || true
+          echo "$SUBMIT_OUT"
+          SUBMISSION_ID=$(echo "$SUBMIT_OUT" | grep "  id:" | head -1 | awk '{print $2}')
+          if echo "$SUBMIT_OUT" | grep -q "status: Invalid"; then
+            echo "Notarization failed. Fetching log..."
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$APPLE_ID" \
+              --team-id "$APPLE_TEAM_ID" \
+              --password "$APPLE_APP_PASSWORD"
+            exit 1
+          fi
           xcrun stapler staple build/Wrenflow.dmg
 
       - name: Verify codesign
