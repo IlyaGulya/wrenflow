@@ -70,9 +70,16 @@ jobs:
           if [ "${{ env.IS_RELEASE }}" = "true" ]; then
             TAG="${{ github.event.release.tag_name }}"
           else
+            # Beta: bump minor from last release tag, append -beta.N
             LATEST_TAG=$(git describe --tags --match 'v*' --abbrev=0 2>/dev/null || echo "v0.0.0")
             COMMITS_SINCE=$(git rev-list "${LATEST_TAG}..HEAD" --count)
-            TAG="${LATEST_TAG}-beta.${COMMITS_SINCE}"
+            # Parse major.minor.patch from tag, bump minor
+            VERSION="${LATEST_TAG#v}"
+            MAJOR=$(echo "$VERSION" | cut -d. -f1)
+            MINOR=$(echo "$VERSION" | cut -d. -f2)
+            PATCH=$(echo "$VERSION" | cut -d. -f3)
+            NEXT_MINOR=$((MINOR + 1))
+            TAG="v${MAJOR}.${NEXT_MINOR}.0-beta.${COMMITS_SINCE}"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
