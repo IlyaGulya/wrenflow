@@ -124,7 +124,18 @@ jobs:
         if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
         run: |
           rm -rf .build
+          # Verify Rust static lib exists and has correct arch
+          file core/target/release/libwrenflow_ffi.a
+          ls -lh core/target/release/libwrenflow_ffi.a
           just dmg
+          # Verify binary contains FFI symbols
+          BINARY="build/Wrenflow.app/Contents/MacOS/Wrenflow"
+          SIZE=$(stat -f%z "$BINARY")
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "ERROR: Binary too small ($SIZE bytes) — Rust FFI likely not linked!"
+            nm "$BINARY" | grep uniffi || true
+            exit 1
+          fi
 
       - name: Notarize DMG
         if: steps.skip.outputs.skip != 'true' && env.IS_RELEASE == 'true' && env.HAS_NOTARIZE == 'true'
