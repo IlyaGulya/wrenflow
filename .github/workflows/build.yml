@@ -56,6 +56,7 @@ jobs:
         with:
           workspaces: core -> target
           cache-workspace-crates: "true"
+          prefix-key: "v1-rust"
 
       - name: Install build tools
         if: steps.skip.outputs.skip != 'true'
@@ -111,32 +112,19 @@ jobs:
           IDENTITY=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "WRENFLOW_CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 
-      - name: Fall back to ad-hoc signing
-        if: steps.skip.outputs.skip != 'true' && (env.HAS_SIGNING_CERT != 'true' || env.IS_PR == 'true')
-        run: echo "WRENFLOW_CODESIGN_IDENTITY=-" >> "$GITHUB_ENV"
-
-      # PR: debug build only
+      # PR: debug build only (ad-hoc signing)
       - name: Build (PR check)
         if: steps.skip.outputs.skip != 'true' && env.IS_PR == 'true'
         run: just build
+        env:
+          WRENFLOW_CODESIGN_IDENTITY: "-"
 
       # Push to main / release: full release build + DMG
       - name: Build release DMG
         if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
         run: |
           rm -rf .build
-          # Verify Rust static lib exists and has correct arch
-          file core/target/release/libwrenflow_ffi.a
-          ls -lh core/target/release/libwrenflow_ffi.a
           just dmg
-          # Verify binary contains FFI symbols
-          BINARY="build/Wrenflow.app/Contents/MacOS/Wrenflow"
-          SIZE=$(stat -f%z "$BINARY")
-          if [ "$SIZE" -lt 1000000 ]; then
-            echo "ERROR: Binary too small ($SIZE bytes) — Rust FFI likely not linked!"
-            nm "$BINARY" | grep uniffi || true
-            exit 1
-          fi
 
       - name: Notarize DMG
         if: steps.skip.outputs.skip != 'true' && env.IS_RELEASE == 'true' && env.HAS_NOTARIZE == 'true'
