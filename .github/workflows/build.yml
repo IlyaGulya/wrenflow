@@ -71,7 +71,9 @@ jobs:
             TAG="${{ github.event.release.tag_name }}"
           else
             # Beta: bump minor from last release tag, append -beta.N
-            LATEST_TAG=$(git describe --tags --match 'v*' --abbrev=0 2>/dev/null || echo "v0.0.0")
+            # Find latest stable tag (no pre-release suffix)
+            LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+            LATEST_TAG="${LATEST_TAG:-v0.0.0}"
             COMMITS_SINCE=$(git rev-list "${LATEST_TAG}..HEAD" --count)
             # Parse major.minor from tag, bump minor
             VERSION="${LATEST_TAG#v}"

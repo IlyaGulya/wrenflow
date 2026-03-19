@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Run linters on staged workflow files
+STAGED_WORKFLOWS=$(git diff --cached --name-only --diff-filter=ACM | grep '^\.github/workflows/')
+
+if [ -z "$STAGED_WORKFLOWS" ]; then
+  exit 0
+fi
+
+FAILED=0
+
+if command -v actionlint &>/dev/null; then
+  echo "Running actionlint..."
+  if ! actionlint $STAGED_WORKFLOWS; then
+    FAILED=1
+  fi
+fi
+
+if command -v ghalint &>/dev/null; then
+  echo "Running ghalint..."
+  if ! ghalint run; then
+    FAILED=1
+  fi
+fi
+
+if [ "$FAILED" -ne 0 ]; then
+  echo ""
+  echo "ERROR: Workflow linters found issues. Fix before committing."
+  exit 1
+fi
