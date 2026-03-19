@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/IlyaGulya/wrenflow/compare/v0.2.0...v0.2.1) (2026-03-19)
+
+
+### Bug Fixes
+
+* defer microphone device listing until after setup wizard ([7239f79](https://github.com/IlyaGulya/wrenflow/commit/7239f79a2988315658dc15eed25459b2fd2dd464))
+* link libwrenflow_ffi.a directly instead of -l flag (prevents dylib preference) ([425580d](https://github.com/IlyaGulya/wrenflow/commit/425580debf44159e02d003df286cb26f86baf5e7))
+
 ## [0.2.0](https://github.com/IlyaGulya/wrenflow/compare/v0.1.0...v0.2.0) (2026-03-18)
 
 
