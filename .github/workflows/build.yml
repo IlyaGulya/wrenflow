@@ -121,9 +121,7 @@ jobs:
       # Push to main / release: full release build + DMG
       - name: Build release DMG
         if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
-        run: |
-          rm -rf .build
-          just dmg
+        run: just dmg
 
       - name: Notarize DMG
         if: steps.skip.outputs.skip != 'true' && env.IS_RELEASE == 'true' && env.HAS_NOTARIZE == 'true'
