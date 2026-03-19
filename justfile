@@ -70,8 +70,8 @@ bundle: swift
     plutil -replace CFBundleShortVersionString -string "$VERSION" "{{contents}}/Info.plist"
     plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "{{contents}}/Info.plist"
     cp {{icon_icns}} "{{resources}}/"
-    swift build -c debug --product WrenflowCLI
-    cp "$(swift build -c debug --show-bin-path)/WrenflowCLI" "{{macos_dir}}/wrenflow"
+    BIN_PATH="$(swift build -c debug --show-bin-path)"
+    cp "$BIN_PATH/WrenflowCLI" "{{macos_dir}}/wrenflow"
     if [ "{{codesign_identity}}" = "-" ]; then
         codesign --force --sign - --entitlements Wrenflow.entitlements "{{app_bundle}}"
     else
@@ -114,7 +114,6 @@ release: rust-release uniffi
     plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "$CONTENTS/Info.plist"
     cp {{icon_icns}} "$RES/"
 
-    swift build -c release --arch arm64 --product WrenflowCLI
     cp "$(swift build -c release --arch arm64 --show-bin-path)/WrenflowCLI" "$MACOS/wrenflow"
 
     IDENTITY="{{codesign_identity}}"
@@ -192,10 +191,10 @@ dmg: release
         --icon-size 128 \
         --icon "{{release_app_name}}.app" 180 170 \
         --hide-extension "{{release_app_name}}.app" \
-        --icon "Applications" 480 170 \
+        --app-drop-link 480 170 \
         --no-internet-enable \
         {{build_dir}}/{{release_app_name}}.dmg \
-        {{build_dir}}/dmg-staging
+        {{build_dir}}/dmg-staging || true
     rm -rf {{build_dir}}/dmg-staging
 
     IDENTITY="{{codesign_identity}}"
