@@ -445,8 +445,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
         // Default to true if key not set (object(forKey:) returns nil for unset keys)
         self.soundEnabled = UserDefaults.standard.object(forKey: soundEnabledStorageKey) as? Bool ?? true
 
-        refreshAvailableMicrophones()
-        installAudioDeviceListener()
+        if hasCompletedSetup && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized {
+            refreshAvailableMicrophones()
+            installAudioDeviceListener()
+        }
 
         // Forward localTranscriptionService changes to trigger SwiftUI updates
         localTranscriptionCancellable = localTranscriptionService.objectWillChange
@@ -469,6 +471,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
 
     func warmUpAfterSetup() {
+        refreshAvailableMicrophones()
+        installAudioDeviceListener()
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
         warmUpAudioEngine()
     }
