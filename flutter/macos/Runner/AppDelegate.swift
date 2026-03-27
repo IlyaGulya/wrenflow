@@ -4,10 +4,13 @@ import FlutterMacOS
 @main
 class AppDelegate: FlutterAppDelegate {
   private var permissionHandler: PermissionHandler?
+  private var launchAtLoginHandler: LaunchAtLoginHandler?
 
   override func applicationDidFinishLaunching(_ notification: Notification) {
     let controller = mainFlutterWindow?.contentViewController as! FlutterViewController
-    permissionHandler = PermissionHandler(messenger: controller.engine.binaryMessenger)
+    let messenger = controller.engine.binaryMessenger
+    permissionHandler = PermissionHandler(messenger: messenger)
+    launchAtLoginHandler = LaunchAtLoginHandler(messenger: messenger)
   }
 
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rinf/rinf.dart';
 import 'package:window_manager/window_manager.dart';
+import 'screens/setup_wizard_screen.dart';
 import 'src/bindings/bindings.dart';
 import 'widgets/system_tray.dart';
 
@@ -48,7 +49,36 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
       ),
-      home: const MyHomePage(title: 'Wrenflow'),
+      home: const _AppHome(),
+    );
+  }
+}
+
+/// Root widget that checks whether onboarding has been completed and shows
+/// either the setup wizard or the main home page.
+class _AppHome extends ConsumerWidget {
+  const _AppHome();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final setupAsync = ref.watch(hasCompletedSetupProvider);
+
+    return setupAsync.when(
+      loading: () => const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      ),
+      error: (_, __) => const MyHomePage(title: 'Wrenflow'),
+      data: (hasCompleted) {
+        if (hasCompleted) {
+          return const MyHomePage(title: 'Wrenflow');
+        }
+        return SetupWizardScreen(
+          onComplete: () {
+            // Invalidate so we re-read from shared_preferences.
+            ref.invalidate(hasCompletedSetupProvider);
+          },
+        );
+      },
     );
   }
 }
