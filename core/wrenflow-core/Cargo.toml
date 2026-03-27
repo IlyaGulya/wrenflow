@@ -4,21 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[features]
-default = ["local-transcription"]
-local-transcription = ["dep:parakeet-rs", "dep:reqwest"]
-
 [dependencies]
 wrenflow-domain = { path = "../wrenflow-domain" }
 uniffi.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-reqwest = { workspace = true, optional = true }
+reqwest.workspace = true
 tokio.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true
 log.workspace = true
-parakeet-rs = { workspace = true, optional = true }
+parakeet-rs = { workspace = true, features = ["load-dynamic"] }
 tokio-stream = "0.1"
 cpal.workspace = true
 

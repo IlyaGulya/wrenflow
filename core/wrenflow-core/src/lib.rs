@@ -15,10 +15,8 @@ pub mod audio_capture;
 pub mod config_store;
 pub mod history_store;
 
-// Local transcription (behind feature flag)
-#[cfg(feature = "local-transcription")]
+// Local transcription (Parakeet)
 pub mod model_downloader;
-#[cfg(feature = "local-transcription")]
 pub mod transcription_local;
 
 // Convenience re-exports
