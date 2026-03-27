@@ -23,3 +23,4 @@ RUST_MIGRATION_PLAN.md
 *.p12
 *.certSigningRequest
 .claude/
+vendor/

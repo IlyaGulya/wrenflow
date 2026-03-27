@@ -5,6 +5,5 @@ pub mod pipeline;
 pub mod platform;
 pub mod audio;
 pub mod transcription;
-pub mod post_processing;
 pub mod models;
 pub mod model_management;

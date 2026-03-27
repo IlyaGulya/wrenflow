@@ -6,7 +6,6 @@ pub use wrenflow_domain::metrics;
 pub use wrenflow_domain::platform;
 pub use wrenflow_domain::audio;
 pub use wrenflow_domain::transcription;
-pub use wrenflow_domain::post_processing;
 pub use wrenflow_domain::models;
 pub use wrenflow_domain::model_management;
 
@@ -19,7 +18,6 @@ pub mod model_downloader;
 pub mod config_store;
 pub mod history_store;
 pub mod models_infra;
-pub mod post_processing_infra;
 pub mod transcription_local;
 
 // Convenience re-exports for backward compatibility

@@ -1,5 +1,4 @@
 //! Pipeline history — SQLite storage for run history.
-//! Replaces Swift CoreData PipelineHistoryStore with rusqlite.
 
 use wrenflow_domain::history::HistoryEntry;
 use rusqlite::{params, Connection, Result as SqlResult};
@@ -41,16 +40,7 @@ impl HistoryStore {
             "CREATE TABLE IF NOT EXISTS pipeline_history (
                 id TEXT PRIMARY KEY,
                 timestamp REAL NOT NULL,
-                raw_transcript TEXT NOT NULL DEFAULT '',
-                post_processed_transcript TEXT NOT NULL DEFAULT '',
-                post_processing_prompt TEXT,
-                post_processing_reasoning TEXT,
-                context_summary TEXT NOT NULL DEFAULT '',
-                context_prompt TEXT,
-                context_screenshot_data_url TEXT,
-                context_screenshot_status TEXT NOT NULL DEFAULT '',
-                post_processing_status TEXT NOT NULL DEFAULT '',
-                debug_status TEXT NOT NULL DEFAULT '',
+                transcript TEXT NOT NULL DEFAULT '',
                 custom_vocabulary TEXT NOT NULL DEFAULT '',
                 audio_file_name TEXT,
                 metrics_json TEXT NOT NULL DEFAULT '{}'
@@ -62,20 +52,11 @@ impl HistoryStore {
     pub fn insert(&self, entry: &HistoryEntry) -> Result<(), HistoryError> {
         self.conn.execute(
             "INSERT OR REPLACE INTO pipeline_history
-             (id, timestamp, raw_transcript, post_processed_transcript,
-              post_processing_prompt, post_processing_reasoning,
-              context_summary, context_prompt, context_screenshot_data_url,
-              context_screenshot_status, post_processing_status, debug_status,
-              custom_vocabulary, audio_file_name, metrics_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+             (id, timestamp, transcript, custom_vocabulary, audio_file_name, metrics_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
-                entry.id, entry.timestamp, entry.raw_transcript,
-                entry.post_processed_transcript, entry.post_processing_prompt,
-                entry.post_processing_reasoning, entry.context_summary,
-                entry.context_prompt, entry.context_screenshot_data_url,
-                entry.context_screenshot_status, entry.post_processing_status,
-                entry.debug_status, entry.custom_vocabulary,
-                entry.audio_file_name, entry.metrics_json,
+                entry.id, entry.timestamp, entry.transcript,
+                entry.custom_vocabulary, entry.audio_file_name, entry.metrics_json,
             ],
         )?;
         Ok(())
@@ -83,30 +64,17 @@ impl HistoryStore {
 
     pub fn load_all(&self) -> Result<Vec<HistoryEntry>, HistoryError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, timestamp, raw_transcript, post_processed_transcript,
-                    post_processing_prompt, post_processing_reasoning,
-                    context_summary, context_prompt, context_screenshot_data_url,
-                    context_screenshot_status, post_processing_status, debug_status,
-                    custom_vocabulary, audio_file_name, metrics_json
+            "SELECT id, timestamp, transcript, custom_vocabulary, audio_file_name, metrics_json
              FROM pipeline_history ORDER BY timestamp DESC"
         )?;
         let entries = stmt.query_map([], |row| {
             Ok(HistoryEntry {
                 id: row.get(0)?,
                 timestamp: row.get(1)?,
-                raw_transcript: row.get(2)?,
-                post_processed_transcript: row.get(3)?,
-                post_processing_prompt: row.get(4)?,
-                post_processing_reasoning: row.get(5)?,
-                context_summary: row.get(6)?,
-                context_prompt: row.get(7)?,
-                context_screenshot_data_url: row.get(8)?,
-                context_screenshot_status: row.get(9)?,
-                post_processing_status: row.get(10)?,
-                debug_status: row.get(11)?,
-                custom_vocabulary: row.get(12)?,
-                audio_file_name: row.get(13)?,
-                metrics_json: row.get(14)?,
+                transcript: row.get(2)?,
+                custom_vocabulary: row.get(3)?,
+                audio_file_name: row.get(4)?,
+                metrics_json: row.get(5)?,
             })
         })?.collect::<SqlResult<Vec<_>>>()?;
         Ok(entries)
@@ -164,16 +132,7 @@ mod tests {
         HistoryEntry {
             id: id.to_string(),
             timestamp: ts,
-            raw_transcript: "hello".to_string(),
-            post_processed_transcript: "Hello.".to_string(),
-            post_processing_prompt: None,
-            post_processing_reasoning: None,
-            context_summary: "test".to_string(),
-            context_prompt: None,
-            context_screenshot_data_url: None,
-            context_screenshot_status: "none".to_string(),
-            post_processing_status: "skipped".to_string(),
-            debug_status: "done".to_string(),
+            transcript: "hello".to_string(),
             custom_vocabulary: String::new(),
             audio_file_name: Some(format!("{id}.wav")),
             metrics_json: "{}".to_string(),

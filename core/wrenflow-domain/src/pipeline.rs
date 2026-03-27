@@ -20,7 +20,6 @@ pub enum PipelineState {
     Initializing,
     Recording,
     Transcribing { showing_indicator: bool },
-    PostProcessing { showing_indicator: bool },
     Pasting,
     Error { message: String },
 }
@@ -31,7 +30,7 @@ impl PipelineState {
     }
 
     pub fn is_transcribing(&self) -> bool {
-        matches!(self, Self::Transcribing { .. } | Self::PostProcessing { .. })
+        matches!(self, Self::Transcribing { .. })
     }
 
     pub fn can_start_recording(&self) -> bool {
@@ -44,7 +43,6 @@ impl PipelineState {
             Self::Starting | Self::Initializing => "Starting...",
             Self::Recording => "Recording...",
             Self::Transcribing { .. } => "Transcribing...",
-            Self::PostProcessing { .. } => "Processing...",
             Self::Pasting => "Copied to clipboard!",
             Self::Error { .. } => "Error",
         }
@@ -57,7 +55,6 @@ impl PipelineState {
             Self::Initializing => "initializing",
             Self::Recording => "recording",
             Self::Transcribing { .. } => "transcribing",
-            Self::PostProcessing { .. } => "postProcessing",
             Self::Pasting => "pasting",
             Self::Error { .. } => "error",
         }
@@ -102,15 +99,6 @@ pub struct TranscriptionResult {
     pub raw_transcript: String,
     pub duration_ms: f64,
     pub provider: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct PostProcessingResult {
-    pub transcript: String,
-    pub prompt: String,
-    pub reasoning: String,
-    pub duration_ms: f64,
-    pub status: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -209,18 +197,12 @@ impl PipelineEngine {
 
     /// Called after delayed indicator timeout (1s) during transcribing.
     pub fn on_indicator_timeout(&mut self, listener: &dyn PipelineListener) {
-        match &self.state {
-            PipelineState::Transcribing { showing_indicator: false } => {
-                self.transition(PipelineState::Transcribing { showing_indicator: true }, listener);
-            }
-            PipelineState::PostProcessing { showing_indicator: false } => {
-                self.transition(PipelineState::PostProcessing { showing_indicator: true }, listener);
-            }
-            _ => {}
+        if matches!(self.state, PipelineState::Transcribing { showing_indicator: false }) {
+            self.transition(PipelineState::Transcribing { showing_indicator: true }, listener);
         }
     }
 
-    /// Called when transcription completes — move to post-processing or pasting.
+    /// Called when transcription completes — move to pasting.
     pub fn on_transcription_complete(
         &mut self,
         result: TranscriptionResult,
@@ -230,38 +212,7 @@ impl PipelineEngine {
         self.metrics.set_string("transcription.provider", result.provider);
 
         let transcript = result.raw_transcript.trim().to_string();
-
-        if self.config.post_processing_enabled {
-            // Carry over indicator state
-            let showing = matches!(self.state, PipelineState::Transcribing { showing_indicator: true });
-            self.transition(PipelineState::PostProcessing { showing_indicator: showing }, listener);
-        } else {
-            self.metrics.set_bool("postProcessing.enabled", false);
-            self.metrics.set_string("postProcessing.status", "disabled".to_string());
-            self.finish_pipeline(transcript.clone(), transcript, "", "", "Post-processing disabled", listener);
-        }
-    }
-
-    /// Called when post-processing completes.
-    pub fn on_post_processing_complete(
-        &mut self,
-        raw_transcript: &str,
-        result: PostProcessingResult,
-        listener: &dyn PipelineListener,
-    ) {
-        self.metrics.set_double("postProcessing.durationMs", result.duration_ms);
-        self.metrics.set_bool("postProcessing.enabled", true);
-        self.metrics.set_string("postProcessing.status", result.status.clone());
-
-        let final_transcript = result.transcript.trim().to_string();
-        self.finish_pipeline(
-            raw_transcript.to_string(),
-            final_transcript,
-            &result.prompt,
-            &result.reasoning,
-            &result.status,
-            listener,
-        );
+        self.finish_pipeline(transcript, listener);
     }
 
     /// Called when pipeline encounters an error at any stage.
@@ -280,11 +231,7 @@ impl PipelineEngine {
 
     fn finish_pipeline(
         &mut self,
-        raw_transcript: String,
-        final_transcript: String,
-        prompt: &str,
-        reasoning: &str,
-        status: &str,
+        transcript: String,
         listener: &dyn PipelineListener,
     ) {
         if let Some(start) = self.pipeline_start {
@@ -292,30 +239,20 @@ impl PipelineEngine {
             self.metrics.set_double("pipeline.totalMs", total_ms);
         }
 
-        if final_transcript.is_empty() {
+        if transcript.is_empty() {
             log::info!("transcript empty — dismissing");
             self.metrics.set_string("pipeline.outcome", "empty".to_string());
             self.transition(PipelineState::Idle, listener);
         } else {
             self.metrics.set_string("pipeline.outcome", "pasted".to_string());
-            listener.on_paste_text(final_transcript.clone());
+            listener.on_paste_text(transcript.clone());
             self.transition(PipelineState::Pasting, listener);
         }
 
-        // Record history (listener can persist it)
         let entry = HistoryEntry {
             id: uuid_v4(),
             timestamp: unix_timestamp(),
-            raw_transcript,
-            post_processed_transcript: final_transcript,
-            post_processing_prompt: if prompt.is_empty() { None } else { Some(prompt.to_string()) },
-            post_processing_reasoning: if reasoning.is_empty() { None } else { Some(reasoning.to_string()) },
-            context_summary: String::new(),
-            context_prompt: None,
-            context_screenshot_data_url: None,
-            context_screenshot_status: String::new(),
-            post_processing_status: status.to_string(),
-            debug_status: "done".to_string(),
+            transcript: transcript.clone(),
             custom_vocabulary: self.config.custom_vocabulary.clone(),
             audio_file_name: None,
             metrics_json: self.metrics.to_json(),
@@ -395,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn basic_flow_without_post_processing() {
+    fn basic_flow() {
         let (mut engine, listener) = make_engine();
         assert_eq!(engine.state(), &PipelineState::Idle);
 
@@ -429,7 +366,7 @@ mod tests {
         // Check history recorded
         let history = listener.history.lock().unwrap();
         assert_eq!(history.len(), 1);
-        assert_eq!(history[0].post_processed_transcript, "hello world");
+        assert_eq!(history[0].transcript, "hello world");
     }
 
     #[test]
