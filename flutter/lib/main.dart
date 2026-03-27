@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:macos_window_utils/macos_window_utils.dart';
 import 'package:rinf/rinf.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
@@ -9,16 +10,14 @@ import 'theme/wrenflow_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await WindowManipulator.initialize();
 
-  // Check if setup is completed before deciding window behavior.
   final prefs = await SharedPreferences.getInstance();
   final hasCompletedSetup = prefs.getBool('hasCompletedSetup') ?? false;
 
-  // Initialize window manager.
   await windowManager.ensureInitialized();
 
   if (hasCompletedSetup) {
-    // Setup done — hide window and Dock icon, menu bar only.
     const windowOptions = WindowOptions(
       size: Size(400, 300),
       minimumSize: Size(300, 200),
@@ -29,19 +28,19 @@ Future<void> main() async {
       await windowManager.hide();
     });
   } else {
-    // Setup wizard — borderless floating card, like original Swift app.
+    // Setup wizard — surface-colored window, hidden titlebar,
+    // traffic lights overlay content.
     const windowOptions = WindowOptions(
-      size: Size(380, 500),
-      minimumSize: Size(340, 400),
+      size: Size(340, 380),
+      minimumSize: Size(300, 340),
       center: true,
       title: '',
       titleBarStyle: TitleBarStyle.hidden,
-      backgroundColor: Colors.transparent,
+      backgroundColor: WrenflowStyle.surface,
     );
     await windowManager.waitUntilReadyToShow(windowOptions, () async {
       await windowManager.setSkipTaskbar(false);
-      await windowManager.setBackgroundColor(Colors.transparent);
-      await windowManager.setHasShadow(false);
+      await windowManager.setBackgroundColor(WrenflowStyle.surface);
       await windowManager.show();
       await windowManager.focus();
     });
@@ -82,9 +81,11 @@ class _AppHome extends ConsumerWidget {
 
     return setupAsync.when(
       loading: () => const Scaffold(
+        backgroundColor: WrenflowStyle.surface,
         body: Center(child: CircularProgressIndicator()),
       ),
       error: (_, __) => const Scaffold(
+        backgroundColor: WrenflowStyle.surface,
         body: Center(child: Text('Wrenflow')),
       ),
       data: (hasCompleted) {

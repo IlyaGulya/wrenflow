@@ -1,5 +1,6 @@
 import Cocoa
 import FlutterMacOS
+import macos_window_utils
 
 @main
 class AppDelegate: FlutterAppDelegate {
@@ -7,7 +8,8 @@ class AppDelegate: FlutterAppDelegate {
   private var launchAtLoginHandler: LaunchAtLoginHandler?
 
   override func applicationDidFinishLaunching(_ notification: Notification) {
-    let controller = mainFlutterWindow?.contentViewController as! FlutterViewController
+    let utilsVC = mainFlutterWindow?.contentViewController as! MacOSWindowUtilsViewController
+    let controller = utilsVC.flutterViewController
     let messenger = controller.engine.binaryMessenger
     permissionHandler = PermissionHandler(messenger: messenger)
     launchAtLoginHandler = LaunchAtLoginHandler(messenger: messenger)

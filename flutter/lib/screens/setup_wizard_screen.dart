@@ -97,41 +97,36 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     _handleAutoAdvance(permissions);
 
     return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: Center(
-        child: Container(
-          width: 340,
-          decoration: WrenflowStyle.cardDecoration,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Flexible(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 250),
-                  switchInCurve: Curves.easeInOut,
-                  switchOutCurve: Curves.easeInOut,
-                  transitionBuilder: (child, animation) {
-                    return FadeTransition(
-                      opacity: animation,
-                      child: SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(0.05, 0),
-                          end: Offset.zero,
-                        ).animate(animation),
-                        child: child,
-                      ),
-                    );
-                  },
-                  child: _buildCurrentStep(
-                    permissions,
-                    key: ValueKey(_currentStep),
+      backgroundColor: WrenflowStyle.surface,
+      body: Column(
+        children: [
+          // Inset for macOS traffic lights.
+          const SizedBox(height: 28),
+          Expanded(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 250),
+              switchInCurve: Curves.easeInOut,
+              switchOutCurve: Curves.easeInOut,
+              transitionBuilder: (child, animation) {
+                return FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0.05, 0),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
                   ),
-                ),
+                );
+              },
+              child: _buildCurrentStep(
+                permissions,
+                key: ValueKey(_currentStep),
               ),
-              _buildFooter(),
-            ],
+            ),
           ),
-        ),
+          _buildFooter(),
+        ],
       ),
     );
   }
