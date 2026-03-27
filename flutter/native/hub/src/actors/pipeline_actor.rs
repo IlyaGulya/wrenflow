@@ -123,6 +123,10 @@ impl PipelineActor {
         self.update_dismiss();
     }
 
+    pub fn is_transcribing(&self) -> bool {
+        self.engine.state().is_transcribing()
+    }
+
     pub fn on_first_audio(&mut self) {
         self.engine.on_first_audio(&self.listener);
         self.init_deadline = None;
