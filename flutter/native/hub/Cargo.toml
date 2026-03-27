@@ -25,7 +25,7 @@ async-trait = "0.1.87"
 messages = "0.3.1"
 wrenflow-domain = { path = "../../../core/wrenflow-domain" }
 wrenflow-core = { path = "../../../core/wrenflow-core" }
-rdev = "0.5"
+raw-input = { git = "https://github.com/lete114/raw-input.git" }
 dirs = "6"
 enigo = "0.6"
 arboard = "3"
