@@ -30,7 +30,7 @@
 	<string>NSApplication</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Wrenflow needs microphone access for speech-to-text dictation.</string>
-	<key>LSUIElement</key>
-	<true/>
+	<!-- LSUIElement managed programmatically: visible in Dock during setup, hidden after -->
+
 </dict>
 </plist>

@@ -438,10 +438,11 @@ class _StepLayout extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    return SingleChildScrollView(
+      child: Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        // Spacer to push content toward center.
-        const Spacer(flex: 1),
+        const SizedBox(height: 24),
 
         // Step label.
         Text(
@@ -497,13 +498,14 @@ class _StepLayout extends StatelessWidget {
         // Optional extra content (dropdown, text field, etc.).
         if (child != null) child!,
 
-        const Spacer(flex: 2),
+        const SizedBox(height: 24),
 
         // Bottom action area.
         action,
 
         const SizedBox(height: 8),
       ],
+      ),
     );
   }
 }

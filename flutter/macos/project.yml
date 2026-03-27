@@ -74,14 +74,14 @@ targets:
       Release: Runner/Configs/Release.xcconfig
       Profile: Runner/Configs/Debug.xcconfig
     preBuildScripts:
-      - name: Run Script
-        script: |
-          echo "$PRODUCT_NAME.app" > "$PROJECT_DIR"/Flutter/ephemeral/.app_filename && "$FLUTTER_ROOT"/packages/flutter_tools/bin/macos_assemble.sh embed
-        basedOnDependencyAnalysis: false
-    postBuildScripts:
       - name: Flutter Assemble
         script: |
           "$FLUTTER_ROOT"/packages/flutter_tools/bin/macos_assemble.sh && touch Flutter/ephemeral/tripwire
+        basedOnDependencyAnalysis: false
+    postBuildScripts:
+      - name: Embed Flutter Frameworks
+        script: |
+          echo "$PRODUCT_NAME.app" > "$PROJECT_DIR"/Flutter/ephemeral/.app_filename && "$FLUTTER_ROOT"/packages/flutter_tools/bin/macos_assemble.sh embed
         basedOnDependencyAnalysis: false
   RunnerTests:
     type: bundle.unit-test
