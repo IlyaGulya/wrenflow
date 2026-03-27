@@ -11,10 +11,14 @@ pub use wrenflow_domain::model_management;
 // Audio capture (cpal-based)
 pub mod audio_capture;
 
-// Infrastructure modules (IO, persistence)
-pub mod model_downloader;
+// Persistence
 pub mod config_store;
 pub mod history_store;
+
+// Local transcription (behind feature flag)
+#[cfg(feature = "local-transcription")]
+pub mod model_downloader;
+#[cfg(feature = "local-transcription")]
 pub mod transcription_local;
 
 // Convenience re-exports

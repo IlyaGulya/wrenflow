@@ -1,6 +1,6 @@
 [tools]
 rust = "1.94.1"
-flutter = "3.29.2"
+flutter = "3.41.6"
 ruby = { version = "3.4.9", options = { precompiled = true } }
 "cargo:rinf_cli" = "8.10.0"
 "gem:cocoapods" = "1.16.2"

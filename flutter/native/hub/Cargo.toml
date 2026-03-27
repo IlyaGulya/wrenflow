@@ -25,7 +25,7 @@ log = "0.4"
 async-trait = "0.1.87"
 messages = "0.3.1"
 wrenflow-domain = { path = "../../../core/wrenflow-domain" }
-wrenflow-core = { path = "../../../core/wrenflow-core" }
+wrenflow-core = { path = "../../../core/wrenflow-core", default-features = false }
 rdev = "0.5"
 enigo = "0.6"
 arboard = "3"
