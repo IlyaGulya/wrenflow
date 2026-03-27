@@ -1,12 +1,22 @@
 //! Pipeline actor — owns the PipelineEngine and routes signals.
+//! Manages FSM timeouts and bridges PipelineListener to rinf signals.
 
 use rinf::{DartSignal, RustSignal};
+use std::pin::Pin;
 use tokio::select;
+use tokio::time::{Duration, Sleep, sleep};
 use wrenflow_domain::config::AppConfig;
 use wrenflow_domain::history::HistoryEntry;
-use wrenflow_domain::pipeline::{PipelineEngine, PipelineListener, PipelineSound, PipelineState};
+use wrenflow_domain::pipeline::{
+    PipelineEngine, PipelineListener, PipelineSound, PipelineState, TranscriptionResult,
+};
 
 use crate::signals;
+
+// Timeout durations matching the Swift app
+const INIT_TIMEOUT: Duration = Duration::from_millis(500);
+const INDICATOR_TIMEOUT: Duration = Duration::from_secs(1);
+const DISMISS_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Bridges PipelineListener trait to rinf signals.
 struct SignalListener;
@@ -21,11 +31,9 @@ impl PipelineListener for SignalListener {
     }
 
     fn on_paste_text(&self, text: String) {
-        // TODO: Use enigo+arboard to paste, then notify Dart
-        signals::TranscriptReady {
-            transcript: text,
-        }
-        .send_signal_to_dart();
+        // TODO: Use enigo+arboard to paste (freeflow-71y)
+        signals::TranscriptReady { transcript: text }.send_signal_to_dart();
+        signals::PasteComplete.send_signal_to_dart();
     }
 
     fn on_play_sound(&self, sound: PipelineSound) {
@@ -58,6 +66,10 @@ impl PipelineListener for SignalListener {
 pub struct PipelineActor {
     engine: PipelineEngine,
     listener: SignalListener,
+    // Optional timers — None when inactive
+    init_timer: Option<Pin<Box<Sleep>>>,
+    indicator_timer: Option<Pin<Box<Sleep>>>,
+    dismiss_timer: Option<Pin<Box<Sleep>>>,
 }
 
 impl PipelineActor {
@@ -65,6 +77,9 @@ impl PipelineActor {
         Self {
             engine: PipelineEngine::new(AppConfig::default()),
             listener: SignalListener,
+            init_timer: None,
+            indicator_timer: None,
+            dismiss_timer: None,
         }
     }
 
@@ -76,11 +91,30 @@ impl PipelineActor {
         loop {
             select! {
                 Some(_pack) = start_recv.recv() => {
-                    self.engine.handle_hotkey_down(&self.listener);
+                    let started = self.engine.handle_hotkey_down(&self.listener);
+                    if started {
+                        // Schedule init timeout (0.5s → show initializing spinner)
+                        self.init_timer = Some(Box::pin(sleep(INIT_TIMEOUT)));
+                        self.indicator_timer = None;
+                        self.dismiss_timer = None;
+                    }
                 }
+
                 Some(pack) = stop_recv.recv() => {
-                    self.engine.handle_hotkey_up(pack.message.duration_ms, &self.listener);
+                    let transcribing = self.engine.handle_hotkey_up(
+                        pack.message.duration_ms, &self.listener
+                    );
+                    self.init_timer = None;
+                    if transcribing {
+                        // Schedule indicator timeout (1s → show transcribing indicator)
+                        self.indicator_timer = Some(Box::pin(sleep(INDICATOR_TIMEOUT)));
+
+                        // TODO (freeflow-385): Actually transcribe audio here.
+                        // For now, simulate with a placeholder to complete the FSM flow.
+                        // The real implementation will call Groq API or Parakeet.
+                    }
                 }
+
                 Some(pack) = config_recv.recv() => {
                     let c = pack.message;
                     self.engine.update_config(AppConfig {
@@ -95,9 +129,53 @@ impl PipelineActor {
                         minimum_recording_duration_ms: c.minimum_recording_duration_ms,
                     });
                 }
+
+                // Timer fires: init timeout
+                () = async { self.init_timer.as_mut().expect("timer").as_mut().await },
+                    if self.init_timer.is_some() => {
+                    self.init_timer = None;
+                    self.engine.on_init_timeout(&self.listener);
+                }
+
+                // Timer fires: indicator timeout
+                () = async { self.indicator_timer.as_mut().expect("timer").as_mut().await },
+                    if self.indicator_timer.is_some() => {
+                    self.indicator_timer = None;
+                    self.engine.on_indicator_timeout(&self.listener);
+                }
+
+                // Timer fires: dismiss timeout
+                () = async { self.dismiss_timer.as_mut().expect("timer").as_mut().await },
+                    if self.dismiss_timer.is_some() => {
+                    self.dismiss_timer = None;
+                    self.engine.on_dismiss_timeout(&self.listener);
+                }
+
                 else => break,
             }
+
+            // After any event, check if we should schedule a dismiss timer
+            self.update_dismiss_timer();
         }
+    }
+
+    /// Schedule dismiss timer when entering Pasting or Error state.
+    fn update_dismiss_timer(&mut self) {
+        match self.engine.state() {
+            PipelineState::Pasting | PipelineState::Error { .. } => {
+                if self.dismiss_timer.is_none() {
+                    self.dismiss_timer = Some(Box::pin(sleep(DISMISS_TIMEOUT)));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Called when transcription completes (will be triggered by audio/transcription actors).
+    pub fn on_transcription_complete(&mut self, result: TranscriptionResult) {
+        self.engine
+            .on_transcription_complete(result, &self.listener);
+        self.indicator_timer = None;
     }
 }
 
