@@ -5,5 +5,4 @@ pub mod pipeline;
 pub mod platform;
 pub mod audio;
 pub mod transcription;
-pub mod models;
 pub mod model_management;

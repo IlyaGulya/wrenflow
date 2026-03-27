@@ -90,7 +90,7 @@ mod tests {
         store.save(&config).unwrap();
         let loaded = store.load().unwrap();
         assert!(loaded.sound_enabled);
-        assert_eq!(loaded.transcription_provider, "cloud");
+        assert_eq!(loaded.selected_hotkey, "fn");
     }
 
     #[test]

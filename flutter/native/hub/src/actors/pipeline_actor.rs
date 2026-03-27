@@ -109,14 +109,10 @@ impl PipelineActor {
 
     pub fn handle_config_update(&mut self, c: signals::UpdateConfig) {
         self.engine.update_config(AppConfig {
-            api_key: c.api_key,
-            api_base_url: c.api_base_url,
             selected_hotkey: c.selected_hotkey,
             selected_microphone_id: c.selected_microphone_id,
             sound_enabled: c.sound_enabled,
             custom_vocabulary: c.custom_vocabulary,
-            transcription_provider: c.transcription_provider,
-            transcription_model: c.transcription_model,
             minimum_recording_duration_ms: c.minimum_recording_duration_ms,
         });
     }
