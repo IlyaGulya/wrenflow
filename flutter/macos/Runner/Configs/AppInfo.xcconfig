@@ -8,7 +8,7 @@
 PRODUCT_NAME = wrenflow
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = dev.gulya.wrenflow
+PRODUCT_BUNDLE_IDENTIFIER = me.gulya.wrenflow
 
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = Copyright © 2026 dev.gulya. All rights reserved.
