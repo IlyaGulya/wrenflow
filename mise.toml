@@ -31,9 +31,13 @@ description = "Watch and regenerate Dart bindings on changes"
 dir = "flutter"
 run = "rinf gen --watch"
 
+[tasks.download-ort]
+description = "Download ONNX Runtime dylib if missing"
+run = "scripts/download-ort.sh"
+
 [tasks.build]
 description = "Build macOS debug app"
-depends = ["gen", "xcodegen"]
+depends = ["gen", "xcodegen", "download-ort"]
 dir = "flutter"
 run = "flutter build macos --debug"
 

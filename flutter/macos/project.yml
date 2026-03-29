@@ -74,6 +74,10 @@ targets:
       Release: Runner/Configs/Release.xcconfig
       Profile: Runner/Configs/Debug.xcconfig
     preBuildScripts:
+      - name: Download ONNX Runtime
+        script: |
+          "$PROJECT_DIR/../../scripts/download-ort.sh"
+        basedOnDependencyAnalysis: false
       - name: Flutter Assemble
         script: |
           "$FLUTTER_ROOT"/packages/flutter_tools/bin/macos_assemble.sh && touch Flutter/ephemeral/tripwire
@@ -82,6 +86,17 @@ targets:
       - name: Embed Flutter Frameworks
         script: |
           echo "$PRODUCT_NAME.app" > "$PROJECT_DIR"/Flutter/ephemeral/.app_filename && "$FLUTTER_ROOT"/packages/flutter_tools/bin/macos_assemble.sh embed
+        basedOnDependencyAnalysis: false
+      - name: Bundle ONNX Runtime
+        script: |
+          ORT_DYLIB="$PROJECT_DIR/../../vendor/onnxruntime/lib/libonnxruntime.dylib"
+          DEST="$BUILT_PRODUCTS_DIR/$PRODUCT_NAME.app/Contents/MacOS/"
+          if [ -f "$ORT_DYLIB" ]; then
+            cp -f "$ORT_DYLIB" "$DEST"
+            echo "Bundled libonnxruntime.dylib into $DEST"
+          else
+            echo "warning: libonnxruntime.dylib not found at $ORT_DYLIB — run scripts/download-ort.sh"
+          fi
         basedOnDependencyAnalysis: false
   RunnerTests:
     type: bundle.unit-test
