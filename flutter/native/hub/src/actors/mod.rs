@@ -24,7 +24,7 @@ pub async fn create_actors() {
 
     let mut pipeline = PipelineActor::new();
     let mut audio = AudioActor::new();
-    let mut hotkey = HotkeyActor::new("fn");
+    let mut hotkey = HotkeyActor::new("rightOption");
 
     // History actor — owns SQLite store on its own thread (Connection is !Send)
     let history_path = history_actor::default_history_path();
@@ -103,9 +103,11 @@ pub async fn create_actors() {
                                         }
                                         Ok(None) => {
                                             log::warn!("Transcription returned None (model not loaded?)");
+                                            pipeline.on_error("Model not loaded. Download the model first.");
                                         }
                                         Err(e) => {
                                             log::error!("Transcription task failed: {e}");
+                                            pipeline.on_error(&format!("Transcription failed: {e}"));
                                         }
                                     }
                                 }

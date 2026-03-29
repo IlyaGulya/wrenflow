@@ -1,22 +1,20 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
+import '../providers/app_lifecycle_provider.dart';
+import '../providers/audio_level_provider.dart';
+import '../providers/model_state_provider.dart';
 import '../providers/permissions_provider.dart';
+import '../providers/pipeline_state_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/permission_service.dart';
+import '../src/bindings/signals/signals.dart';
+import '../state/app_lifecycle_state.dart';
 import '../theme/wrenflow_theme.dart';
 import '../widgets/green_toggle.dart';
-
-/// shared_preferences key for setup completion.
-const _kHasCompletedSetup = 'has_completed_setup';
-
-/// Provider that reads whether the user has completed onboarding.
-final hasCompletedSetupProvider = FutureProvider<bool>((ref) async {
-  final prefs = await SharedPreferences.getInstance();
-  return prefs.getBool(_kHasCompletedSetup) ?? false;
-});
+import '../widgets/initializing_dots.dart';
+import '../widgets/waveform_painter.dart';
 
 /// Available hotkey options for the push-to-talk trigger.
 const _hotkeyOptions = <String, String>{
@@ -25,23 +23,14 @@ const _hotkeyOptions = <String, String>{
   'f5': 'F5',
 };
 
-/// The steps in the setup wizard.
-enum _SetupStep {
-  microphone,
-  accessibility,
-  hotkey,
-  vocabulary,
-  complete;
-
-  int get number => index + 1;
-  static int get totalSteps => values.length;
-}
-
-/// Multi-step onboarding wizard — pixel-perfect port of Swift WrenflowStyle.
+/// Setup wizard — used for both onboarding and permission recovery.
+///
+/// In onboarding mode: all 5 steps (microphone, accessibility, hotkey, vocabulary, complete).
+/// In recovery mode: only missing permission steps, auto-returns to Running when granted.
 class SetupWizardScreen extends ConsumerStatefulWidget {
-  const SetupWizardScreen({super.key, required this.onComplete});
+  const SetupWizardScreen({super.key, required this.mode});
 
-  final VoidCallback onComplete;
+  final WizardMode mode;
 
   @override
   ConsumerState<SetupWizardScreen> createState() => _SetupWizardScreenState();
@@ -49,12 +38,10 @@ class SetupWizardScreen extends ConsumerStatefulWidget {
 
 class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   final _permissionService = PermissionService();
-
-  _SetupStep _currentStep = _SetupStep.microphone;
   String _selectedHotkey = 'rightOption';
   final _vocabularyController = TextEditingController();
   bool _launchAtLogin = true;
-  final _autoAdvanced = <_SetupStep>{};
+  final _autoAdvanced = <OnboardingStep>{};
 
   @override
   void dispose() {
@@ -62,20 +49,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     super.dispose();
   }
 
-  void _goToStep(_SetupStep step) => setState(() => _currentStep = step);
-
-  void _next() {
-    final nextIndex = _currentStep.index + 1;
-    if (nextIndex < _SetupStep.values.length) {
-      _goToStep(_SetupStep.values[nextIndex]);
-    }
-  }
-
-  void _back() {
-    if (_currentStep.index > 0) {
-      _goToStep(_SetupStep.values[_currentStep.index - 1]);
-    }
-  }
+  AppLifecycleNotifier get _lifecycle =>
+      ref.read(appLifecycleProvider.notifier);
 
   Future<void> _finish() async {
     final notifier = ref.read(settingsProvider.notifier);
@@ -84,23 +59,31 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     if (vocab.isNotEmpty) {
       await notifier.setCustomVocabulary(vocab);
     }
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kHasCompletedSetup, true);
-    ref.invalidate(hasCompletedSetupProvider);
-    widget.onComplete();
+    await _lifecycle.completeOnboarding();
   }
 
   @override
   Widget build(BuildContext context) {
+    final lifecycle = ref.watch(appLifecycleProvider);
     final permissions = ref.watch(permissionsProvider);
-    _handleAutoAdvance(permissions);
+
+    // Recovery mode — auto-returns via provider, just show permission steps.
+    if (widget.mode == WizardMode.recovery && lifecycle is PermissionRecovery) {
+      return _buildRecoveryScreen(permissions, lifecycle.missing);
+    }
+
+    // Onboarding mode — driven by lifecycle state.
+    final currentStep = lifecycle is Onboarding
+        ? lifecycle.currentStep
+        : OnboardingStep.microphone;
+
+    _handleAutoAdvance(permissions, currentStep);
+    _syncSettingsIfNeeded(currentStep);
 
     return Scaffold(
       backgroundColor: WrenflowStyle.surface,
       body: Column(
         children: [
-          // Inset for macOS traffic lights.
           const SizedBox(height: 28),
           Expanded(
             child: AnimatedSwitcher(
@@ -119,76 +102,179 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                   ),
                 );
               },
-              child: _buildCurrentStep(
-                permissions,
-                key: ValueKey(_currentStep),
-              ),
+              child: _buildStep(currentStep, permissions,
+                  key: ValueKey(currentStep)),
             ),
           ),
-          _buildFooter(),
+          if (currentStep != OnboardingStep.complete)
+            const _GlobalModelIndicator(),
+          _buildFooter(currentStep),
         ],
       ),
     );
   }
 
-  void _handleAutoAdvance(PermissionsState permissions) {
-    if (_currentStep == _SetupStep.microphone &&
-        permissions.microphone == PermissionStatus.granted &&
-        !_autoAdvanced.contains(_SetupStep.microphone)) {
-      _autoAdvanced.add(_SetupStep.microphone);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _currentStep == _SetupStep.microphone) _next();
+  // ── Sync settings to Rust when reaching complete step ──────
+
+  bool _settingsSynced = false;
+
+  void _syncSettingsIfNeeded(OnboardingStep step) {
+    // Sync settings when reaching complete step.
+    if (step == OnboardingStep.complete && !_settingsSynced) {
+      _settingsSynced = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        final notifier = ref.read(settingsProvider.notifier);
+        await notifier.setSelectedHotkey(_selectedHotkey);
+        final vocab = _vocabularyController.text.trim();
+        if (vocab.isNotEmpty) {
+          await notifier.setCustomVocabulary(vocab);
+        }
       });
     }
-
-    if (_currentStep == _SetupStep.accessibility &&
-        permissions.accessibility == PermissionStatus.granted &&
-        !_autoAdvanced.contains(_SetupStep.accessibility)) {
-      _autoAdvanced.add(_SetupStep.accessibility);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _currentStep == _SetupStep.accessibility) _next();
-      });
+    if (step != OnboardingStep.complete) {
+      _settingsSynced = false;
     }
   }
 
-  // ── Footer ──────────────────────────────────────────────────
+  // ── Auto-advance permission steps ─────────────────────────
 
-  Widget _buildFooter() {
+  void _handleAutoAdvance(PermissionsState permissions, OnboardingStep step) {
+    if (step == OnboardingStep.microphone &&
+        permissions.microphone == PermissionStatus.granted &&
+        !_autoAdvanced.contains(OnboardingStep.microphone)) {
+      _autoAdvanced.add(OnboardingStep.microphone);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _lifecycle.onboardingNext();
+      });
+    }
+
+    if (step == OnboardingStep.accessibility &&
+        permissions.accessibility == PermissionStatus.granted &&
+        !_autoAdvanced.contains(OnboardingStep.accessibility)) {
+      _autoAdvanced.add(OnboardingStep.accessibility);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _lifecycle.onboardingNext();
+      });
+    }
+
+  }
+
+  // ── Recovery screen ───────────────────────────────────────
+
+  Widget _buildRecoveryScreen(
+      PermissionsState permissions, MissingPermissions missing) {
+    return Scaffold(
+      backgroundColor: WrenflowStyle.surface,
+      body: Column(
+        children: [
+          const SizedBox(height: 28),
+          Expanded(
+            child: _StepContent(
+              icon: CupertinoIcons.exclamationmark_triangle_fill,
+              title: 'Permissions Required',
+              subtitle: 'Some permissions were revoked. Please re-grant them.',
+              child: Column(
+                children: [
+                  if (missing.microphone)
+                    _permissionRow(
+                      'Microphone',
+                      permissions.microphone == PermissionStatus.granted,
+                      () async {
+                        final granted =
+                            await _permissionService.requestMicrophone();
+                        if (!granted && mounted) {
+                          await _permissionService.openMicrophoneSettings();
+                        }
+                      },
+                    ),
+                  if (missing.accessibility)
+                    _permissionRow(
+                      'Accessibility',
+                      permissions.accessibility == PermissionStatus.granted,
+                      () async {
+                        final granted =
+                            await _permissionService.requestAccessibility();
+                        if (!granted && mounted) {
+                          await _permissionService.openAccessibilitySettings();
+                        }
+                      },
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _permissionRow(String name, bool granted, VoidCallback onGrant) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: granted
+          ? Row(
+              children: [
+                Icon(CupertinoIcons.checkmark_circle_fill,
+                    size: 13, color: WrenflowStyle.green),
+                const SizedBox(width: 6),
+                Text('$name — Granted',
+                    style: WrenflowStyle.body(12)
+                        .copyWith(color: WrenflowStyle.green)),
+              ],
+            )
+          : GestureDetector(
+              onTap: onGrant,
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                decoration: WrenflowStyle.permissionButtonDecoration,
+                child: Center(
+                  child: Text('Grant $name', style: WrenflowStyle.body(12)),
+                ),
+              ),
+            ),
+    );
+  }
+
+  // ── Onboarding footer ─────────────────────────────────────
+
+  Widget _buildFooter(OnboardingStep step) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         children: [
-          // Back button
-          if (_currentStep.index > 0)
+          if (step.index > 0)
             GestureDetector(
-              onTap: _back,
-              child: Text('Back', style: WrenflowStyle.body(12).copyWith(
-                color: WrenflowStyle.textTertiary,
-              )),
+              onTap: () => _lifecycle.onboardingBack(),
+              child: Text(
+                'Back',
+                style: WrenflowStyle.body(12)
+                    .copyWith(color: WrenflowStyle.textTertiary),
+              ),
             )
           else
             const SizedBox(width: 32),
-
           const Spacer(),
-
-          // Step dots
-          _buildStepDots(),
-
+          _buildStepDots(step),
           const Spacer(),
-
-          // Action button
-          _buildFooterAction(),
+          step == OnboardingStep.complete
+              ? _FooterButton(label: 'Finish', onTap: _finish)
+              : _FooterButton(
+                  label: 'Next',
+                  onTap: () => _lifecycle.onboardingNext(),
+                ),
         ],
       ),
     );
   }
 
-  Widget _buildStepDots() {
+  Widget _buildStepDots(OnboardingStep step) {
     return Row(
       mainAxisSize: MainAxisSize.min,
-      children: List.generate(_SetupStep.totalSteps, (i) {
-        final isCurrent = i == _currentStep.index;
-        final isCompleted = i < _currentStep.index;
+      children: List.generate(OnboardingStep.values.length, (i) {
+        final isCurrent = i == step.index;
+        final isCompleted = i < step.index;
         final double size = isCurrent ? 6 : 5;
         final Color color = isCurrent
             ? WrenflowStyle.textOp50
@@ -212,42 +298,40 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     );
   }
 
-  Widget _buildFooterAction() {
-    if (_currentStep == _SetupStep.complete) {
-      return _FooterButton(
-        label: 'Finish',
-        onTap: _finish,
-      );
-    }
-    return _FooterButton(
-      label: 'Next',
-      onTap: _next,
-    );
-  }
+  // ── Step content ──────────────────────────────────────────
 
-  // ── Step content ────────────────────────────────────────────
-
-  Widget _buildCurrentStep(PermissionsState permissions, {Key? key}) {
-    return switch (_currentStep) {
-      _SetupStep.microphone => _buildPermissionStep(
-        key: key,
-        icon: CupertinoIcons.mic_fill,
-        title: 'Microphone',
-        subtitle: 'Wrenflow needs microphone access to record your voice.',
-        isGranted: permissions.microphone == PermissionStatus.granted,
-        onGrant: () => _permissionService.requestMicrophone(),
-      ),
-      _SetupStep.accessibility => _buildPermissionStep(
-        key: key,
-        icon: CupertinoIcons.hand_raised_fill,
-        title: 'Accessibility',
-        subtitle: 'Required for global hotkey and pasting text.',
-        isGranted: permissions.accessibility == PermissionStatus.granted,
-        onGrant: () => _permissionService.requestAccessibility(),
-      ),
-      _SetupStep.hotkey => _buildHotkeyStep(key: key),
-      _SetupStep.vocabulary => _buildVocabularyStep(key: key),
-      _SetupStep.complete => _buildCompleteStep(key: key),
+  Widget _buildStep(OnboardingStep step, PermissionsState permissions,
+      {Key? key}) {
+    return switch (step) {
+      OnboardingStep.microphone => _buildPermissionStep(
+          key: key,
+          icon: CupertinoIcons.mic_fill,
+          title: 'Microphone',
+          subtitle: 'Wrenflow needs microphone access to record your voice.',
+          isGranted: permissions.microphone == PermissionStatus.granted,
+          onGrant: () async {
+            final granted = await _permissionService.requestMicrophone();
+            if (!granted && mounted) {
+              await _permissionService.openMicrophoneSettings();
+            }
+          },
+        ),
+      OnboardingStep.accessibility => _buildPermissionStep(
+          key: key,
+          icon: CupertinoIcons.hand_raised_fill,
+          title: 'Accessibility',
+          subtitle: 'Required for global hotkey and pasting text.',
+          isGranted: permissions.accessibility == PermissionStatus.granted,
+          onGrant: () async {
+            final granted = await _permissionService.requestAccessibility();
+            if (!granted && mounted) {
+              await _permissionService.openAccessibilitySettings();
+            }
+          },
+        ),
+      OnboardingStep.hotkey => _buildHotkeyStep(key: key),
+      OnboardingStep.vocabulary => _buildVocabularyStep(key: key),
+      OnboardingStep.complete => _buildCompleteStep(key: key),
     };
   }
 
@@ -264,9 +348,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       icon: icon,
       title: title,
       subtitle: subtitle,
-      child: isGranted
-          ? _grantedBadge()
-          : _grantButton(onTap: onGrant),
+      child: isGranted ? _grantedBadge() : _grantButton(onTap: onGrant),
     );
   }
 
@@ -274,9 +356,12 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(CupertinoIcons.checkmark_circle_fill, size: 13, color: WrenflowStyle.green),
+        Icon(CupertinoIcons.checkmark_circle_fill,
+            size: 13, color: WrenflowStyle.green),
         const SizedBox(width: 4),
-        Text('Granted', style: WrenflowStyle.body(12).copyWith(color: WrenflowStyle.green)),
+        Text('Granted',
+            style:
+                WrenflowStyle.body(12).copyWith(color: WrenflowStyle.green)),
       ],
     );
   }
@@ -308,10 +393,13 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
             onTap: () => setState(() => _selectedHotkey = entry.key),
             child: Container(
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 10),
+              padding:
+                  const EdgeInsets.symmetric(vertical: 7, horizontal: 10),
               margin: const EdgeInsets.only(bottom: 4),
               decoration: BoxDecoration(
-                color: isSelected ? WrenflowStyle.textOp05 : Colors.transparent,
+                color: isSelected
+                    ? WrenflowStyle.textOp05
+                    : Colors.transparent,
                 borderRadius: BorderRadius.circular(7),
               ),
               child: Row(
@@ -375,16 +463,318 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       key: key,
       icon: CupertinoIcons.checkmark_seal_fill,
       title: 'Ready',
-      subtitle: 'Hold your hotkey to record, release to transcribe.',
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      subtitle:
+          'Try it out — hold your hotkey to record, release to transcribe.',
+      child: Column(
         children: [
-          Text('Launch at login', style: WrenflowStyle.body(12)),
-          GreenToggle(
-            value: _launchAtLogin,
-            onChanged: (v) => setState(() => _launchAtLogin = v),
+          // Live pipeline state + transcription result
+          const _TranscriptionTestWidget(),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Launch at login', style: WrenflowStyle.body(12)),
+              GreenToggle(
+                value: _launchAtLogin,
+                onChanged: (v) => setState(() => _launchAtLogin = v),
+              ),
+            ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ── Global model indicator (visible on all wizard steps) ───────
+
+class _GlobalModelIndicator extends ConsumerWidget {
+  const _GlobalModelIndicator();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final modelState = ref.watch(modelStateProvider).value;
+
+    // Hide when ready — no need to show anything.
+    if (modelState == null || modelState is ModelStateReady) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
+      child: _buildContent(modelState),
+    );
+  }
+
+  Widget _buildContent(ModelState state) {
+    if (state is ModelStateDownloading) {
+      final pct = (state.progress * 100).toInt();
+      return Column(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(2),
+            child: LinearProgressIndicator(
+              value: state.progress,
+              minHeight: 3,
+              backgroundColor: WrenflowStyle.textOp10,
+              valueColor: AlwaysStoppedAnimation(WrenflowStyle.textOp50),
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text('Downloading model — $pct%',
+              style: WrenflowStyle.mono(9).copyWith(
+                  color: WrenflowStyle.textTertiary)),
+        ],
+      );
+    }
+
+    if (state is ModelStateLoading) {
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 8,
+            height: 8,
+            child: CircularProgressIndicator(
+              strokeWidth: 1.5,
+              valueColor: AlwaysStoppedAnimation(WrenflowStyle.textTertiary),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text('Loading model...',
+              style: WrenflowStyle.mono(9).copyWith(
+                  color: WrenflowStyle.textTertiary)),
+        ],
+      );
+    }
+
+    if (state is ModelStateError) {
+      return Text('Model: ${state.message}',
+          style: WrenflowStyle.mono(9).copyWith(color: WrenflowStyle.red),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis);
+    }
+
+    // NotDownloaded or unknown
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        SizedBox(
+          width: 8,
+          height: 8,
+          child: CircularProgressIndicator(
+            strokeWidth: 1.5,
+            valueColor: AlwaysStoppedAnimation(WrenflowStyle.textTertiary),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text('Preparing model...',
+            style: WrenflowStyle.mono(9).copyWith(
+                color: WrenflowStyle.textTertiary)),
+      ],
+    );
+  }
+}
+
+// ── Transcription test widget (for complete step) ─────────────
+
+class _TranscriptionTestWidget extends ConsumerStatefulWidget {
+  const _TranscriptionTestWidget();
+
+  @override
+  ConsumerState<_TranscriptionTestWidget> createState() =>
+      _TranscriptionTestWidgetState();
+}
+
+class _TranscriptionTestWidgetState
+    extends ConsumerState<_TranscriptionTestWidget>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _waveformController;
+  String? _lastTranscript;
+
+  @override
+  void initState() {
+    super.initState();
+    _waveformController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat();
+
+    // Listen for transcription results.
+    TranscriptReady.rustSignalStream.listen((signal) {
+      if (mounted) {
+        setState(() {
+          _lastTranscript = signal.message.transcript;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _waveformController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pipelineAsync = ref.watch(pipelineStateProvider);
+    final pipeline = pipelineAsync.value;
+
+    return Container(
+      width: double.infinity,
+      height: 48,
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+      decoration: BoxDecoration(
+        color: WrenflowStyle.textOp05,
+        borderRadius: BorderRadius.circular(7),
+      ),
+      child: _buildContent(pipeline),
+    );
+  }
+
+  Widget _buildContent(PipelineState? pipeline) {
+    // Check model state first — can't test without a loaded model.
+    final modelState = ref.watch(modelStateProvider).value;
+    if (modelState is ModelStateDownloading) {
+      final pct = (modelState.progress * 100).toInt();
+      return Column(
+        key: const ValueKey('model-downloading'),
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: LinearProgressIndicator(
+              value: modelState.progress,
+              minHeight: 4,
+              backgroundColor: WrenflowStyle.textOp10,
+              valueColor: AlwaysStoppedAnimation(WrenflowStyle.textOp50),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text('Downloading model — $pct%',
+              style: WrenflowStyle.caption(10)),
+        ],
+      );
+    }
+    if (modelState is ModelStateLoading) {
+      return Center(
+        key: const ValueKey('model-loading'),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const InitializingDots(),
+            const SizedBox(width: 8),
+            Text('Loading model...', style: WrenflowStyle.caption(11)),
+          ],
+        ),
+      );
+    }
+    if (modelState is ModelStateError) {
+      return Center(
+        key: const ValueKey('model-error'),
+        child: GestureDetector(
+          onTap: () => const InitializeLocalModel().sendSignalToRust(),
+          child: Text('Model error. Tap to retry.',
+              style: WrenflowStyle.caption(11)
+                  .copyWith(color: WrenflowStyle.red)),
+        ),
+      );
+    }
+    if (modelState is! ModelStateReady) {
+      return Center(
+        key: const ValueKey('model-init'),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const InitializingDots(),
+            const SizedBox(width: 8),
+            Text('Preparing model...', style: WrenflowStyle.caption(11)),
+          ],
+        ),
+      );
+    }
+
+    if (_lastTranscript != null) {
+      return Center(
+        key: const ValueKey('result'),
+        child: Text(
+          _lastTranscript!,
+          style: WrenflowStyle.body(12),
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      );
+    }
+
+    if (pipeline is PipelineStateRecording) {
+      final audioLevel = ref.watch(audioLevelProvider).value ?? 0.0;
+      return Center(
+        key: const ValueKey('recording'),
+        child: AnimatedBuilder(
+          animation: _waveformController,
+          builder: (context, _) {
+            return CustomPaint(
+              size: const Size(200, 20),
+              painter: WaveformPainter(
+                audioLevel: audioLevel,
+                animationValue: _waveformController.value,
+              ),
+            );
+          },
+        ),
+      );
+    }
+
+    if (pipeline is PipelineStateStarting ||
+        pipeline is PipelineStateInitializing) {
+      return Center(
+        key: const ValueKey('starting'),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const InitializingDots(),
+            const SizedBox(width: 8),
+            Text('Starting...', style: WrenflowStyle.caption(11)),
+          ],
+        ),
+      );
+    }
+
+    if (pipeline is PipelineStateTranscribing) {
+      return Center(
+        key: const ValueKey('transcribing'),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const InitializingDots(),
+            const SizedBox(width: 8),
+            Text('Transcribing...', style: WrenflowStyle.caption(11)),
+          ],
+        ),
+      );
+    }
+
+    if (pipeline is PipelineStateError) {
+      return Center(
+        key: const ValueKey('error'),
+        child: Text(
+          (pipeline as PipelineStateError).message,
+          style: WrenflowStyle.caption(11).copyWith(color: WrenflowStyle.red),
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      );
+    }
+
+    return Center(
+      key: const ValueKey('idle'),
+      child: Text(
+        'Press and hold your hotkey now to test.',
+        style: WrenflowStyle.caption(11),
+        textAlign: TextAlign.center,
       ),
     );
   }
@@ -414,8 +804,6 @@ class _StepContent extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           const SizedBox(height: 24),
-
-          // Icon circle
           Container(
             width: 40,
             height: 40,
@@ -426,30 +814,19 @@ class _StepContent extends StatelessWidget {
             child: Icon(icon, size: 17, color: WrenflowStyle.textOp70),
           ),
           const SizedBox(height: 10),
-
-          // Title
           Text(title, style: WrenflowStyle.title(16)),
           const SizedBox(height: 4),
-
-          // Subtitle
-          Text(
-            subtitle,
-            textAlign: TextAlign.center,
-            style: WrenflowStyle.caption(12),
-          ),
+          Text(subtitle,
+              textAlign: TextAlign.center,
+              style: WrenflowStyle.caption(12)),
           const SizedBox(height: 14),
-
-          // Content
           child,
-
           const SizedBox(height: 20),
         ],
       ),
     );
   }
 }
-
-// ── Footer button ─────────────────────────────────────────────
 
 class _FooterButton extends StatelessWidget {
   const _FooterButton({required this.label, required this.onTap});

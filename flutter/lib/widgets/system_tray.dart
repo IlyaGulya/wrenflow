@@ -1,17 +1,17 @@
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tray_manager/tray_manager.dart';
-import 'package:window_manager/window_manager.dart';
 
+import 'package:wrenflow/providers/app_lifecycle_provider.dart';
 import 'package:wrenflow/providers/pipeline_state_provider.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
+import 'package:wrenflow/state/app_lifecycle_state.dart';
 
 /// Manages the macOS system tray (menu bar) icon and context menu.
-///
-/// Listens to pipeline state changes via Riverpod and updates the tray icon
-/// and status text accordingly.
 class SystemTrayManager {
   SystemTrayManager(this._ref);
 
@@ -22,36 +22,66 @@ class SystemTrayManager {
   String? _recordingIconPath;
   String? _transcribingIconPath;
 
-  /// Initialize the system tray with icon and context menu.
+  WindowController? _settingsWindow;
+  WindowController? _historyWindow;
+
   Future<void> init() async {
-    // Extract tray icon assets to temp files so tray_manager can use file paths.
     _idleIconPath = await _extractAsset('assets/tray_icons/tray_idle.png');
     _recordingIconPath =
         await _extractAsset('assets/tray_icons/tray_recording.png');
     _transcribingIconPath =
         await _extractAsset('assets/tray_icons/tray_transcribing.png');
 
-    // Set the initial idle icon.
     if (_idleIconPath != null) {
       await _trayManager.setIcon(_idleIconPath!);
     }
 
-    // Build the initial context menu.
     await _updateContextMenu(const PipelineStateIdle());
 
-    // Listen to pipeline state changes and update tray accordingly.
+    // React to pipeline state changes (icon + menu).
     _ref.listen<AsyncValue<PipelineState>>(
       pipelineStateProvider,
       (previous, next) {
         final state = next.value;
-        if (state != null) {
-          _onPipelineStateChanged(state);
-        }
+        if (state != null) _onPipelineStateChanged(state);
       },
+    );
+
+    // React to lifecycle changes (close sub-windows when leaving Running).
+    _ref.listen<AppLifecycleState>(
+      appLifecycleProvider,
+      (previous, next) => _onLifecycleChanged(next),
     );
   }
 
-  /// Extract a Flutter asset to a temporary file and return its path.
+  // ── Lifecycle reactions ───────────────────────────────────
+
+  void _onLifecycleChanged(AppLifecycleState next) {
+    if (next is! Running) {
+      _closeSubWindows();
+    }
+    if (next is ShuttingDown) {
+      _quit();
+    }
+  }
+
+  Future<void> _closeSubWindows() async {
+    if (_settingsWindow != null) {
+      try {
+        await _settingsWindow!.hide();
+      } catch (_) {}
+      _settingsWindow = null;
+    }
+    if (_historyWindow != null) {
+      try {
+        await _historyWindow!.hide();
+      } catch (_) {}
+      _historyWindow = null;
+    }
+  }
+
+  // ── Pipeline reactions ────────────────────────────────────
+
   Future<String?> _extractAsset(String assetPath) async {
     try {
       final data = await rootBundle.load(assetPath);
@@ -62,7 +92,6 @@ class SystemTrayManager {
       await file.writeAsBytes(bytes);
       return file.path;
     } catch (e) {
-      // Asset not found or write failed; icon will be unavailable.
       return null;
     }
   }
@@ -105,7 +134,8 @@ class SystemTrayManager {
         MenuItem.separator(),
         MenuItem(
           label: 'Quit Wrenflow',
-          onClick: (_) => _quit(),
+          onClick: (_) =>
+              _ref.read(appLifecycleProvider.notifier).quit(),
         ),
       ],
     );
@@ -124,16 +154,53 @@ class SystemTrayManager {
     return 'Ready';
   }
 
-  void _showSettings() {
-    // Show the main window for settings.
-    windowManager.show();
-    windowManager.focus();
+  // ── Sub-window management ─────────────────────────────────
+
+  Future<void> _showSettings() async {
+    // Only open during Running state.
+    if (_ref.read(appLifecycleProvider) is! Running) return;
+
+    if (_settingsWindow != null) {
+      try {
+        await _settingsWindow!.show();
+        return;
+      } catch (_) {
+        _settingsWindow = null;
+      }
+    }
+
+    _settingsWindow = await WindowController.create(
+      WindowConfiguration(
+        arguments: jsonEncode({'type': 'settings'}),
+        hiddenAtLaunch: false,
+        width: 720,
+        height: 520,
+        titleBarHidden: true,
+      ),
+    );
   }
 
-  void _showHistory() {
-    // Show the main window for history.
-    windowManager.show();
-    windowManager.focus();
+  Future<void> _showHistory() async {
+    if (_ref.read(appLifecycleProvider) is! Running) return;
+
+    if (_historyWindow != null) {
+      try {
+        await _historyWindow!.show();
+        return;
+      } catch (_) {
+        _historyWindow = null;
+      }
+    }
+
+    _historyWindow = await WindowController.create(
+      WindowConfiguration(
+        arguments: jsonEncode({'type': 'history'}),
+        hiddenAtLaunch: false,
+        width: 400,
+        height: 500,
+        titleBarHidden: true,
+      ),
+    );
   }
 
   Future<void> _quit() async {
@@ -141,7 +208,6 @@ class SystemTrayManager {
     exit(0);
   }
 
-  /// Clean up tray resources.
   Future<void> dispose() async {
     await _trayManager.destroy();
   }

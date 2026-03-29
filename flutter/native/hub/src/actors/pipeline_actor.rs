@@ -132,6 +132,12 @@ impl PipelineActor {
         self.init_deadline = None;
     }
 
+    pub fn on_error(&mut self, message: &str) {
+        self.engine.on_pipeline_error(message, &self.listener);
+        self.indicator_deadline = None;
+        self.update_dismiss();
+    }
+
     /// Check and fire any expired timers. Call after each event.
     pub async fn check_timers(&mut self) {
         let now = Instant::now();

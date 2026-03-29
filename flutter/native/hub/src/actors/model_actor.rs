@@ -111,8 +111,10 @@ pub async fn run(engine_handle: SharedTranscriptionEngine) {
 }
 
 async fn handle_initialize(cancel_flag: Arc<AtomicBool>, engine_handle: SharedTranscriptionEngine) {
+    log::info!("handle_initialize called");
     let model = default_parakeet_model();
     let dir = model_dir();
+    log::info!("Model dir: {:?}, present: {}", dir, model_downloader::is_model_present(&model, &dir));
 
     // 1. Download if needed
     if !model_downloader::is_model_present(&model, &dir) {
@@ -153,9 +155,30 @@ async fn handle_initialize(cancel_flag: Arc<AtomicBool>, engine_handle: SharedTr
 
     let load_dir = dir.clone();
     let handle = engine_handle.clone();
+    log::info!("Starting model load (spawn_blocking)...");
     let load_result = tokio::task::spawn_blocking(move || {
+        log::info!("spawn_blocking: creating LocalTranscriptionEngine");
         let mut engine = LocalTranscriptionEngine::new();
-        engine.initialize(&load_dir, None)?;
+        log::info!("spawn_blocking: calling engine.initialize()");
+        engine.initialize(&load_dir, Some(&|state| {
+            let signal_state = match state {
+                wrenflow_core::transcription_local::ModelState::Compiling => {
+                    log::info!("Model state: Compiling (ONNX execution plan)");
+                    signals::ModelState::Loading // Map Compiling → Loading for Dart
+                }
+                wrenflow_core::transcription_local::ModelState::Ready => {
+                    log::info!("Model state: Ready");
+                    signals::ModelState::Ready
+                }
+                wrenflow_core::transcription_local::ModelState::Error(msg) => {
+                    log::error!("Model state: Error({msg})");
+                    signals::ModelState::Error { message: msg.clone() }
+                }
+                _ => return,
+            };
+            signals::ModelStateChanged { state: signal_state }.send_signal_to_dart();
+        }))?;
+        log::info!("spawn_blocking: engine.initialize() done");
         // Store in shared handle
         if let Ok(mut guard) = handle.lock() {
             *guard = Some(engine);
