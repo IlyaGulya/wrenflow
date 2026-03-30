@@ -39,14 +39,14 @@ class SystemTrayManager with TrayListener {
   StreamSubscription<void>? _windowsChangedSub;
 
   Future<void> init() async {
-    _idleIconPath = await _extractAsset('assets/tray_icons/tray_idle.png');
+    _idleIconPath = await _extractAsset('assets/tray_icons/tray_idle@2x.png');
     _recordingIconPath =
-        await _extractAsset('assets/tray_icons/tray_recording.png');
+        await _extractAsset('assets/tray_icons/tray_recording@2x.png');
     _transcribingIconPath =
-        await _extractAsset('assets/tray_icons/tray_transcribing.png');
+        await _extractAsset('assets/tray_icons/tray_transcribing@2x.png');
 
     if (_idleIconPath != null) {
-      await _trayManager.setIcon(_idleIconPath!);
+      await _trayManager.setIcon(_idleIconPath!, isTemplate: true, iconSize: 22);
     }
 
     _trayManager.addListener(this);
@@ -142,7 +142,7 @@ class SystemTrayManager with TrayListener {
     }
 
     if (iconPath != null) {
-      await _trayManager.setIcon(iconPath);
+      await _trayManager.setIcon(iconPath, isTemplate: true, iconSize: 22);
     }
   }
 

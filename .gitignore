@@ -24,3 +24,7 @@ RUST_MIGRATION_PLAN.md
 *.certSigningRequest
 .claude/
 vendor/
+
+# Generated icons (built from source SVG/PNG by scripts/generate-flutter-icons.sh)
+flutter/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_*.png
+flutter/assets/tray_icons/*.png

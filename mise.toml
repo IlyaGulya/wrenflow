@@ -5,6 +5,7 @@ ruby = { version = "3.4.9", options = { compile = false } }
 "cargo:rinf_cli" = "8.10.0"
 "gem:cocoapods" = "1.16.2"
 xcodegen = "2.45.3"
+resvg = "latest"
 
 # ── Tasks ──────────────────────────────────────────────────────
 
