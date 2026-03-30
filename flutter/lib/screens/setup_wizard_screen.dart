@@ -621,6 +621,11 @@ class _TranscriptionTestWidgetState
     final pipelineAsync = ref.watch(pipelineStateProvider);
     final pipeline = pipelineAsync.value;
 
+    // Clear old transcript when a new recording starts.
+    if (pipeline is PipelineStateStarting || pipeline is PipelineStateRecording) {
+      _lastTranscript = null;
+    }
+
     return Container(
       width: double.infinity,
       height: 48,

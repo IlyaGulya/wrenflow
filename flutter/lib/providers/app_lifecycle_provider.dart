@@ -23,6 +23,13 @@ class AppLifecycleNotifier extends Notifier<AppLifecycleState> {
     return const Initializing();
   }
 
+  void _transitionTo(AppLifecycleState newState) {
+    state = newState;
+    // Sync transcript action with Rust based on lifecycle.
+    final action = newState is Running ? 'paste' : 'display_only';
+    SetTranscriptAction(action: action).sendSignalToRust();
+  }
+
   Future<void> _initialize() async {
     final prefs = await SharedPreferences.getInstance();
     final hasCompleted = prefs.getBool(_kHasCompletedSetup) ?? false;
@@ -31,15 +38,15 @@ class AppLifecycleNotifier extends Notifier<AppLifecycleState> {
     const InitializeLocalModel().sendSignalToRust();
 
     if (!hasCompleted) {
-      state = const Onboarding(currentStep: OnboardingStep.microphone);
+      _transitionTo(const Onboarding(currentStep: OnboardingStep.microphone));
       return;
     }
 
     final permissions = ref.read(permissionsProvider);
     if (permissions.allGranted) {
-      state = const Running();
+      _transitionTo(const Running());
     } else {
-      state = PermissionRecovery(missing: _buildMissing(permissions));
+      _transitionTo(PermissionRecovery(missing: _buildMissing(permissions)));
     }
   }
 
@@ -52,7 +59,7 @@ class AppLifecycleNotifier extends Notifier<AppLifecycleState> {
     if (current is Running && !next.allGranted) {
       _permissionLostCount++;
       if (_permissionLostCount >= _permissionLostThreshold) {
-        state = PermissionRecovery(missing: _buildMissing(next));
+        _transitionTo(PermissionRecovery(missing: _buildMissing(next)));
         _permissionLostCount = 0;
       }
     } else if (current is Running) {
@@ -61,7 +68,7 @@ class AppLifecycleNotifier extends Notifier<AppLifecycleState> {
 
     // PermissionRecovery → Running (auto)
     if (current is PermissionRecovery && next.allGranted) {
-      state = const Running();
+      _transitionTo(const Running());
       _permissionLostCount = 0;
     }
   }
@@ -98,13 +105,13 @@ class AppLifecycleNotifier extends Notifier<AppLifecycleState> {
     if (state is! Onboarding) return;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kHasCompletedSetup, true);
-    state = const Running();
+    _transitionTo(const Running());
   }
 
   // ── Global actions ────────────────────────────────────────
 
   void quit() {
-    state = const ShuttingDown();
+    _transitionTo(const ShuttingDown());
     // Give a frame for cleanup, then exit.
     WidgetsBinding.instance.addPostFrameCallback((_) => exit(0));
   }

@@ -156,7 +156,7 @@ impl From<AppConfig> for wrenflow_core::config::AppConfig {
 #[uniffi::export(callback_interface)]
 pub trait FfiPipelineListener: Send + Sync {
     fn on_state_changed(&self, old: PipelineState, new: PipelineState);
-    fn on_paste_text(&self, text: String);
+    fn on_transcript_ready(&self, text: String);
     fn on_play_sound(&self, sound: PipelineSound);
     fn on_error(&self, message: String);
     fn on_history_entry_added(&self, entry: HistoryEntry);
@@ -173,7 +173,7 @@ impl core::PipelineListener for ListenerBridge {
     fn on_state_changed(&self, old: core::PipelineState, new: core::PipelineState) {
         self.listener.on_state_changed(old.into(), new.into());
     }
-    fn on_paste_text(&self, text: String) { self.listener.on_paste_text(text); }
+    fn on_transcript_ready(&self, text: String) { self.listener.on_transcript_ready(text); }
     fn on_play_sound(&self, sound: core::PipelineSound) { self.listener.on_play_sound(sound.into()); }
     fn on_error(&self, message: String) { self.listener.on_error(message); }
     fn on_history_entry_added(&self, entry: wrenflow_core::history::HistoryEntry) {

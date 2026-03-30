@@ -98,6 +98,12 @@ pub struct UpdateConfig {
     pub minimum_recording_duration_ms: f64,
 }
 
+/// Dart → Rust: set what happens after transcription
+#[derive(Deserialize, DartSignal)]
+pub struct SetTranscriptAction {
+    pub action: String, // "paste" or "display_only"
+}
+
 // ============================================================================
 // Audio level signal (Rust → Dart)
 // ============================================================================

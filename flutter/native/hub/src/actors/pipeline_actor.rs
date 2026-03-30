@@ -27,20 +27,12 @@ impl PipelineListener for SignalListener {
         .send_signal_to_dart();
     }
 
-    fn on_paste_text(&self, text: String) {
-        // Paste via enigo+arboard
-        if let Err(e) = super::paste_actor::paste_text(&text) {
-            log::error!("paste failed: {e}");
-            signals::PipelineError {
-                message: format!("Paste failed: {e}"),
-            }
-            .send_signal_to_dart();
-        }
+    fn on_transcript_ready(&self, text: String) {
+        // Just notify Dart. Paste decision is made by the orchestrator.
         signals::TranscriptReady {
             transcript: text,
         }
         .send_signal_to_dart();
-        signals::PasteComplete.send_signal_to_dart();
     }
 
     fn on_play_sound(&self, sound: PipelineSound) {

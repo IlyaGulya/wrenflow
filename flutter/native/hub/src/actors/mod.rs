@@ -13,20 +13,25 @@ use hotkey_actor::HotkeyActor;
 use model_actor::SharedTranscriptionEngine;
 use pipeline_actor::PipelineActor;
 use rinf::{DartSignal, RustSignal};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::spawn;
 use wrenflow_domain::pipeline::TranscriptionResult;
 
 use crate::signals;
 
+/// Whether to paste after transcription. Set by Dart via SetTranscriptAction.
+/// true = paste, false = display only.
+static SHOULD_PASTE: AtomicBool = AtomicBool::new(false);
+
 pub async fn create_actors() {
-    // Shared transcription engine (populated by model_actor, used by pipeline)
     let engine_handle = model_actor::shared_engine();
 
     let mut pipeline = PipelineActor::new();
     let mut audio = AudioActor::new();
     let mut hotkey = HotkeyActor::new("rightOption");
 
-    // History actor — owns SQLite store on its own thread (Connection is !Send)
+    // History actor
     let history_path = history_actor::default_history_path();
     match HistoryActor::new(history_path) {
         Ok(history) => {
@@ -39,18 +44,28 @@ pub async fn create_actors() {
         }
     }
 
-    // Model download/load actor — shares engine handle
+    // Model actor
     let model_engine = engine_handle.clone();
     spawn(async move {
         model_actor::run(model_engine).await;
     });
 
-    // Listen for device listing requests
+    // Device listing
     spawn(async {
         let recv = signals::ListAudioDevices::get_dart_signal_receiver();
         while let Some(_) = recv.recv().await {
             let devices = AudioActor::list_devices();
             signals::AudioDevicesListed { devices }.send_signal_to_dart();
+        }
+    });
+
+    // TranscriptAction listener
+    spawn(async {
+        let recv = signals::SetTranscriptAction::get_dart_signal_receiver();
+        while let Some(pack) = recv.recv().await {
+            let should_paste = pack.message.action == "paste";
+            SHOULD_PASTE.store(should_paste, Ordering::Relaxed);
+            log::info!("Transcript action set to: {}", pack.message.action);
         }
     });
 
@@ -85,7 +100,7 @@ pub async fn create_actors() {
                                         let mut guard = engine.lock().ok()?;
                                         let engine_mut = guard.as_mut()?;
                                         match engine_mut.transcribe_file(std::path::Path::new(&file_path)) {
-                                            Ok(text) => Some(wrenflow_domain::pipeline::TranscriptionResult {
+                                            Ok(text) => Some(TranscriptionResult {
                                                 raw_transcript: text,
                                                 duration_ms: start.elapsed().as_secs_f64() * 1000.0,
                                                 provider: "local".to_string(),
@@ -99,7 +114,16 @@ pub async fn create_actors() {
 
                                     match tx_result {
                                         Ok(Some(result)) => {
+                                            let transcript = result.raw_transcript.trim().to_string();
                                             pipeline.on_transcription_complete(result);
+
+                                            // Paste only if Dart configured it.
+                                            if !transcript.is_empty() && SHOULD_PASTE.load(Ordering::Relaxed) {
+                                                if let Err(e) = paste_actor::paste_text(&transcript) {
+                                                    log::error!("paste failed: {e}");
+                                                }
+                                                signals::PasteComplete.send_signal_to_dart();
+                                            }
                                         }
                                         Ok(None) => {
                                             log::warn!("Transcription returned None (model not loaded?)");

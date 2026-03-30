@@ -12,6 +12,7 @@ import 'screens/setup_wizard_screen.dart';
 import 'src/bindings/bindings.dart';
 import 'state/app_lifecycle_state.dart';
 import 'theme/wrenflow_theme.dart';
+import 'widgets/system_tray.dart';
 import 'widgets/window_synchronizer.dart';
 
 Future<void> main(List<String> args) async {
@@ -78,6 +79,10 @@ Future<void> _runMainWindow() async {
   await initializeRust(assignRustSignal);
 
   final container = ProviderContainer();
+
+  // Initialize system tray — it listens to lifecycle + pipeline state.
+  final tray = SystemTrayManager(container);
+  tray.init();
 
   runApp(
     UncontrolledProviderScope(

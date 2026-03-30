@@ -71,8 +71,8 @@ pub trait PipelineListener: Send + Sync {
     /// Called on every state transition.
     fn on_state_changed(&self, old: PipelineState, new: PipelineState);
 
-    /// Called when the final transcript is ready to be pasted.
-    fn on_paste_text(&self, text: String);
+    /// Called when the final transcript is ready.
+    fn on_transcript_ready(&self, text: String);
 
     /// Called to play a sound effect.
     fn on_play_sound(&self, sound: PipelineSound);
@@ -244,8 +244,8 @@ impl PipelineEngine {
             self.metrics.set_string("pipeline.outcome", "empty".to_string());
             self.transition(PipelineState::Idle, listener);
         } else {
-            self.metrics.set_string("pipeline.outcome", "pasted".to_string());
-            listener.on_paste_text(transcript.clone());
+            self.metrics.set_string("pipeline.outcome", "success".to_string());
+            listener.on_transcript_ready(transcript.clone());
             self.transition(PipelineState::Pasting, listener);
         }
 
@@ -311,7 +311,7 @@ mod tests {
         fn on_state_changed(&self, old: PipelineState, new: PipelineState) {
             self.transitions.lock().unwrap().push((old.name().to_string(), new.name().to_string()));
         }
-        fn on_paste_text(&self, text: String) {
+        fn on_transcript_ready(&self, text: String) {
             self.pasted.lock().unwrap().push(text);
         }
         fn on_play_sound(&self, sound: PipelineSound) {
