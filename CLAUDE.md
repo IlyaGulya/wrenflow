@@ -1,48 +1,33 @@
 # Wrenflow
 
-Cross-platform menu bar app for speech-to-text dictation. Hold a key to record, release to transcribe locally via Parakeet.
+Menu bar speech-to-text app. Hold key → record → release → transcribe locally → paste.
 
 ## Build & Run
 
-All tools managed via mise. Run `mise install` first.
-
 ```bash
-mise run build     # Generate bindings + XcodeGen + Flutter build macOS debug
-mise run run       # Same + launch the app
-mise run release   # Release build
-mise run clean     # Remove all build artifacts
-mise tasks         # List all available tasks
+mise install          # One-time setup
+mise run build        # Downloads ORT dylib + generates bindings + XcodeGen + Flutter build
+mise run run          # Build + launch
 ```
 
-## Key Architecture Decisions
-- **Flutter + Rust via rinf**: Dart for UI, Rust for all heavy logic (audio, transcription, hotkeys, paste)
-- **Local-only transcription**: Parakeet TDT (on-device), no cloud APIs
-- **raw-input crate**: CGEventTap for global hotkeys (replaces rdev which crashed on macOS)
-- **Rinf signals**: Typed async message passing between Dart and Rust (no UniFFI)
-- **XcodeGen**: project.yml generates xcodeproj (no manual pbxproj editing)
-- **CocoaPods**: Required by rinf (SPM not yet supported by rinf)
+## Non-Obvious Architecture
 
-## Data Storage
+- **ONNX Runtime**: `load-dynamic` feature in parakeet-rs — dylib NOT statically linked. `scripts/download-ort.sh` fetches it, XcodeGen post-build copies to `Contents/MacOS/`. If model loading deadlocks, check dylib is present.
+- **raw-input crate**: Replaces rdev (which crashed on macOS). Uses CGEventTap for global hotkeys.
+- **desktop_multi_window**: Forked in `vendor/desktop_multi_window` — added transparency/borderless/alwaysOnTop support.
+- **Pipeline domain is paste-agnostic**: `on_transcript_ready()` emits text. Orchestrator in `hub/src/actors/mod.rs` decides paste vs display-only based on `TranscriptAction` signal from Dart. Lifecycle state machine drives this.
+- **No imperative window management**: `WindowSynchronizer` reactively shows/hides based on `AppLifecycleState`. Never call `windowManager.show()/hide()` in handlers.
+- **No sandbox**: Entitlements disable sandbox — required for accessibility + global hotkeys.
 
-- SQLite history: `~/Library/Application Support/wrenflow/history.sqlite`
-- Parakeet model: `~/Library/Application Support/wrenflow/models/parakeet-tdt/`
-- Crash log: `~/Library/Application Support/wrenflow/crash.log`
-- Settings: Flutter shared_preferences (NSUserDefaults on macOS)
+## Data Paths
+
+- Model: `~/Library/Application Support/wrenflow/models/parakeet-tdt/`
+- History DB: `~/Library/Application Support/wrenflow/history.sqlite`
+- ORT dylib: `vendor/onnxruntime/lib/libonnxruntime.dylib`
 
 ## Code Signing
 
-- Identity: `Developer ID Application: Ilya Gulya (T4LV8K9BGV)`
-- Bundle ID: `me.gulya.wrenflow`
-- Entitlements: audio-input, no sandbox (accessibility + hotkeys need it off)
-
-## Design System
-
-Original Swift app style (WrenflowStyle) ported to Flutter:
-- Background: warm off-white `rgb(245,245,245)`
-- Surface: `rgb(252,252,252)` with subtle borders `rgba(0,0,0,0.08)`
-- Text: dark gray `rgb(38,38,38)`, secondary `rgb(115,115,115)`
-- Cards: 12pt radius, soft shadow `black 8% blur 24 offset-y 8`
-- Setup wizard: borderless floating card, no window chrome
+Identity: `Developer ID Application: Ilya Gulya (T4LV8K9BGV)`, Bundle ID: `me.gulya.wrenflow`
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:b9766037 -->
 ## Beads Issue Tracker
