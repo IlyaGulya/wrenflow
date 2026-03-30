@@ -50,11 +50,14 @@ class _SubWindowApp extends StatelessWidget {
       title: 'Wrenflow',
       debugShowCheckedModeBanner: false,
       theme: WrenflowStyle.themeData,
-      home: switch (windowType) {
-        'settings' => const SettingsScreen(),
-        'history' => const HistoryScreen(),
-        _ => const Scaffold(body: Center(child: Text('Unknown window'))),
-      },
+      home: Scaffold(
+        backgroundColor: WrenflowStyle.surface,
+        body: switch (windowType) {
+          'settings' => const SettingsScreen(),
+          'history' => const HistoryScreen(),
+          _ => const Center(child: Text('Unknown window')),
+        },
+      ),
     );
   }
 }

@@ -35,9 +35,13 @@ run = "rinf gen --watch"
 description = "Download ONNX Runtime dylib if missing"
 run = "scripts/download-ort.sh"
 
+[tasks.icons]
+description = "Generate Flutter app icons from Resources/AppIcon-Source.png"
+run = "scripts/generate-flutter-icons.sh"
+
 [tasks.build]
 description = "Build macOS debug app"
-depends = ["gen", "xcodegen", "download-ort"]
+depends = ["gen", "xcodegen", "download-ort", "icons"]
 dir = "flutter"
 run = "flutter build macos --debug"
 
@@ -48,10 +52,13 @@ dir = "flutter"
 run = "flutter build macos --release"
 
 [tasks.run]
-description = "Run macOS debug app"
-depends = ["gen", "xcodegen"]
-dir = "flutter"
-run = "flutter run -d macos"
+description = "Build + launch macOS debug app (via open, so TCC works)"
+depends = ["build"]
+run = "open flutter/build/macos/Build/Products/Debug/wrenflow.app"
+
+[tasks.logs]
+description = "Tail wrenflow Rust logs (written by running app)"
+run = "tail -f /tmp/wrenflow.log"
 
 [tasks.analyze]
 description = "Run Flutter analyzer"

@@ -90,12 +90,14 @@ targets:
       - name: Bundle ONNX Runtime
         script: |
           ORT_DYLIB="$PROJECT_DIR/../../vendor/onnxruntime/lib/libonnxruntime.dylib"
-          DEST="$BUILT_PRODUCTS_DIR/$PRODUCT_NAME.app/Contents/MacOS/"
+          DEST="$BUILT_PRODUCTS_DIR/$PRODUCT_NAME.app/Contents/MacOS/libonnxruntime.dylib"
           if [ -f "$ORT_DYLIB" ]; then
             cp -f "$ORT_DYLIB" "$DEST"
-            echo "Bundled libonnxruntime.dylib into $DEST"
+            # Sign with our identity so library validation passes without disable-library-validation
+            codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" "$DEST"
+            echo "Bundled + signed libonnxruntime.dylib"
           else
-            echo "warning: libonnxruntime.dylib not found at $ORT_DYLIB — run scripts/download-ort.sh"
+            echo "warning: libonnxruntime.dylib not found — run scripts/download-ort.sh"
           fi
         basedOnDependencyAnalysis: false
   RunnerTests:

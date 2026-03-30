@@ -45,20 +45,26 @@ class PermissionHandler {
 
     private func checkMicrophonePermission() -> String {
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        let statusString: String
         switch status {
         case .authorized:
-            return "granted"
+            statusString = "granted"
         case .denied, .restricted:
-            return "denied"
+            statusString = "denied"
         case .notDetermined:
-            return "notDetermined"
+            statusString = "notDetermined"
         @unknown default:
-            return "notDetermined"
+            statusString = "notDetermined"
         }
+        NSLog("[PermissionHandler] checkMicrophone: AVAuthorizationStatus=\(status.rawValue) → \(statusString)")
+        return statusString
     }
 
     private func requestMicrophonePermission(result: @escaping FlutterResult) {
+        let currentStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        NSLog("[PermissionHandler] requestMicrophone: currentStatus=\(currentStatus.rawValue)")
         AVCaptureDevice.requestAccess(for: .audio) { granted in
+            NSLog("[PermissionHandler] requestMicrophone callback: granted=\(granted)")
             DispatchQueue.main.async {
                 result(granted)
             }

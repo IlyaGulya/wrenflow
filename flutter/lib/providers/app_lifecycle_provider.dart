@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/permissions_provider.dart';
 import '../src/bindings/signals/signals.dart';
 import '../state/app_lifecycle_state.dart';
+import '../widgets/system_tray.dart';
 
 const _kHasCompletedSetup = 'has_completed_setup';
 
@@ -136,19 +137,21 @@ class MainWindowConfig {
   final bool skipTaskbar;
 }
 
-MainWindowConfig _configFor(AppLifecycleState state) {
+MainWindowConfig _configFor(AppLifecycleState state, bool hasSubWindows) {
   return switch (state) {
     Initializing() => const MainWindowConfig(visible: false, skipTaskbar: true),
     Onboarding() => const MainWindowConfig(visible: true, skipTaskbar: false),
     PermissionRecovery() =>
       const MainWindowConfig(visible: true, skipTaskbar: false),
-    Running() => const MainWindowConfig(visible: false, skipTaskbar: true),
+    Running() => MainWindowConfig(visible: false, skipTaskbar: !hasSubWindows),
     ShuttingDown() => const MainWindowConfig(visible: false, skipTaskbar: true),
   };
 }
 
 final mainWindowConfigProvider = Provider<MainWindowConfig>((ref) {
-  return _configFor(ref.watch(appLifecycleProvider));
+  // Import is deferred — provider is in system_tray.dart
+  final hasSubWindows = ref.watch(hasOpenSubWindowsProvider);
+  return _configFor(ref.watch(appLifecycleProvider), hasSubWindows);
 });
 
 final subWindowsAllowedProvider = Provider<bool>((ref) {

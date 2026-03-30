@@ -88,11 +88,22 @@ pub async fn create_actors() {
                         hotkey_actor::HotkeyEvent::KeyUp { duration_ms } => {
                             log::info!("Hotkey UP ({duration_ms:.0}ms)");
                             let recording = audio.stop();
+                            match &recording {
+                                Ok(Some(r)) => {
+                                    log::info!("audio.stop(): file={}, duration={:.0}ms, buffers={}, first_audio={:?}, size={}",
+                                        r.file_path, r.metrics.duration_ms, r.metrics.buffer_count,
+                                        r.metrics.first_audio_ms, r.metrics.file_size_bytes);
+                                }
+                                Ok(None) => log::warn!("audio.stop() = Ok(None) — was not recording"),
+                                Err(e) => log::error!("audio.stop() error: {e}"),
+                            }
                             pipeline.handle_hotkey_up(duration_ms);
                             let transcribing = pipeline.is_transcribing();
+                            log::info!("transcribing={transcribing}");
 
                             if transcribing {
                                 if let Ok(Some(result)) = recording {
+                                    log::info!("Recording file: {}", result.file_path);
                                     let engine = transcription_engine.clone();
                                     let file_path = result.file_path.clone();
                                     let tx_result = tokio::task::spawn_blocking(move || {

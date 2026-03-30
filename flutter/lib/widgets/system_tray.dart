@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'dart:async';
+
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,8 +13,18 @@ import 'package:wrenflow/providers/pipeline_state_provider.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
 import 'package:wrenflow/state/app_lifecycle_state.dart';
 
+/// Whether any sub-windows (settings, history) are currently open.
+class SubWindowNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+  void set(bool value) => state = value;
+}
+
+final hasOpenSubWindowsProvider =
+    NotifierProvider<SubWindowNotifier, bool>(SubWindowNotifier.new);
+
 /// Manages the macOS system tray (menu bar) icon and context menu.
-class SystemTrayManager {
+class SystemTrayManager with TrayListener {
   SystemTrayManager(this._ref);
 
   final ProviderContainer _ref;
@@ -24,6 +36,7 @@ class SystemTrayManager {
 
   WindowController? _settingsWindow;
   WindowController? _historyWindow;
+  StreamSubscription<void>? _windowsChangedSub;
 
   Future<void> init() async {
     _idleIconPath = await _extractAsset('assets/tray_icons/tray_idle.png');
@@ -36,7 +49,14 @@ class SystemTrayManager {
       await _trayManager.setIcon(_idleIconPath!);
     }
 
+    _trayManager.addListener(this);
+
     await _updateContextMenu(const PipelineStateIdle());
+
+    // Track sub-window close events.
+    _windowsChangedSub = onWindowsChanged.listen((_) => _syncSubWindowState());
+
+    // Sub-windows created lazily on first open, then reused via hide/show.
 
     // React to pipeline state changes (icon + menu).
     _ref.listen<AsyncValue<PipelineState>>(
@@ -65,19 +85,29 @@ class SystemTrayManager {
     }
   }
 
-  Future<void> _closeSubWindows() async {
-    if (_settingsWindow != null) {
-      try {
-        await _settingsWindow!.hide();
-      } catch (_) {}
-      _settingsWindow = null;
+  Future<void> _syncSubWindowState() async {
+    final allWindows = await WindowController.getAll();
+    // Main window is always in the list; sub-windows are extra.
+    final hasSubWindows = allWindows.length > 1;
+    final current = _ref.read(hasOpenSubWindowsProvider);
+    if (current != hasSubWindows) {
+      _ref.read(hasOpenSubWindowsProvider.notifier).set(hasSubWindows);
     }
-    if (_historyWindow != null) {
-      try {
-        await _historyWindow!.hide();
-      } catch (_) {}
+    // Clean up stale references.
+    if (!hasSubWindows) {
+      _settingsWindow = null;
       _historyWindow = null;
     }
+  }
+
+  Future<void> _closeSubWindows() async {
+    if (_settingsWindow != null) {
+      try { await _settingsWindow!.hide(); } catch (_) {}
+    }
+    if (_historyWindow != null) {
+      try { await _historyWindow!.hide(); } catch (_) {}
+    }
+    _ref.read(hasOpenSubWindowsProvider.notifier).set(false);
   }
 
   // ── Pipeline reactions ────────────────────────────────────
@@ -156,51 +186,47 @@ class SystemTrayManager {
 
   // ── Sub-window management ─────────────────────────────────
 
+  void _log(String msg) {
+    final f = File('/tmp/wrenflow_dart.log');
+    f.writeAsStringSync('${DateTime.now()} $msg\n', mode: FileMode.append);
+  }
+
   Future<void> _showSettings() async {
-    // Only open during Running state.
     if (_ref.read(appLifecycleProvider) is! Running) return;
-
-    if (_settingsWindow != null) {
-      try {
-        await _settingsWindow!.show();
-        return;
-      } catch (_) {
-        _settingsWindow = null;
-      }
+    try {
+      _settingsWindow = await WindowController.create(
+        WindowConfiguration(
+          arguments: jsonEncode({'type': 'settings'}),
+          hiddenAtLaunch: false,
+          width: 720,
+          height: 520,
+          titleBarHidden: true,
+        ),
+      );
+      _ref.read(hasOpenSubWindowsProvider.notifier).set(true);
+    } catch (e, st) {
+      _log('_showSettings error: $e\n$st');
+      _settingsWindow = null;
     }
-
-    _settingsWindow = await WindowController.create(
-      WindowConfiguration(
-        arguments: jsonEncode({'type': 'settings'}),
-        hiddenAtLaunch: false,
-        width: 720,
-        height: 520,
-        titleBarHidden: true,
-      ),
-    );
   }
 
   Future<void> _showHistory() async {
     if (_ref.read(appLifecycleProvider) is! Running) return;
-
-    if (_historyWindow != null) {
-      try {
-        await _historyWindow!.show();
-        return;
-      } catch (_) {
-        _historyWindow = null;
-      }
+    try {
+      _historyWindow = await WindowController.create(
+        WindowConfiguration(
+          arguments: jsonEncode({'type': 'history'}),
+          hiddenAtLaunch: false,
+          width: 400,
+          height: 500,
+          titleBarHidden: true,
+        ),
+      );
+      _ref.read(hasOpenSubWindowsProvider.notifier).set(true);
+    } catch (e, st) {
+      _log('_showHistory error: $e\n$st');
+      _historyWindow = null;
     }
-
-    _historyWindow = await WindowController.create(
-      WindowConfiguration(
-        arguments: jsonEncode({'type': 'history'}),
-        hiddenAtLaunch: false,
-        width: 400,
-        height: 500,
-        titleBarHidden: true,
-      ),
-    );
   }
 
   Future<void> _quit() async {
@@ -209,6 +235,20 @@ class SystemTrayManager {
   }
 
   Future<void> dispose() async {
+    _windowsChangedSub?.cancel();
+    _trayManager.removeListener(this);
     await _trayManager.destroy();
+  }
+
+  // ── TrayListener ────────────────────────────────────────────
+
+  @override
+  void onTrayIconMouseUp() {
+    _trayManager.popUpContextMenu();
+  }
+
+  @override
+  void onTrayIconRightMouseUp() {
+    _trayManager.popUpContextMenu();
   }
 }

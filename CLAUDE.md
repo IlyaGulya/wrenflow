@@ -2,12 +2,40 @@
 
 Menu bar speech-to-text app. Hold key → record → release → transcribe locally → paste.
 
-## Build & Run
+## Tooling: mise
+
+All tools (Flutter, Rust, XcodeGen, rinf, CocoaPods) are managed by **mise**. The system `flutter` is a different version — always use `mise run` or `mise exec --` prefix.
 
 ```bash
 mise install          # One-time setup
 mise run build        # Downloads ORT dylib + generates bindings + XcodeGen + Flutter build
-mise run run          # Build + launch
+mise run run          # Build + open .app (TCC-safe, app is its own responsible process)
+mise run logs         # Tail Rust logs at /tmp/wrenflow.log
+mise run analyze      # Flutter analyze (NOT bare `flutter analyze`)
+mise run test         # Flutter tests
+mise run check-rust   # Cargo check on hub
+```
+
+**NEVER run bare `flutter`, `dart`, `cargo`, `xcodegen`, or `rinf` commands.** Always go through mise:
+- `mise run <task>` for defined tasks (see `mise.toml`)
+- `mise exec -- flutter ...` for ad-hoc Flutter commands
+- `mise exec -- cargo ...` for ad-hoc Cargo commands
+
+## macOS TCC & Launching
+
+macOS TCC checks entitlements on the **responsible process**, not just the requesting process. When launching via terminal (`flutter run`), the terminal becomes responsible — TCC requires `com.apple.security.device.audio-input` on the terminal too, which it doesn't have. **Result: microphone permission dialog never appears.**
+
+**Always launch the built .app via `open` command** so wrenflow is its own responsible process:
+```bash
+mise run run    # builds + opens .app via `open` (correct)
+# NOT: flutter run -d macos (terminal becomes responsible → TCC blocks mic)
+```
+
+Debug TCC issues:
+```bash
+/usr/bin/log stream --predicate 'subsystem == "com.apple.TCC"'  # live TCC log
+sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
+  "select service,client,auth_value from access where client like '%wrenflow%';"
 ```
 
 ## Non-Obvious Architecture
@@ -24,6 +52,8 @@ mise run run          # Build + launch
 - Model: `~/Library/Application Support/wrenflow/models/parakeet-tdt/`
 - History DB: `~/Library/Application Support/wrenflow/history.sqlite`
 - ORT dylib: `vendor/onnxruntime/lib/libonnxruntime.dylib`
+- Rust logs: `/tmp/wrenflow.log` (truncated on each launch, `mise run logs` to tail)
+- Crash log: `~/Library/Application Support/wrenflow/crash.log`
 
 ## Code Signing
 

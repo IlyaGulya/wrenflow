@@ -1,30 +1,50 @@
 //! Logging infrastructure for the Rust hub.
 //!
-//! Uses eprintln! as backend — flutter run captures stderr on macOS.
-//! If this doesn't work, we'll switch to oslog crate.
+//! Dual output: stderr (for `flutter run`) + file at /tmp/wrenflow.log
+//! (for `open wrenflow.app` where stderr goes to system log).
 
-static LOGGER: StderrLogger = StderrLogger;
+use std::io::Write;
+use std::sync::Mutex;
 
-struct StderrLogger;
+static LOGGER: DualLogger = DualLogger;
+static LOG_FILE: Mutex<Option<std::fs::File>> = Mutex::new(None);
 
-impl log::Log for StderrLogger {
+struct DualLogger;
+
+impl log::Log for DualLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
         metadata.level() <= log::max_level()
     }
 
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
-            eprintln!(
+            let msg = format!(
                 "[RUST/{}] {} — {}",
                 record.level(),
                 record.target(),
                 record.args()
             );
+            eprintln!("{msg}");
+            if let Ok(mut guard) = LOG_FILE.lock() {
+                if let Some(ref mut f) = *guard {
+                    let _ = writeln!(f, "{msg}");
+                    let _ = f.flush();
+                }
+            }
         }
     }
 
-    fn flush(&self) {}
+    fn flush(&self) {
+        if let Ok(mut guard) = LOG_FILE.lock() {
+            if let Some(ref mut f) = *guard {
+                let _ = f.flush();
+            }
+        }
+    }
 }
+
+/// Log file path — readable by `mise run logs` or `tail -f`.
+pub const LOG_FILE_PATH: &str = "/tmp/wrenflow.log";
 
 /// Initialize logging. Call once at hub startup.
 pub fn init_logging() {
@@ -32,6 +52,13 @@ pub fn init_logging() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(log::LevelFilter::Info);
+
+    // Open log file (truncate on each launch for fresh logs).
+    if let Ok(file) = std::fs::File::create(LOG_FILE_PATH) {
+        if let Ok(mut guard) = LOG_FILE.lock() {
+            *guard = Some(file);
+        }
+    }
 
     let _ = log::set_logger(&LOGGER);
     log::set_max_level(level);

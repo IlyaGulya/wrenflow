@@ -42,6 +42,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   final _vocabularyController = TextEditingController();
   bool _launchAtLogin = true;
   final _autoAdvanced = <OnboardingStep>{};
+  final _autoRequested = <OnboardingStep>{};
 
   @override
   void dispose() {
@@ -51,6 +52,18 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
 
   AppLifecycleNotifier get _lifecycle =>
       ref.read(appLifecycleProvider.notifier);
+
+  /// Whether the user can advance past the given step.
+  /// Permission steps block until permission is granted.
+  bool _canAdvance(OnboardingStep step, PermissionsState permissions) {
+    return switch (step) {
+      OnboardingStep.microphone =>
+        permissions.microphone == PermissionStatus.granted,
+      OnboardingStep.accessibility =>
+        permissions.accessibility == PermissionStatus.granted,
+      _ => true,
+    };
+  }
 
   Future<void> _finish() async {
     final notifier = ref.read(settingsProvider.notifier);
@@ -140,6 +153,20 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   // ── Auto-advance permission steps ─────────────────────────
 
   void _handleAutoAdvance(PermissionsState permissions, OnboardingStep step) {
+    // Auto-request microphone permission when the step first appears.
+    // Only triggers the system dialog — does NOT open Settings on denial.
+    if (step == OnboardingStep.microphone &&
+        permissions.microphone == PermissionStatus.unknown &&
+        !_autoRequested.contains(OnboardingStep.microphone)) {
+      _autoRequested.add(OnboardingStep.microphone);
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        debugPrint('[wizard] auto-requesting microphone permission');
+        await _permissionService.requestMicrophone();
+      });
+    }
+
+    // Auto-advance when permission is granted.
     if (step == OnboardingStep.microphone &&
         permissions.microphone == PermissionStatus.granted &&
         !_autoAdvanced.contains(OnboardingStep.microphone)) {
@@ -157,7 +184,6 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         if (mounted) _lifecycle.onboardingNext();
       });
     }
-
   }
 
   // ── Recovery screen ───────────────────────────────────────
@@ -262,7 +288,9 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
               ? _FooterButton(label: 'Finish', onTap: _finish)
               : _FooterButton(
                   label: 'Next',
-                  onTap: () => _lifecycle.onboardingNext(),
+                  onTap: _canAdvance(step, ref.read(permissionsProvider))
+                      ? () => _lifecycle.onboardingNext()
+                      : null,
                 ),
         ],
       ),
@@ -703,12 +731,12 @@ class _TranscriptionTestWidgetState
     if (_lastTranscript != null) {
       return Center(
         key: const ValueKey('result'),
-        child: Text(
-          _lastTranscript!,
-          style: WrenflowStyle.body(12),
-          textAlign: TextAlign.center,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
+        child: SingleChildScrollView(
+          child: Text(
+            _lastTranscript!,
+            style: WrenflowStyle.body(12),
+            textAlign: TextAlign.center,
+          ),
         ),
       );
     }
@@ -765,7 +793,7 @@ class _TranscriptionTestWidgetState
       return Center(
         key: const ValueKey('error'),
         child: Text(
-          (pipeline as PipelineStateError).message,
+          pipeline.message,
           style: WrenflowStyle.caption(11).copyWith(color: WrenflowStyle.red),
           textAlign: TextAlign.center,
           maxLines: 2,
@@ -837,16 +865,20 @@ class _FooterButton extends StatelessWidget {
   const _FooterButton({required this.label, required this.onTap});
 
   final String label;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
+    final disabled = onTap == null;
     return GestureDetector(
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-        decoration: WrenflowStyle.footerButtonDecoration,
-        child: Text(label, style: WrenflowStyle.body(12)),
+      child: Opacity(
+        opacity: disabled ? 0.3 : 1.0,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+          decoration: WrenflowStyle.footerButtonDecoration,
+          child: Text(label, style: WrenflowStyle.body(12)),
+        ),
       ),
     );
   }
