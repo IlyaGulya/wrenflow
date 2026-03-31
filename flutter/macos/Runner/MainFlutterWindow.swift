@@ -1,7 +1,6 @@
 import Cocoa
 import FlutterMacOS
 import macos_window_utils
-import desktop_multi_window
 
 class MainFlutterWindow: NSWindow {
   override func awakeFromNib() {
@@ -21,9 +20,6 @@ class MainFlutterWindow: NSWindow {
     macOSWindowUtilsViewController.flutterViewController.backgroundColor = .clear
 
     MainFlutterWindowManipulator.start(mainFlutterWindow: self)
-
-    FlutterMultiWindowPlugin.setOnWindowCreatedCallback { controller in
-    }
 
     RegisterGeneratedPlugins(registry: macOSWindowUtilsViewController.flutterViewController)
 

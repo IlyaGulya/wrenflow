@@ -20,17 +20,25 @@ class WindowSynchronizer extends ConsumerStatefulWidget {
       _WindowSynchronizerState();
 }
 
-class _WindowSynchronizerState extends ConsumerState<WindowSynchronizer> {
+class _WindowSynchronizerState extends ConsumerState<WindowSynchronizer>
+    with WindowListener {
   bool _hasRenderedFirstFrame = false;
   bool _isWindowVisible = false;
 
   @override
   void initState() {
     super.initState();
+    windowManager.addListener(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _hasRenderedFirstFrame = true;
       _syncWindow();
     });
+  }
+
+  @override
+  void dispose() {
+    windowManager.removeListener(this);
+    super.dispose();
   }
 
   @override
@@ -46,7 +54,7 @@ class _WindowSynchronizerState extends ConsumerState<WindowSynchronizer> {
     final config = ref.read(mainWindowConfigProvider);
 
     if (config.visible && !_isWindowVisible && _hasRenderedFirstFrame) {
-      await windowManager.setSize(const Size(340, 380));
+      await windowManager.setSize(Size(config.width, config.height));
       await windowManager.setMinimumSize(const Size(300, 340));
       await windowManager.setSkipTaskbar(false);
       await windowManager.center();
@@ -54,14 +62,31 @@ class _WindowSynchronizerState extends ConsumerState<WindowSynchronizer> {
       await windowManager.focus();
       WindowManipulator.setWindowAlphaValue(1.0);
       _isWindowVisible = true;
+    } else if (config.visible && _isWindowVisible) {
+      // Size changed (e.g. switching between settings and wizard).
+      await windowManager.setSize(Size(config.width, config.height));
+      await windowManager.center();
     } else if (!config.visible && _isWindowVisible) {
       WindowManipulator.setWindowAlphaValue(0.0);
       await windowManager.hide();
       await windowManager.setSkipTaskbar(true);
       _isWindowVisible = false;
     } else if (!config.visible && !_isWindowVisible) {
-      // Ensure taskbar state is correct even if window was never shown.
       await windowManager.setSkipTaskbar(config.skipTaskbar);
+    }
+  }
+
+  // ── WindowListener: handle native close button ──────────────
+
+  @override
+  void onWindowClose() {
+    final screen = ref.read(activeScreenProvider);
+    if (screen != ActiveScreen.none) {
+      // Close settings/history → hide window, stay running in tray.
+      ref.read(activeScreenProvider.notifier).close();
+    } else {
+      // During onboarding/recovery, close button quits.
+      ref.read(appLifecycleProvider.notifier).quit();
     }
   }
 }

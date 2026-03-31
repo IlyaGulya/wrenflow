@@ -7,7 +7,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/permissions_provider.dart';
 import '../src/bindings/signals/signals.dart';
 import '../state/app_lifecycle_state.dart';
-import '../widgets/system_tray.dart';
 
 const _kHasCompletedSetup = 'has_completed_setup';
 
@@ -123,37 +122,63 @@ final appLifecycleProvider =
   AppLifecycleNotifier.new,
 );
 
+// ── Active screen (settings/history shown in main window) ─────
+
+enum ActiveScreen { none, settings, history }
+
+class ActiveScreenNotifier extends Notifier<ActiveScreen> {
+  @override
+  ActiveScreen build() => ActiveScreen.none;
+
+  void show(ActiveScreen screen) => state = screen;
+  void close() => state = ActiveScreen.none;
+}
+
+final activeScreenProvider =
+    NotifierProvider<ActiveScreenNotifier, ActiveScreen>(
+  ActiveScreenNotifier.new,
+);
+
 // ── Derived providers ─────────────────────────────────────────
 
-/// Main window configuration derived from lifecycle state.
+/// Main window configuration derived from lifecycle state + active screen.
 @immutable
 class MainWindowConfig {
   const MainWindowConfig({
     required this.visible,
     required this.skipTaskbar,
+    this.width = 340,
+    this.height = 380,
   });
 
   final bool visible;
   final bool skipTaskbar;
+  final double width;
+  final double height;
 }
 
-MainWindowConfig _configFor(AppLifecycleState state, bool hasSubWindows) {
+MainWindowConfig _configFor(AppLifecycleState state, ActiveScreen screen) {
   return switch (state) {
-    Initializing() => const MainWindowConfig(visible: false, skipTaskbar: true),
-    Onboarding() => const MainWindowConfig(visible: true, skipTaskbar: false),
+    Initializing() =>
+      const MainWindowConfig(visible: false, skipTaskbar: true),
+    Onboarding() =>
+      const MainWindowConfig(visible: true, skipTaskbar: false),
     PermissionRecovery() =>
       const MainWindowConfig(visible: true, skipTaskbar: false),
-    Running() => MainWindowConfig(visible: false, skipTaskbar: !hasSubWindows),
-    ShuttingDown() => const MainWindowConfig(visible: false, skipTaskbar: true),
+    Running() => switch (screen) {
+        ActiveScreen.settings => const MainWindowConfig(
+            visible: true, skipTaskbar: false, width: 720, height: 520),
+        ActiveScreen.history => const MainWindowConfig(
+            visible: true, skipTaskbar: false, width: 400, height: 500),
+        ActiveScreen.none =>
+          const MainWindowConfig(visible: false, skipTaskbar: true),
+      },
+    ShuttingDown() =>
+      const MainWindowConfig(visible: false, skipTaskbar: true),
   };
 }
 
 final mainWindowConfigProvider = Provider<MainWindowConfig>((ref) {
-  // Import is deferred — provider is in system_tray.dart
-  final hasSubWindows = ref.watch(hasOpenSubWindowsProvider);
-  return _configFor(ref.watch(appLifecycleProvider), hasSubWindows);
-});
-
-final subWindowsAllowedProvider = Provider<bool>((ref) {
-  return ref.watch(appLifecycleProvider) is Running;
+  final screen = ref.watch(activeScreenProvider);
+  return _configFor(ref.watch(appLifecycleProvider), screen);
 });
