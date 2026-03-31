@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../providers/permissions_provider.dart';
+import '../screens/settings_screen.dart';
 import '../src/bindings/signals/signals.dart';
 import '../state/app_lifecycle_state.dart';
 
@@ -122,9 +123,9 @@ final appLifecycleProvider =
   AppLifecycleNotifier.new,
 );
 
-// ── Active screen (settings/history shown in main window) ─────
+// ── Active screen (settings shown in main window) ─────────────
 
-enum ActiveScreen { none, settings, history }
+enum ActiveScreen { none, settings }
 
 class ActiveScreenNotifier extends Notifier<ActiveScreen> {
   @override
@@ -133,6 +134,19 @@ class ActiveScreenNotifier extends Notifier<ActiveScreen> {
   void show(ActiveScreen screen) => state = screen;
   void close() => state = ActiveScreen.none;
 }
+
+/// Which settings tab to show when settings opens.
+class SettingsInitialTabNotifier extends Notifier<SettingsTab> {
+  @override
+  SettingsTab build() => SettingsTab.general;
+
+  void set(SettingsTab tab) => state = tab;
+}
+
+final settingsInitialTabProvider =
+    NotifierProvider<SettingsInitialTabNotifier, SettingsTab>(
+  SettingsInitialTabNotifier.new,
+);
 
 final activeScreenProvider =
     NotifierProvider<ActiveScreenNotifier, ActiveScreen>(
@@ -168,8 +182,6 @@ MainWindowConfig _configFor(AppLifecycleState state, ActiveScreen screen) {
     Running() => switch (screen) {
         ActiveScreen.settings => const MainWindowConfig(
             visible: true, skipTaskbar: false, width: 720, height: 520),
-        ActiveScreen.history => const MainWindowConfig(
-            visible: true, skipTaskbar: false, width: 400, height: 500),
         ActiveScreen.none =>
           const MainWindowConfig(visible: false, skipTaskbar: true),
       },

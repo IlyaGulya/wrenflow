@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rinf/rinf.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:wrenflow/providers/history_provider.dart';
 import 'package:wrenflow/providers/settings_provider.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
 import 'package:wrenflow/theme/wrenflow_theme.dart';
@@ -14,25 +15,42 @@ import 'package:wrenflow/widgets/settings_card.dart';
 
 
 /// Sidebar tab definition.
-enum _SettingsTab {
+enum SettingsTab {
   general(CupertinoIcons.gear, 'General'),
+  history(CupertinoIcons.clock, 'History'),
   about(CupertinoIcons.info, 'About');
 
-  const _SettingsTab(this.icon, this.label);
+  const SettingsTab(this.icon, this.label);
   final IconData icon;
   final String label;
 }
 
 /// Settings screen — 720×520, sidebar + content layout.
 class SettingsScreen extends ConsumerStatefulWidget {
-  const SettingsScreen({super.key});
+  const SettingsScreen({super.key, this.initialTab = SettingsTab.general});
+
+  final SettingsTab initialTab;
 
   @override
   ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  _SettingsTab _selectedTab = _SettingsTab.general;
+  late SettingsTab _selectedTab;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedTab = widget.initialTab;
+  }
+
+  @override
+  void didUpdateWidget(SettingsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialTab != oldWidget.initialTab) {
+      setState(() => _selectedTab = widget.initialTab);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -48,9 +66,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
           // Content
           Expanded(
-            child: _selectedTab == _SettingsTab.general
-                ? const _GeneralContent()
-                : const _AboutContent(),
+            child: switch (_selectedTab) {
+              SettingsTab.general => const _GeneralContent(),
+              SettingsTab.history => const _HistoryContent(),
+              SettingsTab.about => const _AboutContent(),
+            },
           ),
         ],
       ),
@@ -103,7 +123,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const SizedBox(height: 8),
 
           // Tab buttons
-          for (final tab in _SettingsTab.values)
+          for (final tab in SettingsTab.values)
             _buildTabButton(tab),
 
           const Spacer(),
@@ -112,7 +132,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  Widget _buildTabButton(_SettingsTab tab) {
+  Widget _buildTabButton(SettingsTab tab) {
     final isSelected = _selectedTab == tab;
     return GestureDetector(
       onTap: () => setState(() => _selectedTab = tab),
@@ -405,6 +425,195 @@ class _DropdownItem {
   const _DropdownItem(this.value, this.label);
   final String value;
   final String label;
+}
+
+// ── History tab content ───────────────────────────────────────
+
+class _HistoryContent extends ConsumerStatefulWidget {
+  const _HistoryContent();
+
+  @override
+  ConsumerState<_HistoryContent> createState() => _HistoryContentState();
+}
+
+class _HistoryContentState extends ConsumerState<_HistoryContent> {
+  @override
+  void initState() {
+    super.initState();
+    LoadHistory().sendSignalToRust();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final entries = ref.watch(historyProvider);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Header with clear button
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('History', style: WrenflowStyle.title(16)),
+              if (entries.isNotEmpty)
+                GestureDetector(
+                  onTap: () => _confirmClearAll(context),
+                  child: Text(
+                    'Clear all',
+                    style: WrenflowStyle.body(12).copyWith(
+                      color: WrenflowStyle.textTertiary,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+
+        // Content
+        Expanded(
+          child: entries.isEmpty
+              ? Center(
+                  child: Text(
+                    'No transcriptions yet',
+                    style: WrenflowStyle.body(13).copyWith(
+                      color: WrenflowStyle.textTertiary,
+                    ),
+                  ),
+                )
+              : ListView.separated(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  itemCount: entries.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 6),
+                  itemBuilder: (context, index) {
+                    final entry = entries[index];
+                    return _HistoryRow(
+                      entry: entry,
+                      onDelete: () => _deleteEntry(entry.id),
+                      onTap: () => _showDetail(context, entry),
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+
+  void _deleteEntry(String id) {
+    ref.read(historyProvider.notifier).removeEntry(id);
+    DeleteHistoryEntry(id: id).sendSignalToRust();
+  }
+
+  void _confirmClearAll(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear History'),
+        content: const Text('Delete all transcription history?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              ref.read(historyProvider.notifier).clearAll();
+              ClearHistory().sendSignalToRust();
+            },
+            child: Text('Clear',
+                style: TextStyle(color: WrenflowStyle.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showDetail(BuildContext context, HistoryEntryData entry) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Transcription'),
+        content: SingleChildScrollView(
+          child: SelectableText(entry.transcript),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HistoryRow extends StatelessWidget {
+  const _HistoryRow({
+    required this.entry,
+    required this.onDelete,
+    required this.onTap,
+  });
+
+  final HistoryEntryData entry;
+  final VoidCallback onDelete;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final date = DateTime.fromMillisecondsSinceEpoch(
+      (entry.timestamp * 1000).toInt(),
+    );
+    final timeStr =
+        '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+    final dateStr =
+        '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: WrenflowStyle.surface,
+          borderRadius: BorderRadius.circular(WrenflowStyle.radiusMedium),
+          border: Border.all(color: WrenflowStyle.border, width: 1),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '$dateStr $timeStr',
+                    style: WrenflowStyle.caption(11),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    entry.transcript,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: WrenflowStyle.body(13),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: onDelete,
+              child: Icon(
+                CupertinoIcons.xmark,
+                size: 12,
+                color: WrenflowStyle.textTertiary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 // ── About tab content ────────────────────────────────────────

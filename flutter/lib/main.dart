@@ -6,7 +6,6 @@ import 'package:window_manager/window_manager.dart';
 
 import 'providers/app_lifecycle_provider.dart';
 import 'providers/overlay_controller.dart';
-import 'screens/history_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/setup_wizard_screen.dart';
 import 'src/bindings/bindings.dart';
@@ -79,8 +78,9 @@ class _AppHome extends ConsumerWidget {
           mode: WizardMode.recovery,
         ),
       Running() => switch (activeScreen) {
-          ActiveScreen.settings => const SettingsScreen(),
-          ActiveScreen.history => const HistoryScreen(),
+          ActiveScreen.settings => SettingsScreen(
+              initialTab: ref.watch(settingsInitialTabProvider),
+            ),
           ActiveScreen.none => const Scaffold(
               backgroundColor: WrenflowStyle.surface,
             ),

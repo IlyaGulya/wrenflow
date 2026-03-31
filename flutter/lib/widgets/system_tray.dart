@@ -6,6 +6,7 @@ import 'package:tray_manager/tray_manager.dart';
 
 import 'package:wrenflow/providers/app_lifecycle_provider.dart';
 import 'package:wrenflow/providers/pipeline_state_provider.dart';
+import 'package:wrenflow/screens/settings_screen.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
 import 'package:wrenflow/state/app_lifecycle_state.dart';
 
@@ -141,12 +142,14 @@ class SystemTrayManager with TrayListener {
 
   void _showSettings() {
     if (_ref.read(appLifecycleProvider) is! Running) return;
+    _ref.read(settingsInitialTabProvider.notifier).set(SettingsTab.general);
     _ref.read(activeScreenProvider.notifier).show(ActiveScreen.settings);
   }
 
   void _showHistory() {
     if (_ref.read(appLifecycleProvider) is! Running) return;
-    _ref.read(activeScreenProvider.notifier).show(ActiveScreen.history);
+    _ref.read(settingsInitialTabProvider.notifier).set(SettingsTab.history);
+    _ref.read(activeScreenProvider.notifier).show(ActiveScreen.settings);
   }
 
   Future<void> _quit() async {
