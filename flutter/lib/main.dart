@@ -5,6 +5,7 @@ import 'package:rinf/rinf.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'providers/app_lifecycle_provider.dart';
+import 'providers/overlay_controller.dart';
 import 'screens/history_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/setup_wizard_screen.dart';
@@ -37,6 +38,10 @@ Future<void> main(List<String> args) async {
   // Initialize system tray — it listens to lifecycle + pipeline state.
   final tray = SystemTrayManager(container);
   tray.init();
+
+  // Initialize native overlay controller — bridges pipeline state to NSPanel.
+  final overlay = OverlayController(container);
+  overlay.init();
 
   runApp(
     UncontrolledProviderScope(
