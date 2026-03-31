@@ -2,62 +2,27 @@
 
 Menu bar speech-to-text app. Hold key → record → release → transcribe locally → paste.
 
-## Tooling: mise
+## Tooling
 
-All tools (Flutter, Rust, XcodeGen, rinf, CocoaPods) are managed by **mise**. The system `flutter` is a different version — always use `mise run` or `mise exec --` prefix.
+All tools managed by **mise**. NEVER run bare `flutter`/`cargo`/`xcodegen` — always `mise run <task>` or `mise exec -- <cmd>`.
 
-```bash
-mise install          # One-time setup
-mise run build        # Downloads ORT dylib + generates bindings + XcodeGen + Flutter build
-mise run run          # Build + open .app (TCC-safe, app is its own responsible process)
-mise run logs         # Tail Rust logs at /tmp/wrenflow.log
-mise run analyze      # Flutter analyze (NOT bare `flutter analyze`)
-mise run test         # Flutter tests
-mise run check-rust   # Cargo check on hub
-```
+## Launching
 
-**NEVER run bare `flutter`, `dart`, `cargo`, `xcodegen`, or `rinf` commands.** Always go through mise:
-- `mise run <task>` for defined tasks (see `mise.toml`)
-- `mise exec -- flutter ...` for ad-hoc Flutter commands
-- `mise exec -- cargo ...` for ad-hoc Cargo commands
-
-## macOS TCC & Launching
-
-macOS TCC checks entitlements on the **responsible process**, not just the requesting process. When launching via terminal (`flutter run`), the terminal becomes responsible — TCC requires `com.apple.security.device.audio-input` on the terminal too, which it doesn't have. **Result: microphone permission dialog never appears.**
-
-**Always launch the built .app via `open` command** so wrenflow is its own responsible process:
-```bash
-mise run run    # builds + opens .app via `open` (correct)
-# NOT: flutter run -d macos (terminal becomes responsible → TCC blocks mic)
-```
-
-Debug TCC issues:
-```bash
-/usr/bin/log stream --predicate 'subsystem == "com.apple.TCC"'  # live TCC log
-sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
-  "select service,client,auth_value from access where client like '%wrenflow%';"
-```
+`mise run run` builds + opens .app via `open`. NEVER use `flutter run` — TCC checks entitlements on the terminal (responsible process), blocking microphone access. See [docs/tcc-debugging.md](docs/tcc-debugging.md) for details.
 
 ## Non-Obvious Architecture
 
-- **ONNX Runtime**: `load-dynamic` feature in parakeet-rs — dylib NOT statically linked. `scripts/download-ort.sh` fetches it, XcodeGen post-build copies to `Contents/MacOS/`. If model loading deadlocks, check dylib is present.
-- **raw-input crate**: Replaces rdev (which crashed on macOS). Uses CGEventTap for global hotkeys.
-- **desktop_multi_window**: Forked in `vendor/desktop_multi_window` — added transparency/borderless/alwaysOnTop support.
-- **Pipeline domain is paste-agnostic**: `on_transcript_ready()` emits text. Orchestrator in `hub/src/actors/mod.rs` decides paste vs display-only based on `TranscriptAction` signal from Dart. Lifecycle state machine drives this.
-- **No imperative window management**: `WindowSynchronizer` reactively shows/hides based on `AppLifecycleState`. Never call `windowManager.show()/hide()` in handlers.
-- **No sandbox**: Entitlements disable sandbox — required for accessibility + global hotkeys.
-
-## Data Paths
-
-- Model: `~/Library/Application Support/wrenflow/models/parakeet-tdt/`
-- History DB: `~/Library/Application Support/wrenflow/history.sqlite`
-- ORT dylib: `vendor/onnxruntime/lib/libonnxruntime.dylib`
-- Rust logs: `/tmp/wrenflow.log` (truncated on each launch, `mise run logs` to tail)
-- Crash log: `~/Library/Application Support/wrenflow/crash.log`
+- **Single Flutter engine**: Settings/History in main window via `ActiveScreen` — no multi-window. Rinf signals work everywhere.
+- **ONNX Runtime**: `load-dynamic` — dylib fetched by `scripts/download-ort.sh`, codesigned in XcodeGen post-build.
+- **CGEvent paste**: Replaces enigo (TSM crash). Uses `core-graphics` for Cmd+V.
+- **raw-input**: Replaces rdev. CGEventTap hotkeys, keycode changeable at runtime.
+- **No imperative windows**: `WindowSynchronizer` drives show/hide from state. Never call `windowManager.show()/hide()`.
+- **Icons built from source**: `mise run icons` — `AppIcon-Source.png` + `logo-bird.svg` via resvg. PNGs gitignored.
+- **No sandbox**: Required for accessibility + global hotkeys.
 
 ## Code Signing
 
-Identity: `Developer ID Application: Ilya Gulya (T4LV8K9BGV)`, Bundle ID: `me.gulya.wrenflow`
+`Developer ID Application: Ilya Gulya (T4LV8K9BGV)`, bundle `me.gulya.wrenflow`
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:b9766037 -->
 ## Beads Issue Tracker
