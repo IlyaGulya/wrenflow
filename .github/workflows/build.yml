@@ -53,7 +53,7 @@ jobs:
 
       - name: Install build tools
         if: steps.skip.outputs.skip != 'true'
-        run: brew install create-dmg xclogparser
+        run: brew install create-dmg
 
       - name: Cache Rust
         if: steps.skip.outputs.skip != 'true'
@@ -117,42 +117,15 @@ jobs:
           IDENTITY=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "WRENFLOW_CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 
-      # PR: debug build only
+      # PR: debug build only (verbose for full xcodebuild output)
       - name: Build (PR check)
         if: steps.skip.outputs.skip != 'true' && env.IS_PR == 'true'
-        run: mise run build
+        run: mise run build -- -v
 
-      # Push to main / release: release build + DMG
+      # Push to main / release: release build + DMG (verbose for diagnostics)
       - name: Build release
         if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
-        run: mise run release
-
-      - name: Xcode build timing report
-        if: steps.skip.outputs.skip != 'true' && always()
-        run: |
-          LOG=$(find ~/Library/Developer/Xcode/DerivedData -name "*.xcactivitylog" -newer build/macos 2>/dev/null | head -1)
-          if [ -n "$LOG" ]; then
-            echo "::group::Slowest targets"
-            xclogparser parse --file "$LOG" --reporter summaryJson 2>/dev/null | python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)
-          targets = sorted(data.get('targets', []), key=lambda t: t.get('duration', 0), reverse=True)
-          for t in targets[:10]:
-            print(f\"  {t['duration']:.1f}s  {t['name']}\")
-          " || echo "  (could not parse log)"
-            echo "::endgroup::"
-            echo "::group::Slowest files (>2s)"
-            xclogparser parse --file "$LOG" --reporter flatJson 2>/dev/null | python3 -c "
-          import json, sys
-          steps = json.load(sys.stdin)
-          slow = sorted([s for s in steps if s.get('duration', 0) > 2], key=lambda s: s['duration'], reverse=True)
-          for s in slow[:20]:
-            print(f\"  {s['duration']:.1f}s  {s.get('title', s.get('documentURL', 'unknown'))}\")
-          " || echo "  (could not parse log)"
-            echo "::endgroup::"
-          else
-            echo "No xcactivitylog found"
-          fi
+        run: mise run release -- -v
 
       - name: Create DMG
         if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
