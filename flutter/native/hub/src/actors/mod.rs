@@ -107,14 +107,40 @@ pub async fn create_actors() {
 
                             if transcribing {
                                 if let Ok(Some(result)) = recording {
-                                    log::info!("Recording file: {}", result.file_path);
+                                    log::info!("Recording: {}ms, {} samples",
+                                        result.metrics.duration_ms,
+                                        result.samples_16k.len());
+
+                                    // Write WAV file in parallel (for history/debugging).
+                                    let wav_samples = result.samples_16k.clone();
+                                    tokio::task::spawn_blocking(move || {
+                                        let path = std::env::temp_dir().join(format!(
+                                            "wrenflow_recording_{}.wav",
+                                            std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_millis()
+                                        ));
+                                        match std::fs::File::create(&path) {
+                                            Ok(mut f) => {
+                                                if let Err(e) = wrenflow_domain::audio::wav::encode_wav(&mut f, &wav_samples) {
+                                                    log::error!("WAV encode error: {e}");
+                                                } else {
+                                                    log::info!("WAV saved: {}", path.display());
+                                                }
+                                            }
+                                            Err(e) => log::error!("WAV create error: {e}"),
+                                        }
+                                    });
+
+                                    // Transcribe from memory buffer (parallel with WAV write).
                                     let engine = transcription_engine.clone();
-                                    let file_path = result.file_path.clone();
+                                    let samples = result.samples_16k;
                                     let tx_result = tokio::task::spawn_blocking(move || {
                                         let start = std::time::Instant::now();
                                         let mut guard = engine.lock().ok()?;
                                         let engine_mut = guard.as_mut()?;
-                                        match engine_mut.transcribe_file(std::path::Path::new(&file_path)) {
+                                        match engine_mut.transcribe(&samples) {
                                             Ok(text) => Some(TranscriptionResult {
                                                 raw_transcript: text,
                                                 duration_ms: start.elapsed().as_secs_f64() * 1000.0,

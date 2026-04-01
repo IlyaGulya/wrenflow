@@ -16,7 +16,6 @@ use wrenflow_domain::audio::{
     SpscRingBuffer, TARGET_SAMPLE_RATE,
 };
 use wrenflow_domain::audio::resampler::resample_to_16khz;
-use wrenflow_domain::audio::wav::encode_wav;
 
 // ---------------------------------------------------------------------------
 // Listener trait
@@ -350,28 +349,12 @@ impl AudioCapture {
             wrenflow_domain::audio::MIN_DURATION_SECS,
         );
 
-        // Encode WAV to temp file
-        let file_path = std::env::temp_dir().join(format!(
-            "wrenflow_recording_{}.wav",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-        ));
-
-        let mut file = std::fs::File::create(&file_path)
-            .map_err(|e| format!("Failed to create WAV file: {e}"))?;
-        encode_wav(&mut file, &padded).map_err(|e| format!("WAV encoding error: {e}"))?;
-
-        let file_size = std::fs::metadata(&file_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
-
         Ok(Some(RecordingResult {
-            file_path: file_path.to_string_lossy().into_owned(),
+            samples_16k: padded,
+            file_path: String::new(),
             metrics: RecordingMetrics {
                 duration_ms,
-                file_size_bytes: file_size,
+                file_size_bytes: 0,
                 device_sample_rate: state.device_sample_rate,
                 buffer_count: state.buffer_count.load(Ordering::Relaxed),
                 first_audio_ms: drain_result.first_audio_ms,
