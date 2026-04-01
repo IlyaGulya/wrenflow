@@ -43,23 +43,21 @@ jobs:
         if: steps.skip.outputs.skip != 'true'
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
 
-      - name: Install Rust toolchain
+      - name: Install mise
         if: steps.skip.outputs.skip != 'true'
-        uses: dtolnay/rust-toolchain@7b1c307e0dcbda6122208f10795a713336a9b35a # stable
-        with:
-          toolchain: stable
+        uses: jdx/mise-action@v2
+
+      - name: Install build tools
+        if: steps.skip.outputs.skip != 'true'
+        run: brew install create-dmg
 
       - name: Cache Rust
         if: steps.skip.outputs.skip != 'true'
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
-          workspaces: core -> target
+          workspaces: ". -> target"
           cache-workspace-crates: "true"
-          prefix-key: "v1-rust"
-
-      - name: Install build tools
-        if: steps.skip.outputs.skip != 'true'
-        run: brew install just create-dmg fileicon
+          prefix-key: "v2-rust"
 
       - name: Compute version info
         if: steps.skip.outputs.skip != 'true'
@@ -71,12 +69,9 @@ jobs:
           if [ "${{ env.IS_RELEASE }}" = "true" ]; then
             TAG="${{ github.event.release.tag_name }}"
           else
-            # Beta: bump minor from last release tag, append -beta.N
-            # Find latest stable tag (no pre-release suffix)
             LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
             LATEST_TAG="${LATEST_TAG:-v0.0.0}"
             COMMITS_SINCE=$(git rev-list "${LATEST_TAG}..HEAD" --count)
-            # Parse major.minor from tag, bump minor
             VERSION="${LATEST_TAG#v}"
             MAJOR=$(echo "$VERSION" | cut -d. -f1)
             MINOR=$(echo "$VERSION" | cut -d. -f2)
@@ -84,11 +79,6 @@ jobs:
             TAG="v${MAJOR}.${NEXT_MINOR}.0-beta.${COMMITS_SINCE}"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Inject build number into Info.plist
-        if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
-        run: |
-          plutil -replace CFBundleVersion -string "${{ steps.version.outputs.build_number }}" Info.plist
 
       - name: Import signing certificate
         if: steps.skip.outputs.skip != 'true' && env.HAS_SIGNING_CERT == 'true' && env.IS_PR != 'true'
@@ -111,17 +101,37 @@ jobs:
           IDENTITY=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "WRENFLOW_CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 
-      # PR: debug build only (ad-hoc signing)
+      # PR: debug build only
       - name: Build (PR check)
         if: steps.skip.outputs.skip != 'true' && env.IS_PR == 'true'
-        run: just build
-        env:
-          WRENFLOW_CODESIGN_IDENTITY: "-"
+        run: mise run build
 
-      # Push to main / release: full release build + DMG
-      - name: Build release DMG
+      # Push to main / release: release build + DMG
+      - name: Build release
         if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
-        run: just dmg
+        run: mise run release
+
+      - name: Create DMG
+        if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
+        run: |
+          APP="build/macos/Build/Products/Release/wrenflow.app"
+          DMG="build/Wrenflow.dmg"
+          mkdir -p build
+          rm -f "$DMG"
+          create-dmg \
+            --volname "Wrenflow" \
+            --window-pos 200 120 \
+            --window-size 660 400 \
+            --icon-size 128 \
+            --icon "wrenflow.app" 180 170 \
+            --hide-extension "wrenflow.app" \
+            --app-drop-link 480 170 \
+            --no-internet-enable \
+            "$DMG" "$APP" || true
+
+          if [ -n "$WRENFLOW_CODESIGN_IDENTITY" ] && [ "$WRENFLOW_CODESIGN_IDENTITY" != "-" ]; then
+            codesign --force --sign "$WRENFLOW_CODESIGN_IDENTITY" --timestamp "$DMG"
+          fi
 
       - name: Notarize DMG
         if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true' && env.HAS_NOTARIZE == 'true'
@@ -149,7 +159,7 @@ jobs:
 
       - name: Verify codesign
         if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
-        run: codesign --verify --deep --strict "build/Wrenflow.app" || true
+        run: codesign --verify --deep --strict "build/macos/Build/Products/Release/wrenflow.app" || true
 
       - name: Clean up keychain
         if: always()

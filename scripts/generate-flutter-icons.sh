@@ -12,7 +12,7 @@ ROOT="$SCRIPT_DIR/.."
 # Bird + equalizer only, compact, for dock/Finder.
 
 DOCK_SVG="$ROOT/Resources/AppIcon-Dock.svg"
-DEST="$ROOT/flutter/macos/Runner/Assets.xcassets/AppIcon.appiconset"
+DEST="$ROOT/macos/Runner/Assets.xcassets/AppIcon.appiconset"
 
 for size in 16 32 64 128 256 512 1024; do
   resvg -w "$size" -h "$size" "$DOCK_SVG" "$DEST/app_icon_${size}.png"
@@ -22,7 +22,7 @@ echo "App icons generated"
 # ── Settings icon (full logo with waves) ──────────────────────
 
 FULL_SVG="$ROOT/Resources/AppIcon-Source.svg"
-resvg -w 128 -h 128 "$FULL_SVG" "$ROOT/flutter/assets/icon.png"
+resvg -w 128 -h 128 "$FULL_SVG" "$ROOT/assets/icon.png"
 echo "Settings icon generated"
 
 # ── Tray icons (from SVG source) ──────────────────────────────
@@ -30,7 +30,7 @@ echo "Settings icon generated"
 
 LOGO_SVG="$ROOT/Resources/logo-bird.svg"
 SINGING_SVG="$ROOT/Resources/logo-bird-singing.svg"
-TRAY_DEST="$ROOT/flutter/assets/tray_icons"
+TRAY_DEST="$ROOT/assets/tray_icons"
 mkdir -p "$TRAY_DEST"
 
 resvg -w 22 -h 22 "$LOGO_SVG" "$TRAY_DEST/tray_idle.png"

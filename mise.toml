@@ -13,23 +13,21 @@ resvg = "latest"
 description = "Install all tools and dependencies"
 run = """
 mise install
-cd flutter && flutter pub get
-cd flutter && rinf gen
+flutter pub get
+rinf gen
 """
 
 [tasks.xcodegen]
 description = "Generate Xcode project from project.yml"
-dir = "flutter/macos"
+dir = "macos"
 run = "xcodegen generate --spec project.yml"
 
 [tasks.gen]
 description = "Generate Dart bindings from Rust signals"
-dir = "flutter"
 run = "rinf gen"
 
 [tasks.gen-watch]
 description = "Watch and regenerate Dart bindings on changes"
-dir = "flutter"
 run = "rinf gen --watch"
 
 [tasks.download-ort]
@@ -43,19 +41,17 @@ run = "scripts/generate-flutter-icons.sh"
 [tasks.build]
 description = "Build macOS debug app"
 depends = ["gen", "xcodegen", "download-ort", "icons"]
-dir = "flutter"
 run = "flutter build macos --debug"
 
 [tasks.release]
 description = "Build macOS release app"
 depends = ["gen", "xcodegen"]
-dir = "flutter"
 run = "flutter build macos --release"
 
 [tasks.run]
 description = "Build + launch macOS debug app (via open, so TCC works)"
 depends = ["build"]
-run = "open flutter/build/macos/Build/Products/Debug/wrenflow.app"
+run = "open build/macos/Build/Products/Debug/wrenflow.app"
 
 [tasks.logs]
 description = "Tail wrenflow Rust logs (written by running app)"
@@ -63,27 +59,23 @@ run = "tail -f /tmp/wrenflow.log"
 
 [tasks.analyze]
 description = "Run Flutter analyzer"
-dir = "flutter"
 run = "flutter analyze"
 
 [tasks.test]
 description = "Run Flutter tests"
-dir = "flutter"
 run = "flutter test"
 
 [tasks.test-rust]
 description = "Run Rust domain + core tests"
-dir = "core"
 run = "cargo test -p wrenflow-domain -p wrenflow-core"
 
 [tasks.check-rust]
-description = "Check Rust hub compiles"
-dir = "flutter/native/hub"
+description = "Check all Rust crates compile"
 run = "cargo check"
 
 [tasks.clean]
 description = "Clean all build artifacts"
 run = """
-cd flutter && flutter clean
-cd flutter/native/hub && cargo clean
+flutter clean
+cd native/hub && cargo clean
 """

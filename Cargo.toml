@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = [
+    "core/wrenflow-domain",
+    "core/wrenflow-core",
+    "native/*",
+]
+
+[workspace.package]
+version = "0.2.0" # x-release-please-version
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls", "stream"], default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+thiserror = "2"
+log = "0.4"
+parakeet-rs = "0.3"
+cpal = "0.15"
+dirs = "6"

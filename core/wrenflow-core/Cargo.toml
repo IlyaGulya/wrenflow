@@ -6,7 +6,6 @@ license.workspace = true
 
 [dependencies]
 wrenflow-domain = { path = "../wrenflow-domain" }
-uniffi.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true

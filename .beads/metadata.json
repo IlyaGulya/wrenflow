@@ -2,6 +2,6 @@
   "database": "dolt",
   "backend": "dolt",
   "dolt_mode": "server",
-  "dolt_database": "freeflow",
+  "dolt_database": "wrenflow",
   "project_id": "02a8cd53-b6d7-4252-9278-db9f01826275"
 }
