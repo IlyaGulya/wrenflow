@@ -13,6 +13,7 @@ ROOT="$SCRIPT_DIR/.."
 
 DOCK_SVG="$ROOT/Resources/AppIcon-Dock.svg"
 DEST="$ROOT/macos/Runner/Assets.xcassets/AppIcon.appiconset"
+mkdir -p "$DEST"
 
 for size in 16 32 64 128 256 512 1024; do
   resvg -w "$size" -h "$size" "$DOCK_SVG" "$DEST/app_icon_${size}.png"
@@ -22,6 +23,7 @@ echo "App icons generated"
 # ── Settings icon (full logo with waves) ──────────────────────
 
 FULL_SVG="$ROOT/Resources/AppIcon-Source.svg"
+mkdir -p "$ROOT/assets"
 resvg -w 128 -h 128 "$FULL_SVG" "$ROOT/assets/icon.png"
 echo "Settings icon generated"
 
