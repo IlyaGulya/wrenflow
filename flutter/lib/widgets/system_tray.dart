@@ -41,13 +41,10 @@ class SystemTrayManager with TrayListener {
 
     _trayManager.addListener(this);
 
-    // Listen for audio device list updates.
+    // Listen for audio device list updates (cache only, don't rebuild menu).
     _deviceSub = AudioDevicesListed.rustSignalStream.listen((signal) {
       _audioDevices = signal.message.devices;
       _defaultDeviceName = signal.message.defaultDeviceName;
-      // Rebuild menu with updated device list.
-      final lastState = _ref.read(pipelineStateProvider).value;
-      _updateContextMenu(lastState ?? const PipelineStateIdle());
     });
 
     // Request initial device list.
@@ -221,14 +218,11 @@ class SystemTrayManager with TrayListener {
 
   @override
   void onTrayIconMouseUp() {
-    // Refresh device list before showing menu.
-    const ListAudioDevices().sendSignalToRust();
     _trayManager.popUpContextMenu();
   }
 
   @override
   void onTrayIconRightMouseUp() {
-    const ListAudioDevices().sendSignalToRust();
     _trayManager.popUpContextMenu();
   }
 }
