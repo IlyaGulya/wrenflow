@@ -13,7 +13,6 @@ use crate::signals;
 
 const INIT_TIMEOUT: Duration = Duration::from_millis(500);
 const INDICATOR_TIMEOUT: Duration = Duration::from_secs(1);
-const DISMISS_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Bridges PipelineListener trait to rinf signals.
 /// Also persists history entries via the history actor channel.
@@ -77,7 +76,6 @@ pub struct PipelineActor {
     listener: SignalListener,
     init_deadline: Option<Instant>,
     indicator_deadline: Option<Instant>,
-    dismiss_deadline: Option<Instant>,
 }
 
 impl PipelineActor {
@@ -87,7 +85,6 @@ impl PipelineActor {
             listener: SignalListener { history_tx },
             init_deadline: None,
             indicator_deadline: None,
-            dismiss_deadline: None,
         }
     }
 
@@ -96,7 +93,6 @@ impl PipelineActor {
         if started {
             self.init_deadline = Some(Instant::now() + INIT_TIMEOUT);
             self.indicator_deadline = None;
-            self.dismiss_deadline = None;
         }
     }
 
@@ -122,7 +118,6 @@ impl PipelineActor {
     pub fn on_transcription_complete(&mut self, result: TranscriptionResult) {
         self.engine.on_transcription_complete(result, &self.listener);
         self.indicator_deadline = None;
-        self.update_dismiss();
     }
 
     pub fn is_transcribing(&self) -> bool {
@@ -137,7 +132,6 @@ impl PipelineActor {
     pub fn on_error(&mut self, message: &str) {
         self.engine.on_pipeline_error(message, &self.listener);
         self.indicator_deadline = None;
-        self.update_dismiss();
     }
 
     /// Check and fire any expired timers. Call after each event.
@@ -158,23 +152,6 @@ impl PipelineActor {
             }
         }
 
-        if let Some(deadline) = self.dismiss_deadline {
-            if now >= deadline {
-                self.dismiss_deadline = None;
-                self.engine.on_dismiss_timeout(&self.listener);
-            }
-        }
-    }
-
-    fn update_dismiss(&mut self) {
-        match self.engine.state() {
-            PipelineState::Pasting | PipelineState::Error { .. } => {
-                if self.dismiss_deadline.is_none() {
-                    self.dismiss_deadline = Some(Instant::now() + DISMISS_TIMEOUT);
-                }
-            }
-            _ => {}
-        }
     }
 }
 

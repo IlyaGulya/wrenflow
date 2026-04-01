@@ -8,6 +8,8 @@ import 'package:rinf/rinf.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wrenflow/providers/history_provider.dart';
 import 'package:wrenflow/providers/settings_provider.dart';
+import 'package:wrenflow/providers/update_provider.dart';
+import 'package:wrenflow/services/update_service.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
 import 'package:wrenflow/theme/wrenflow_theme.dart';
 import 'package:wrenflow/widgets/green_toggle.dart';
@@ -723,17 +725,20 @@ class _MetricBadge extends StatelessWidget {
 
 // ── About tab content ────────────────────────────────────────
 
-class _AboutContent extends StatelessWidget {
+class _AboutContent extends ConsumerWidget {
   const _AboutContent();
 
-  static const _githubUrl = 'https://github.com/nichochar/wrenflow';
+  static const _githubUrl = 'https://github.com/IlyaGulya/wrenflow';
 
   @override
-  Widget build(BuildContext context) {
-    return Center(
+  Widget build(BuildContext context, WidgetRef ref) {
+    final updateAsync = ref.watch(updateProvider);
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
         children: [
+          const SizedBox(height: 20),
           Opacity(
             opacity: 0.6,
             child: Image.asset(
@@ -751,7 +756,7 @@ class _AboutContent extends StatelessWidget {
           Text('Wrenflow', style: WrenflowStyle.title(16)),
           const SizedBox(height: 4),
           Text(
-            'v1.0.0',
+            'v${GitHubUpdateSource.currentVersion}',
             style: WrenflowStyle.mono(10).copyWith(
               color: WrenflowStyle.textTertiary,
             ),
@@ -762,6 +767,42 @@ class _AboutContent extends StatelessWidget {
             style: WrenflowStyle.caption(12),
           ),
           const SizedBox(height: 20),
+
+          // Update section
+          SettingsCard(
+            title: 'Updates',
+            child: updateAsync.when(
+              loading: () => Row(
+                children: [
+                  SizedBox(
+                    width: 12, height: 12,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.5,
+                      color: WrenflowStyle.textTertiary,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text('Checking for updates...',
+                      style: WrenflowStyle.body(12)),
+                ],
+              ),
+              error: (_, __) => _updateRow(
+                'Could not check for updates',
+                actionLabel: 'Retry',
+                onAction: () => ref.read(updateProvider.notifier).checkNow(),
+              ),
+              data: (info) => info.isAvailable
+                  ? _updateAvailable(context, ref, info)
+                  : _updateRow(
+                      'You\'re up to date',
+                      actionLabel: 'Check now',
+                      onAction: () =>
+                          ref.read(updateProvider.notifier).checkNow(),
+                    ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
           GestureDetector(
             onTap: () async {
               final uri = Uri.parse(_githubUrl);
@@ -777,6 +818,68 @@ class _AboutContent extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _updateAvailable(
+      BuildContext context, WidgetRef ref, UpdateInfo info) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'v${info.latestVersion} is available',
+          style: WrenflowStyle.body(12),
+        ),
+        if (info.isRecent)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              'Released recently — you may want to wait a few days.',
+              style: WrenflowStyle.caption(11),
+            ),
+          ),
+        const SizedBox(height: 8),
+        GestureDetector(
+          onTap: () async {
+            final url = info.downloadUrl.isNotEmpty
+                ? info.downloadUrl
+                : info.releaseUrl;
+            final uri = Uri.parse(url);
+            if (await canLaunchUrl(uri)) await launchUrl(uri);
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: WrenflowStyle.text,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              'Download Update',
+              style: WrenflowStyle.body(12).copyWith(color: WrenflowStyle.surface),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _updateRow(String text,
+      {required String actionLabel, required VoidCallback onAction}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(text, style: WrenflowStyle.body(12)),
+        GestureDetector(
+          onTap: onAction,
+          child: Text(
+            actionLabel,
+            style: WrenflowStyle.body(12).copyWith(
+              color: WrenflowStyle.textOp50,
+              decoration: TextDecoration.underline,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rinf/rinf.dart';
 import 'package:tray_manager/tray_manager.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'package:wrenflow/providers/app_lifecycle_provider.dart';
 import 'package:wrenflow/providers/pipeline_state_provider.dart';
@@ -195,12 +196,16 @@ class SystemTrayManager with TrayListener {
     if (_ref.read(appLifecycleProvider) is! Running) return;
     _ref.read(settingsInitialTabProvider.notifier).set(SettingsTab.general);
     _ref.read(activeScreenProvider.notifier).show(ActiveScreen.settings);
+    windowManager.show();
+    windowManager.focus();
   }
 
   void _showHistory() {
     if (_ref.read(appLifecycleProvider) is! Running) return;
     _ref.read(settingsInitialTabProvider.notifier).set(SettingsTab.history);
     _ref.read(activeScreenProvider.notifier).show(ActiveScreen.settings);
+    windowManager.show();
+    windowManager.focus();
   }
 
   Future<void> _quit() async {

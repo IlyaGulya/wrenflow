@@ -69,6 +69,7 @@ class _WindowSynchronizerState extends ConsumerState<WindowSynchronizer>
     } else if (config.visible && _isWindowVisible) {
       await windowManager.setSize(Size(config.width, config.height));
       await windowManager.center();
+      await windowManager.focus();
     } else if (!config.visible && _isWindowVisible) {
       WindowManipulator.setWindowAlphaValue(0.0);
       await windowManager.hide();

@@ -246,7 +246,7 @@ impl PipelineEngine {
         } else {
             self.metrics.set_string("pipeline.outcome", "success".to_string());
             listener.on_transcript_ready(transcript.clone());
-            self.transition(PipelineState::Pasting, listener);
+            self.transition(PipelineState::Idle, listener);
         }
 
         let entry = HistoryEntry {

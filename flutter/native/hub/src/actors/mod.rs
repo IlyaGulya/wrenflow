@@ -203,6 +203,8 @@ pub async fn create_actors() {
                     hotkey.set_keycode(kc);
                     pipeline.handle_config_update(pack.message);
                 }
+                // Wake up to check init/indicator timers during active recording.
+                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
                 else => break,
             }
 
