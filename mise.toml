@@ -9,8 +9,6 @@ ruby = "3.4.9"
 "gem:cocoapods" = "1.16.2"
 xcodegen = "2.45.3"
 resvg = "0.47.0"
-actionlint = "1.7.12"
-ghalint = "1.5.5"
 
 # ── Tasks ──────────────────────────────────────────────────────
 
@@ -63,15 +61,24 @@ description = "Tail wrenflow Rust logs (written by running app)"
 run = "tail -f /tmp/wrenflow.log"
 
 [tasks.lint]
-description = "Run all linters (Rust clippy + Flutter analyze)"
-run = """
-cargo clippy --workspace --lib -- -D warnings
-flutter analyze
-"""
+description = "Run all linters (Rust clippy + Flutter analyze + workflow lints)"
+depends = ["lint-rust", "lint-dart", "lint-workflows"]
 
-[tasks.analyze]
+[tasks.lint-rust]
+description = "Run cargo clippy"
+run = "cargo clippy --workspace --lib -- -D warnings"
+
+[tasks.lint-dart]
 description = "Run Flutter analyzer"
 run = "flutter analyze"
+
+[tasks.lint-workflows]
+description = "Lint GitHub Actions workflows"
+tools = { actionlint = "1.7.12", ghalint = "1.5.5" }
+run = """
+actionlint .github/workflows/*.yml
+ghalint run
+"""
 
 [tasks.test]
 description = "Run Flutter tests"
@@ -84,6 +91,12 @@ run = "cargo test -p wrenflow-domain -p wrenflow-core"
 [tasks.check-rust]
 description = "Check all Rust crates compile"
 run = "cargo check"
+
+[tasks.pin-actions]
+description = "Pin GitHub Actions to full-length commit SHAs"
+depends = ["lint-workflows"]
+tools = { pinact = "3.9.0" }
+run = "pinact run"
 
 [tasks.clean]
 description = "Clean all build artifacts"
