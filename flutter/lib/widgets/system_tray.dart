@@ -221,11 +221,14 @@ class SystemTrayManager with TrayListener {
 
   @override
   void onTrayIconMouseUp() {
+    // Refresh device list before showing menu.
+    const ListAudioDevices().sendSignalToRust();
     _trayManager.popUpContextMenu();
   }
 
   @override
   void onTrayIconRightMouseUp() {
+    const ListAudioDevices().sendSignalToRust();
     _trayManager.popUpContextMenu();
   }
 }

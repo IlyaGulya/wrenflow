@@ -27,4 +27,11 @@ class OverlayService {
   Future<void> hide() async {
     await _channel.invokeMethod('hide');
   }
+
+  /// Show an error toast notification. Auto-dismisses after 6 seconds.
+  Future<void> showError(String message) async {
+    await _channel.invokeMethod('showError', {
+      'message': message,
+    });
+  }
 }

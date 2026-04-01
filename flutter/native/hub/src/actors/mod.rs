@@ -53,7 +53,7 @@ pub async fn create_actors() {
         model_actor::run(model_engine).await;
     });
 
-    // Device listing
+    // Device listing (on-demand from Dart — tray click, settings open).
     spawn(async {
         let recv = signals::ListAudioDevices::get_dart_signal_receiver();
         while let Some(_) = recv.recv().await {

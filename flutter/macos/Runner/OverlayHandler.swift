@@ -79,6 +79,8 @@ class OverlayHandler {
     private let channel: FlutterMethodChannel
     private var overlayPanel: NSPanel?
     private var transcribingPanel: NSPanel?
+    private var errorPanel: NSPanel?
+    private var errorDismissTimer: Timer?
     private let overlayState = OverlayState()
 
     init(messenger: FlutterBinaryMessenger) {
@@ -112,6 +114,15 @@ class OverlayHandler {
 
         case "hide":
             hide()
+            result(nil)
+
+        case "showError":
+            guard let args = call.arguments as? [String: Any],
+                  let message = args["message"] as? String else {
+                result(FlutterError(code: "INVALID_ARGS", message: "Missing message", details: nil))
+                return
+            }
+            showError(message: message)
             result(nil)
 
         default:
@@ -297,6 +308,74 @@ class OverlayHandler {
             self.transcribingPanel = nil
         })
     }
+
+    // MARK: - Error toast
+
+    private func showError(message: String) {
+        DispatchQueue.main.async { [self] in
+            _showErrorPanel(message: message)
+        }
+    }
+
+    private func _showErrorPanel(message: String) {
+        // Dismiss existing error toast first.
+        if let panel = errorPanel {
+            panel.orderOut(nil)
+            errorPanel = nil
+        }
+        errorDismissTimer?.invalidate()
+
+        let panelWidth: CGFloat = 320
+        let panelHeight: CGFloat = 44
+
+        let panel = makeOverlayPanel(width: panelWidth, height: panelHeight)
+        panel.hasShadow = true
+
+        let view = ErrorToastView(message: message)
+        let hosting = NSHostingView(rootView:
+            view
+                .frame(width: panelWidth, height: panelHeight)
+                .background(Color(red: 0.95, green: 0.3, blue: 0.3))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .environment(\.colorScheme, .dark)
+        )
+        hosting.frame = NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight)
+        panel.contentView = hosting
+
+        if let screen = NSScreen.main {
+            let x = screen.frame.midX - panelWidth / 2
+            let y = screen.visibleFrame.maxY - panelHeight - 8
+            panel.setFrame(NSRect(x: x, y: y, width: panelWidth, height: panelHeight), display: true)
+        }
+
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.25
+            panel.animator().alphaValue = 1
+        }
+
+        self.errorPanel = panel
+
+        // Auto-dismiss after 6 seconds.
+        errorDismissTimer = Timer.scheduledTimer(withTimeInterval: 6.0, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.dismissError()
+            }
+        }
+    }
+
+    private func dismissError() {
+        guard let panel = errorPanel else { return }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.3
+            panel.animator().alphaValue = 0
+        }, completionHandler: {
+            panel.orderOut(nil)
+            self.errorPanel = nil
+        })
+    }
 }
 
 // MARK: - SwiftUI Views
@@ -380,5 +459,25 @@ struct OverlayWaveformBar: View {
         Capsule()
             .fill(Color(white: 0.15).opacity(0.6))
             .frame(width: 3, height: minHeight + (maxHeight - minHeight) * amplitude)
+    }
+}
+
+// MARK: - Error Toast View
+
+struct ErrorToastView: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("⚠")
+                .font(.system(size: 14))
+            Text(message)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white)
+                .lineLimit(2)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 }

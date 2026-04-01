@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:rinf/rinf.dart';
 
 import '../services/overlay_service.dart';
 import '../src/bindings/signals/signals.dart';
@@ -14,6 +17,7 @@ class OverlayController {
   final ProviderContainer _container;
   final _overlay = OverlayService();
   String? _currentPhase;
+  StreamSubscription<RustSignalPack<PipelineError>>? _errorSub;
 
   void init() {
     _container.listen<AsyncValue<PipelineState>>(
@@ -33,6 +37,11 @@ class OverlayController {
         }
       },
     );
+
+    // Show error toasts from Rust pipeline errors.
+    _errorSub = PipelineError.rustSignalStream.listen((signalPack) {
+      _overlay.showError(signalPack.message.message);
+    });
   }
 
   void _onPipelineState(PipelineState state) {
