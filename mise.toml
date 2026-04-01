@@ -1,11 +1,16 @@
+[settings]
+ruby.compile = false
+
 [tools]
 rust = "1.94.1"
 flutter = "3.41.6"
-ruby = { version = "3.4.9", options = { compile = false } }
+ruby = "3.4.9"
 "cargo:rinf_cli" = "8.10.0"
 "gem:cocoapods" = "1.16.2"
 xcodegen = "2.45.3"
-resvg = "latest"
+resvg = "0.47.0"
+actionlint = "1.7.12"
+ghalint = "1.5.5"
 
 # ── Tasks ──────────────────────────────────────────────────────
 
@@ -45,7 +50,7 @@ run = "flutter build macos --debug"
 
 [tasks.release]
 description = "Build macOS release app"
-depends = ["gen", "xcodegen"]
+depends = ["gen", "xcodegen", "download-ort", "icons"]
 run = "flutter build macos --release"
 
 [tasks.run]
@@ -56,6 +61,13 @@ run = "open build/macos/Build/Products/Debug/wrenflow.app"
 [tasks.logs]
 description = "Tail wrenflow Rust logs (written by running app)"
 run = "tail -f /tmp/wrenflow.log"
+
+[tasks.lint]
+description = "Run all linters (Rust clippy + Flutter analyze)"
+run = """
+cargo clippy --workspace --lib -- -D warnings
+flutter analyze
+"""
 
 [tasks.analyze]
 description = "Run Flutter analyzer"

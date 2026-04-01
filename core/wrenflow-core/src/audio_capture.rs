@@ -121,13 +121,19 @@ pub struct AudioCapture {
 unsafe impl Send for AudioCapture {}
 unsafe impl Sync for AudioCapture {}
 
-impl AudioCapture {
-    /// Create a new AudioCapture (no resources allocated yet).
-    pub fn new() -> Self {
+impl Default for AudioCapture {
+    fn default() -> Self {
         Self {
             recording: Mutex::new(None),
             warm_up: Mutex::new(None),
         }
+    }
+}
+
+impl AudioCapture {
+    /// Create a new AudioCapture (no resources allocated yet).
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Enumerate available audio input devices.
@@ -250,13 +256,13 @@ impl AudioCapture {
                         let mut offset = 0;
                         while offset < frame_count {
                             let chunk = (frame_count - offset).min(1024);
-                            for i in 0..chunk {
+                            for (i, mono_sample) in mono[..chunk].iter_mut().enumerate() {
                                 let frame_start = (offset + i) * channels;
                                 let mut sum = 0.0f32;
                                 for ch in 0..channels {
                                     sum += data[frame_start + ch];
                                 }
-                                mono[i] = sum / channels as f32;
+                                *mono_sample = sum / channels as f32;
                             }
                             rb_producer.write(&mono[..chunk]);
                             offset += chunk;
@@ -457,7 +463,7 @@ fn drain_loop(
 
             // Throttle on_audio_level to every other tick (~50 Hz when drain runs at ~100 Hz)
             tick_counter += 1;
-            if tick_counter % 2 == 0 {
+            if tick_counter.is_multiple_of(2) {
                 listener.on_audio_level(level);
             }
 

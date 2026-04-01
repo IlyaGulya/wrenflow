@@ -25,20 +25,20 @@ impl log::Log for DualLogger {
                 record.args()
             );
             eprintln!("{msg}");
-            if let Ok(mut guard) = LOG_FILE.lock() {
-                if let Some(ref mut f) = *guard {
-                    let _ = writeln!(f, "{msg}");
-                    let _ = f.flush();
-                }
+            if let Ok(mut guard) = LOG_FILE.lock()
+                && let Some(ref mut f) = *guard
+            {
+                let _ = writeln!(f, "{msg}");
+                let _ = f.flush();
             }
         }
     }
 
     fn flush(&self) {
-        if let Ok(mut guard) = LOG_FILE.lock() {
-            if let Some(ref mut f) = *guard {
-                let _ = f.flush();
-            }
+        if let Ok(mut guard) = LOG_FILE.lock()
+            && let Some(ref mut f) = *guard
+        {
+            let _ = f.flush();
         }
     }
 }
@@ -54,10 +54,10 @@ pub fn init_logging() {
         .unwrap_or(log::LevelFilter::Info);
 
     // Open log file (truncate on each launch for fresh logs).
-    if let Ok(file) = std::fs::File::create(LOG_FILE_PATH) {
-        if let Ok(mut guard) = LOG_FILE.lock() {
-            *guard = Some(file);
-        }
+    if let Ok(file) = std::fs::File::create(LOG_FILE_PATH)
+        && let Ok(mut guard) = LOG_FILE.lock()
+    {
+        *guard = Some(file);
     }
 
     let _ = log::set_logger(&LOGGER);
@@ -118,15 +118,4 @@ fn write_crash_log(message: &str) -> std::io::Result<()> {
 
     writeln!(file, "[{timestamp}] {message}")?;
     Ok(())
-}
-
-/// Convert a panic payload to a human-readable string.
-pub fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(s) = payload.downcast_ref::<&str>() {
-        s.to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "unknown panic payload".to_string()
-    }
 }

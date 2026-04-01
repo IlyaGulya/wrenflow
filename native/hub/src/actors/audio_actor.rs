@@ -11,6 +11,7 @@ use crate::signals;
 /// Events sent from AudioActor to PipelineActor.
 pub enum AudioEvent {
     FirstAudio,
+    #[allow(dead_code)]
     RecordingComplete(RecordingResult),
     Error(String),
 }

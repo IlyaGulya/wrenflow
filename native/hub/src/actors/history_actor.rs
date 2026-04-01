@@ -31,10 +31,12 @@ impl HistoryActor {
         let delete_recv = signals::DeleteHistoryEntry::get_dart_signal_receiver();
         let clear_recv = signals::ClearHistory::get_dart_signal_receiver();
 
-        let rt = tokio::runtime::Builder::new_current_thread()
+        let Ok(rt) = tokio::runtime::Builder::new_current_thread()
             .enable_all()
-            .build()
-            .expect("history runtime");
+            .build() else {
+            log::error!("Failed to create history runtime");
+            return;
+        };
 
         rt.block_on(async {
             loop {

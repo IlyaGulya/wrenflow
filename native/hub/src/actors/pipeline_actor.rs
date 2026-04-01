@@ -50,10 +50,10 @@ impl PipelineListener for SignalListener {
 
     fn on_history_entry_added(&self, entry: HistoryEntry) {
         // Persist to SQLite via history actor.
-        if let Some(tx) = &self.history_tx {
-            if let Err(e) = tx.send(entry.clone()) {
-                log::error!("Failed to send history entry to actor: {e}");
-            }
+        if let Some(tx) = &self.history_tx
+            && let Err(e) = tx.send(entry.clone())
+        {
+            log::error!("Failed to send history entry to actor: {e}");
         }
 
         // Notify Dart UI.
@@ -138,18 +138,18 @@ impl PipelineActor {
     pub async fn check_timers(&mut self) {
         let now = Instant::now();
 
-        if let Some(deadline) = self.init_deadline {
-            if now >= deadline {
-                self.init_deadline = None;
-                self.engine.on_init_timeout(&self.listener);
-            }
+        if let Some(deadline) = self.init_deadline
+            && now >= deadline
+        {
+            self.init_deadline = None;
+            self.engine.on_init_timeout(&self.listener);
         }
 
-        if let Some(deadline) = self.indicator_deadline {
-            if now >= deadline {
-                self.indicator_deadline = None;
-                self.engine.on_indicator_timeout(&self.listener);
-            }
+        if let Some(deadline) = self.indicator_deadline
+            && now >= deadline
+        {
+            self.indicator_deadline = None;
+            self.engine.on_indicator_timeout(&self.listener);
         }
 
     }

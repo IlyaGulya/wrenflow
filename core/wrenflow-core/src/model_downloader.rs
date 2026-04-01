@@ -3,7 +3,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use wrenflow_domain::model_management::*;
+use wrenflow_domain::model_management::{
+    DownloadProgress, LocalModelState, ModelDownloadListener, ModelInfo,
+};
 
 /// Check if a model is already fully downloaded.
 pub fn is_model_present(model: &ModelInfo, model_dir: &Path) -> bool {

@@ -10,12 +10,10 @@ mod pipeline_actor;
 use audio_actor::{AudioActor, AudioEvent};
 use history_actor::HistoryActor;
 use hotkey_actor::HotkeyActor;
-use model_actor::SharedTranscriptionEngine;
 use pipeline_actor::PipelineActor;
 use rinf::{DartSignal, RustSignal};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use tokio::spawn;
 use wrenflow_domain::pipeline::TranscriptionResult;
 
@@ -57,7 +55,7 @@ pub async fn create_actors() {
     // Device listing (on-demand from Dart — tray click, settings open).
     spawn(async {
         let recv = signals::ListAudioDevices::get_dart_signal_receiver();
-        while let Some(_) = recv.recv().await {
+        while recv.recv().await.is_some() {
             let devices = AudioActor::list_devices();
             let default_name = AudioActor::default_device_name();
             signals::AudioDevicesListed { devices, default_device_name: default_name }.send_signal_to_dart();
@@ -106,8 +104,9 @@ pub async fn create_actors() {
                             let transcribing = pipeline.is_transcribing();
                             log::info!("transcribing={transcribing}");
 
-                            if transcribing {
-                                if let Ok(Some(result)) = recording {
+                            if transcribing
+                                && let Ok(Some(result)) = recording
+                            {
                                     log::info!("Recording: {}ms, {} samples",
                                         result.metrics.duration_ms,
                                         result.samples_16k.len());
@@ -184,8 +183,9 @@ pub async fn create_actors() {
                                     }
                                 }
                             }
-                        }
+
                     }
+
                 }
                 Some(event) = audio.recv_event() => {
                     match event {

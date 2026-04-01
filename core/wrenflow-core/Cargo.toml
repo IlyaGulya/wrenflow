@@ -19,5 +19,8 @@ cpal.workspace = true
 opus-rs = "0.1"
 ogg = "0.9"
 
+[lints]
+workspace = true
+
 [dev-dependencies]
 tempfile = "3"

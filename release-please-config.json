@@ -6,9 +6,8 @@
       "bump-minor-pre-major": true,
       "include-component-in-tag": false,
       "extra-files": [
-        "core/Cargo.toml",
-        "windows/Cargo.toml",
-        "android/app/build.gradle.kts"
+        "Cargo.toml",
+        "pubspec.yaml"
       ],
       "changelog-sections": [
         { "type": "feat", "section": "New Features" },

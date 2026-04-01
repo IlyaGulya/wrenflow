@@ -1,30 +1,51 @@
 #!/usr/bin/env bash
-# Run linters on staged workflow files
-STAGED_WORKFLOWS=$(git diff --cached --name-only --diff-filter=ACM | grep '^\.github/workflows/')
-
-if [ -z "$STAGED_WORKFLOWS" ]; then
-  exit 0
-fi
+set -euo pipefail
 
 FAILED=0
 
-if command -v actionlint &>/dev/null; then
-  echo "Running actionlint..."
-  if ! actionlint $STAGED_WORKFLOWS; then
+# ── Rust clippy (lib targets only — tests may use unwrap) ──
+STAGED_RS=$(git diff --cached --name-only --diff-filter=ACM | grep '\.rs$' || true)
+if [ -n "$STAGED_RS" ]; then
+  echo "Running cargo clippy..."
+  if ! cargo clippy --workspace --lib -- -D warnings 2>&1; then
     FAILED=1
   fi
 fi
 
-if command -v ghalint &>/dev/null; then
-  echo "Running ghalint..."
-  if ! ghalint run; then
-    FAILED=1
+# ── Flutter analyze (exclude vendor/) ──
+STAGED_DART=$(git diff --cached --name-only --diff-filter=ACM | grep '\.dart$' | grep -v '^vendor/' || true)
+if [ -n "$STAGED_DART" ]; then
+  echo "Running flutter analyze..."
+  if ! flutter analyze --no-pub 2>&1 | grep -v "vendor/" | grep -q "No issues found"; then
+    # Check for actual errors/warnings in our code
+    ISSUES=$(flutter analyze --no-pub 2>&1 | grep -v "vendor/" | grep -c "error\|warning" || true)
+    if [ "$ISSUES" -gt 0 ]; then
+      FAILED=1
+    fi
+  fi
+fi
+
+# ── GitHub Actions workflow linters ──
+STAGED_WORKFLOWS=$(git diff --cached --name-only --diff-filter=ACM | grep '^\.github/workflows/' || true)
+if [ -n "$STAGED_WORKFLOWS" ]; then
+  if command -v actionlint &>/dev/null; then
+    echo "Running actionlint..."
+    if ! actionlint $STAGED_WORKFLOWS; then
+      FAILED=1
+    fi
+  fi
+
+  if command -v ghalint &>/dev/null; then
+    echo "Running ghalint..."
+    if ! ghalint run; then
+      FAILED=1
+    fi
   fi
 fi
 
 if [ "$FAILED" -ne 0 ]; then
   echo ""
-  echo "ERROR: Workflow linters found issues. Fix before committing."
+  echo "ERROR: Linters found issues. Fix before committing."
   exit 1
 fi
 

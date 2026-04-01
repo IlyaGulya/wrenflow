@@ -5,8 +5,8 @@
 //!   - RMS of the incoming chunk
 //!   - Scaled by 10x and clamped to [0, 1]
 //!   - Asymmetric exponential smoothing:
-//!       rise  (scaled > smoothed): `new = old * 0.3 + scaled * 0.7`
-//!       fall  (scaled <= smoothed): `new = old * 0.6 + scaled * 0.4`
+//!     rise  (scaled > smoothed): `new = old * 0.3 + scaled * 0.7`
+//!     fall  (scaled <= smoothed): `new = old * 0.6 + scaled * 0.4`
 
 /// Stateful audio-level smoother.
 ///

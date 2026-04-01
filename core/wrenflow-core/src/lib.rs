@@ -8,7 +8,8 @@ pub use wrenflow_domain::audio;
 pub use wrenflow_domain::transcription;
 pub use wrenflow_domain::model_management;
 
-// Audio capture (cpal-based)
+// Audio capture (cpal-based) — internal Mutex locks are safe to unwrap
+#[allow(clippy::unwrap_used)]
 pub mod audio_capture;
 
 // Audio encoding
