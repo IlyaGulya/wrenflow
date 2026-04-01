@@ -63,6 +63,18 @@ jobs:
           cache-on-failure: "true"
           prefix-key: "v3-rust"
 
+      - name: sccache
+        if: steps.skip.outputs.skip != 'true'
+        uses: Mozilla-Actions/sccache-action@d651010b8da762cde178750d8eda7b5febfe147a # v0.0.9
+        with:
+          version: "v0.14.0"
+
+      - name: Configure sccache for Rust
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+
       - name: Compute version info
         if: steps.skip.outputs.skip != 'true'
         id: version
