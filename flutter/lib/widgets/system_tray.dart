@@ -1,11 +1,14 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:rinf/rinf.dart';
 import 'package:tray_manager/tray_manager.dart';
 
 import 'package:wrenflow/providers/app_lifecycle_provider.dart';
 import 'package:wrenflow/providers/pipeline_state_provider.dart';
+import 'package:wrenflow/providers/settings_provider.dart';
 import 'package:wrenflow/screens/settings_screen.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
 import 'package:wrenflow/state/app_lifecycle_state.dart';
@@ -21,6 +24,10 @@ class SystemTrayManager with TrayListener {
   String? _recordingIconPath;
   String? _transcribingIconPath;
 
+  List<AudioDeviceInfo> _audioDevices = [];
+  String _defaultDeviceName = '';
+  StreamSubscription<RustSignalPack<AudioDevicesListed>>? _deviceSub;
+
   Future<void> init() async {
     _idleIconPath = await _extractAsset('assets/tray_icons/tray_idle@2x.png');
     _recordingIconPath =
@@ -33,6 +40,18 @@ class SystemTrayManager with TrayListener {
     }
 
     _trayManager.addListener(this);
+
+    // Listen for audio device list updates.
+    _deviceSub = AudioDevicesListed.rustSignalStream.listen((signal) {
+      _audioDevices = signal.message.devices;
+      _defaultDeviceName = signal.message.defaultDeviceName;
+      // Rebuild menu with updated device list.
+      final lastState = _ref.read(pipelineStateProvider).value;
+      _updateContextMenu(lastState ?? const PipelineStateIdle());
+    });
+
+    // Request initial device list.
+    const ListAudioDevices().sendSignalToRust();
 
     await _updateContextMenu(const PipelineStateIdle());
 
@@ -56,7 +75,6 @@ class SystemTrayManager with TrayListener {
 
   void _onLifecycleChanged(AppLifecycleState next) {
     if (next is! Running) {
-      // Close any active screen when leaving Running.
       _ref.read(activeScreenProvider.notifier).close();
     }
     if (next is ShuttingDown) {
@@ -102,10 +120,37 @@ class SystemTrayManager with TrayListener {
 
   Future<void> _updateContextMenu(PipelineState state) async {
     final statusText = _statusText(state);
+    final settings = _ref.read(settingsProvider);
+    final selectedMicId = settings.selectedMicrophoneId;
+
+    // Build microphone submenu.
+    final defaultLabel = _defaultDeviceName.isNotEmpty
+        ? 'System Default ($_defaultDeviceName)'
+        : 'System Default';
+
+    final micItems = <MenuItem>[
+      MenuItem.checkbox(
+        label: defaultLabel,
+        checked: selectedMicId == 'default',
+        onClick: (_) => _selectMicrophone('default'),
+      ),
+      for (final device in _audioDevices)
+        MenuItem.checkbox(
+          label: device.name,
+          checked: selectedMicId == device.id,
+          onClick: (_) => _selectMicrophone(device.id),
+        ),
+    ];
 
     final menu = Menu(
       items: [
+        MenuItem(label: 'Wrenflow v1.0.0', disabled: true),
         MenuItem(label: statusText, disabled: true),
+        MenuItem.separator(),
+        MenuItem.submenu(
+          label: 'Microphone',
+          submenu: Menu(items: micItems),
+        ),
         MenuItem.separator(),
         MenuItem(
           label: 'Settings...',
@@ -138,6 +183,15 @@ class SystemTrayManager with TrayListener {
     return 'Ready';
   }
 
+  // ── Microphone selection ──────────────────────────────────
+
+  void _selectMicrophone(String deviceId) {
+    _ref.read(settingsProvider.notifier).setSelectedMicrophoneId(deviceId);
+    // Refresh menu to update checkmarks.
+    final lastState = _ref.read(pipelineStateProvider).value;
+    _updateContextMenu(lastState ?? const PipelineStateIdle());
+  }
+
   // ── Screen management (single window) ───────────────────
 
   void _showSettings() {
@@ -158,6 +212,7 @@ class SystemTrayManager with TrayListener {
   }
 
   Future<void> dispose() async {
+    _deviceSub?.cancel();
     _trayManager.removeListener(this);
     await _trayManager.destroy();
   }
