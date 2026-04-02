@@ -21,9 +21,12 @@ rinf gen
 """
 
 [tasks.xcodegen]
-description = "Generate Xcode project from project.yml"
+description = "Generate Xcode project + workspace from project.yml"
 dir = "macos"
-run = "xcodegen generate --spec project.yml"
+run = """
+xcodegen generate --spec project.yml
+pod install
+"""
 
 [tasks.gen]
 description = "Generate Dart bindings from Rust signals"

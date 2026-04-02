@@ -1,4 +1,17 @@
 name: Runner
+
+schemes:
+  Runner:
+    build:
+      targets:
+        Runner: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    archive:
+      config: Release
+
 options:
   bundleIdPrefix: me.gulya
   deploymentTarget:
