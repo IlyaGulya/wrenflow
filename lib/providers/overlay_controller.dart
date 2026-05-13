@@ -20,28 +20,29 @@ class OverlayController {
   StreamSubscription<RustSignalPack<PipelineError>>? _errorSub;
 
   void init() {
-    _container.listen<AsyncValue<PipelineState>>(
-      pipelineStateProvider,
-      (previous, next) {
-        final state = next.value;
-        if (state != null) _onPipelineState(state);
-      },
-    );
+    _container.listen<AsyncValue<PipelineState>>(pipelineStateProvider, (
+      previous,
+      next,
+    ) {
+      final state = next.value;
+      if (state != null) _onPipelineState(state);
+    });
 
-    _container.listen<AsyncValue<double>>(
-      audioLevelProvider,
-      (previous, next) {
-        final level = next.value;
-        if (level != null && _currentPhase == 'recording') {
-          _overlay.updateAudioLevel(level);
-        }
-      },
-    );
+    _container.listen<AsyncValue<double>>(audioLevelProvider, (previous, next) {
+      final level = next.value;
+      if (level != null && _currentPhase == 'recording') {
+        _overlay.updateAudioLevel(level);
+      }
+    });
 
     // Show error toasts from Rust pipeline errors.
     _errorSub = PipelineError.rustSignalStream.listen((signalPack) {
       _overlay.showError(signalPack.message.message);
     });
+  }
+
+  Future<void> dispose() async {
+    await _errorSub?.cancel();
   }
 
   void _onPipelineState(PipelineState state) {
@@ -63,8 +64,8 @@ class OverlayController {
         _overlay.hide();
 
       case PipelineStatePasting() ||
-           PipelineStateIdle() ||
-           PipelineStateError():
+          PipelineStateIdle() ||
+          PipelineStateError():
         _currentPhase = null;
         _overlay.hide();
 

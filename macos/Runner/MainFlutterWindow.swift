@@ -24,5 +24,10 @@ class MainFlutterWindow: NSWindow {
     RegisterGeneratedPlugins(registry: macOSWindowUtilsViewController.flutterViewController)
 
     super.awakeFromNib()
+
+    // Keep the startup window fully out of the window list until Dart decides
+    // it should be visible. This avoids a native blank window flashing before
+    // WindowSynchronizer applies Flutter-side styling and visibility.
+    self.orderOut(nil)
   }
 }

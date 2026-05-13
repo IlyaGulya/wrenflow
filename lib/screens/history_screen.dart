@@ -39,9 +39,9 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                     onTap: () => _confirmClearAll(context),
                     child: Text(
                       'Clear',
-                      style: WrenflowStyle.body(12).copyWith(
-                        color: WrenflowStyle.textTertiary,
-                      ),
+                      style: WrenflowStyle.body(
+                        12,
+                      ).copyWith(color: WrenflowStyle.textTertiary),
                     ),
                   ),
               ],
@@ -54,15 +54,16 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                 ? Center(
                     child: Text(
                       'No transcriptions yet',
-                      style: WrenflowStyle.body(13).copyWith(
-                        color: WrenflowStyle.textTertiary,
-                      ),
+                      style: WrenflowStyle.body(
+                        13,
+                      ).copyWith(color: WrenflowStyle.textTertiary),
                     ),
                   )
                 : ListView.separated(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     itemCount: entries.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 6),
+                    separatorBuilder: (context, index) =>
+                        const SizedBox(height: 6),
                     itemBuilder: (context, index) {
                       final entry = entries[index];
                       return _HistoryRow(
@@ -100,8 +101,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
               ref.read(historyProvider.notifier).clearAll();
               ClearHistory().sendSignalToRust();
             },
-            child: Text('Clear',
-                style: TextStyle(color: WrenflowStyle.red)),
+            child: Text('Clear', style: TextStyle(color: WrenflowStyle.red)),
           ),
         ],
       ),
@@ -113,9 +113,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Transcription'),
-        content: SingleChildScrollView(
-          child: SelectableText(entry.transcript),
-        ),
+        content: SingleChildScrollView(child: SelectableText(entry.transcript)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -164,10 +162,7 @@ class _HistoryRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    '$dateStr $timeStr',
-                    style: WrenflowStyle.caption(11),
-                  ),
+                  Text('$dateStr $timeStr', style: WrenflowStyle.caption(11)),
                   const SizedBox(height: 4),
                   Text(
                     entry.transcript,

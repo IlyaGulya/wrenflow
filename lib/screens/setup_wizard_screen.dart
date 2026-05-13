@@ -17,7 +17,6 @@ import '../widgets/hotkey_capture.dart';
 import '../widgets/initializing_dots.dart';
 import '../widgets/waveform_painter.dart';
 
-
 /// Setup wizard — used for both onboarding and permission recovery.
 ///
 /// In onboarding mode: all 5 steps (microphone, accessibility, hotkey, vocabulary, complete).
@@ -33,7 +32,7 @@ class SetupWizardScreen extends ConsumerStatefulWidget {
 
 class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   final _permissionService = PermissionService();
-  String _selectedHotkey = 'rightOption';
+  String _selectedHotkey = '61';
   final _vocabularyController = TextEditingController();
   bool _launchAtLogin = true;
   final _autoAdvanced = <OnboardingStep>{};
@@ -110,8 +109,11 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                   ),
                 );
               },
-              child: _buildStep(currentStep, permissions,
-                  key: ValueKey(currentStep)),
+              child: _buildStep(
+                currentStep,
+                permissions,
+                key: ValueKey(currentStep),
+              ),
             ),
           ),
           if (currentStep != OnboardingStep.complete)
@@ -184,7 +186,9 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   // ── Recovery screen ───────────────────────────────────────
 
   Widget _buildRecoveryScreen(
-      PermissionsState permissions, MissingPermissions missing) {
+    PermissionsState permissions,
+    MissingPermissions missing,
+  ) {
     return Scaffold(
       backgroundColor: WrenflowStyle.surface,
       body: Column(
@@ -202,8 +206,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                       'Microphone',
                       permissions.microphone == PermissionStatus.granted,
                       () async {
-                        final granted =
-                            await _permissionService.requestMicrophone();
+                        final granted = await _permissionService
+                            .requestMicrophone();
                         if (!granted && mounted) {
                           await _permissionService.openMicrophoneSettings();
                         }
@@ -214,8 +218,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                       'Accessibility',
                       permissions.accessibility == PermissionStatus.granted,
                       () async {
-                        final granted =
-                            await _permissionService.requestAccessibility();
+                        final granted = await _permissionService
+                            .requestAccessibility();
                         if (!granted && mounted) {
                           await _permissionService.openAccessibilitySettings();
                         }
@@ -236,12 +240,18 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       child: granted
           ? Row(
               children: [
-                Icon(CupertinoIcons.checkmark_circle_fill,
-                    size: 13, color: WrenflowStyle.green),
+                Icon(
+                  CupertinoIcons.checkmark_circle_fill,
+                  size: 13,
+                  color: WrenflowStyle.green,
+                ),
                 const SizedBox(width: 6),
-                Text('$name — Granted',
-                    style: WrenflowStyle.body(12)
-                        .copyWith(color: WrenflowStyle.green)),
+                Text(
+                  '$name — Granted',
+                  style: WrenflowStyle.body(
+                    12,
+                  ).copyWith(color: WrenflowStyle.green),
+                ),
               ],
             )
           : GestureDetector(
@@ -270,8 +280,9 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
               onTap: () => _lifecycle.onboardingBack(),
               child: Text(
                 'Back',
-                style: WrenflowStyle.body(12)
-                    .copyWith(color: WrenflowStyle.textTertiary),
+                style: WrenflowStyle.body(
+                  12,
+                ).copyWith(color: WrenflowStyle.textTertiary),
               ),
             )
           else
@@ -302,8 +313,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         final Color color = isCurrent
             ? WrenflowStyle.textOp50
             : isCompleted
-                ? WrenflowStyle.greenOp50
-                : WrenflowStyle.textOp10;
+            ? WrenflowStyle.greenOp50
+            : WrenflowStyle.textOp10;
 
         return Padding(
           padding: EdgeInsets.only(left: i > 0 ? 5 : 0),
@@ -311,10 +322,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
             duration: const Duration(milliseconds: 200),
             width: size,
             height: size,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: color,
-            ),
+            decoration: BoxDecoration(shape: BoxShape.circle, color: color),
           ),
         );
       }),
@@ -323,35 +331,38 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
 
   // ── Step content ──────────────────────────────────────────
 
-  Widget _buildStep(OnboardingStep step, PermissionsState permissions,
-      {Key? key}) {
+  Widget _buildStep(
+    OnboardingStep step,
+    PermissionsState permissions, {
+    Key? key,
+  }) {
     return switch (step) {
       OnboardingStep.microphone => _buildPermissionStep(
-          key: key,
-          icon: CupertinoIcons.mic_fill,
-          title: 'Microphone',
-          subtitle: 'Wrenflow needs microphone access to record your voice.',
-          isGranted: permissions.microphone == PermissionStatus.granted,
-          onGrant: () async {
-            final granted = await _permissionService.requestMicrophone();
-            if (!granted && mounted) {
-              await _permissionService.openMicrophoneSettings();
-            }
-          },
-        ),
+        key: key,
+        icon: CupertinoIcons.mic_fill,
+        title: 'Microphone',
+        subtitle: 'Wrenflow needs microphone access to record your voice.',
+        isGranted: permissions.microphone == PermissionStatus.granted,
+        onGrant: () async {
+          final granted = await _permissionService.requestMicrophone();
+          if (!granted && mounted) {
+            await _permissionService.openMicrophoneSettings();
+          }
+        },
+      ),
       OnboardingStep.accessibility => _buildPermissionStep(
-          key: key,
-          icon: CupertinoIcons.hand_raised_fill,
-          title: 'Accessibility',
-          subtitle: 'Required for global hotkey and pasting text.',
-          isGranted: permissions.accessibility == PermissionStatus.granted,
-          onGrant: () async {
-            final granted = await _permissionService.requestAccessibility();
-            if (!granted && mounted) {
-              await _permissionService.openAccessibilitySettings();
-            }
-          },
-        ),
+        key: key,
+        icon: CupertinoIcons.hand_raised_fill,
+        title: 'Accessibility',
+        subtitle: 'Required for global hotkey and pasting text.',
+        isGranted: permissions.accessibility == PermissionStatus.granted,
+        onGrant: () async {
+          final granted = await _permissionService.requestAccessibility();
+          if (!granted && mounted) {
+            await _permissionService.openAccessibilitySettings();
+          }
+        },
+      ),
       OnboardingStep.hotkey => _buildHotkeyStep(key: key),
       OnboardingStep.vocabulary => _buildVocabularyStep(key: key),
       OnboardingStep.complete => _buildCompleteStep(key: key),
@@ -379,12 +390,16 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(CupertinoIcons.checkmark_circle_fill,
-            size: 13, color: WrenflowStyle.green),
+        Icon(
+          CupertinoIcons.checkmark_circle_fill,
+          size: 13,
+          color: WrenflowStyle.green,
+        ),
         const SizedBox(width: 4),
-        Text('Granted',
-            style:
-                WrenflowStyle.body(12).copyWith(color: WrenflowStyle.green)),
+        Text(
+          'Granted',
+          style: WrenflowStyle.body(12).copyWith(color: WrenflowStyle.green),
+        ),
       ],
     );
   }
@@ -513,9 +528,12 @@ class _GlobalModelIndicator extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 3),
-          Text('Downloading model — $pct%',
-              style: WrenflowStyle.mono(9).copyWith(
-                  color: WrenflowStyle.textTertiary)),
+          Text(
+            'Downloading model — $pct%',
+            style: WrenflowStyle.mono(
+              9,
+            ).copyWith(color: WrenflowStyle.textTertiary),
+          ),
         ],
       );
     }
@@ -533,9 +551,12 @@ class _GlobalModelIndicator extends ConsumerWidget {
             ),
           ),
           const SizedBox(width: 6),
-          Text('Loading model...',
-              style: WrenflowStyle.mono(9).copyWith(
-                  color: WrenflowStyle.textTertiary)),
+          Text(
+            'Loading model...',
+            style: WrenflowStyle.mono(
+              9,
+            ).copyWith(color: WrenflowStyle.textTertiary),
+          ),
         ],
       );
     }
@@ -553,18 +574,23 @@ class _GlobalModelIndicator extends ConsumerWidget {
             ),
           ),
           const SizedBox(width: 6),
-          Text('Warming up model...',
-              style: WrenflowStyle.mono(9).copyWith(
-                  color: WrenflowStyle.textTertiary)),
+          Text(
+            'Warming up model...',
+            style: WrenflowStyle.mono(
+              9,
+            ).copyWith(color: WrenflowStyle.textTertiary),
+          ),
         ],
       );
     }
 
     if (state is ModelStateError) {
-      return Text('Model: ${state.message}',
-          style: WrenflowStyle.mono(9).copyWith(color: WrenflowStyle.red),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis);
+      return Text(
+        'Model: ${state.message}',
+        style: WrenflowStyle.mono(9).copyWith(color: WrenflowStyle.red),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      );
     }
 
     // NotDownloaded or unknown
@@ -580,9 +606,12 @@ class _GlobalModelIndicator extends ConsumerWidget {
           ),
         ),
         const SizedBox(width: 6),
-        Text('Preparing model...',
-            style: WrenflowStyle.mono(9).copyWith(
-                color: WrenflowStyle.textTertiary)),
+        Text(
+          'Preparing model...',
+          style: WrenflowStyle.mono(
+            9,
+          ).copyWith(color: WrenflowStyle.textTertiary),
+        ),
       ],
     );
   }
@@ -634,7 +663,8 @@ class _TranscriptionTestWidgetState
     final pipeline = pipelineAsync.value;
 
     // Clear old transcript when a new recording starts.
-    if (pipeline is PipelineStateStarting || pipeline is PipelineStateRecording) {
+    if (pipeline is PipelineStateStarting ||
+        pipeline is PipelineStateRecording) {
       _lastTranscript = null;
     }
 
@@ -669,8 +699,7 @@ class _TranscriptionTestWidgetState
             ),
           ),
           const SizedBox(height: 4),
-          Text('Downloading model — $pct%',
-              style: WrenflowStyle.caption(10)),
+          Text('Downloading model — $pct%', style: WrenflowStyle.caption(10)),
         ],
       );
     }
@@ -705,9 +734,10 @@ class _TranscriptionTestWidgetState
         key: const ValueKey('model-error'),
         child: GestureDetector(
           onTap: () => const InitializeLocalModel().sendSignalToRust(),
-          child: Text('Model error. Tap to retry.',
-              style: WrenflowStyle.caption(11)
-                  .copyWith(color: WrenflowStyle.red)),
+          child: Text(
+            'Model error. Tap to retry.',
+            style: WrenflowStyle.caption(11).copyWith(color: WrenflowStyle.red),
+          ),
         ),
       );
     }
@@ -846,9 +876,11 @@ class _StepContent extends StatelessWidget {
           const SizedBox(height: 10),
           Text(title, style: WrenflowStyle.title(16)),
           const SizedBox(height: 4),
-          Text(subtitle,
-              textAlign: TextAlign.center,
-              style: WrenflowStyle.caption(12)),
+          Text(
+            subtitle,
+            textAlign: TextAlign.center,
+            style: WrenflowStyle.caption(12),
+          ),
           const SizedBox(height: 14),
           child,
           const SizedBox(height: 20),

@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'app_version.dart';
+
 /// Information about an available update.
 class UpdateInfo {
   const UpdateInfo({
@@ -33,15 +35,10 @@ abstract class UpdateSource {
 
 /// Checks GitHub releases API for available updates.
 class GitHubUpdateSource implements UpdateSource {
-  GitHubUpdateSource({
-    this.owner = 'IlyaGulya',
-    this.repo = 'wrenflow',
-  });
+  GitHubUpdateSource({this.owner = 'IlyaGulya', this.repo = 'wrenflow'});
 
   final String owner;
   final String repo;
-
-  static const currentVersion = '1.0.0';
 
   @override
   Future<UpdateInfo> checkForUpdate() async {
@@ -52,7 +49,10 @@ class GitHubUpdateSource implements UpdateSource {
         final url = 'https://api.github.com/repos/$owner/$repo/releases/latest';
         final request = await client.getUrl(Uri.parse(url));
         request.headers.set(HttpHeaders.userAgentHeader, 'Wrenflow');
-        request.headers.set(HttpHeaders.acceptHeader, 'application/vnd.github+json');
+        request.headers.set(
+          HttpHeaders.acceptHeader,
+          'application/vnd.github+json',
+        );
 
         final response = await request.close();
         if (response.statusCode != 200) {
@@ -70,11 +70,12 @@ class GitHubUpdateSource implements UpdateSource {
             ? DateTime.tryParse(publishedAtStr)
             : null;
 
-        final latestVersion =
-            tagName.startsWith('v') ? tagName.substring(1) : tagName;
+        final latestVersion = tagName.startsWith('v')
+            ? tagName.substring(1)
+            : tagName;
 
         if (latestVersion.isEmpty) return UpdateInfo.none;
-        if (!_isNewerVersion(latestVersion, currentVersion)) {
+        if (!_isNewerVersion(latestVersion, AppVersion.currentVersion)) {
           return UpdateInfo.none;
         }
 

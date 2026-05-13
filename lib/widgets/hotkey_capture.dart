@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'dart:io';
 
 import 'package:flutter/cupertino.dart';
@@ -115,18 +117,21 @@ class _HotkeyCaptureState extends State<HotkeyCapture> {
     _focusNode.requestFocus();
   }
 
-  void _onKey(KeyEvent event) {
+  void _onKey(RawKeyEvent event) {
     if (!_listening) return;
-    if (event is! KeyDownEvent) return;
+    if (event is! RawKeyDownEvent) return;
 
-    final macKeycode = _flutterToMacKeycode(event);
+    final macKeycode = _eventToMacKeycode(event);
     if (macKeycode != null) {
       widget.onKeySelected(macKeycode.toString());
       setState(() => _listening = false);
     }
   }
 
-  int? _flutterToMacKeycode(KeyEvent event) {
+  int? _eventToMacKeycode(RawKeyEvent event) {
+    if (Platform.isMacOS && event.data is RawKeyEventDataMacOs) {
+      return (event.data as RawKeyEventDataMacOs).keyCode;
+    }
     return _physicalToMacKeycode[event.physicalKey];
   }
 
@@ -151,7 +156,9 @@ class _HotkeyCaptureState extends State<HotkeyCapture> {
         padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 10),
         margin: const EdgeInsets.only(bottom: 4),
         decoration: BoxDecoration(
-          color: isSelected ? WrenflowStyle.textOp05 : CupertinoColors.extraLightBackgroundGray.withAlpha(0),
+          color: isSelected
+              ? WrenflowStyle.textOp05
+              : CupertinoColors.extraLightBackgroundGray.withAlpha(0),
           borderRadius: BorderRadius.circular(7),
         ),
         child: Row(
@@ -175,9 +182,9 @@ class _HotkeyCaptureState extends State<HotkeyCapture> {
 
   Widget _buildCustomRow() {
     final isCustomSelected = !_isPreset;
-    return KeyboardListener(
+    return RawKeyboardListener(
       focusNode: _focusNode,
-      onKeyEvent: _onKey,
+      onKey: _onKey,
       child: GestureDetector(
         onTap: () {
           if (isCustomSelected && !_listening) {
@@ -190,7 +197,9 @@ class _HotkeyCaptureState extends State<HotkeyCapture> {
           width: double.infinity,
           padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 10),
           decoration: BoxDecoration(
-            color: isCustomSelected ? WrenflowStyle.textOp05 : CupertinoColors.extraLightBackgroundGray.withAlpha(0),
+            color: isCustomSelected
+                ? WrenflowStyle.textOp05
+                : CupertinoColors.extraLightBackgroundGray.withAlpha(0),
             borderRadius: BorderRadius.circular(7),
             border: _listening
                 ? Border.all(color: WrenflowStyle.textOp50, width: 1)
@@ -209,13 +218,17 @@ class _HotkeyCaptureState extends State<HotkeyCapture> {
               ),
               const SizedBox(width: 8),
               if (_listening)
-                Text('Press any key...',
-                    style: WrenflowStyle.body(12)
-                        .copyWith(color: WrenflowStyle.textOp50))
+                Text(
+                  'Press any key...',
+                  style: WrenflowStyle.body(
+                    12,
+                  ).copyWith(color: WrenflowStyle.textOp50),
+                )
               else if (isCustomSelected)
                 Text(
-                    'Custom: ${hotkeyDisplayName(widget.currentValue)}',
-                    style: WrenflowStyle.body(12))
+                  'Custom: ${hotkeyDisplayName(widget.currentValue)}',
+                  style: WrenflowStyle.body(12),
+                )
               else
                 Text('Custom...', style: WrenflowStyle.body(12)),
             ],

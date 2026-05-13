@@ -60,6 +60,51 @@ description = "Build macOS release app"
 depends = ["gen", "xcodegen", "download-ort", "icons"]
 run = "flutter build macos --release"
 
+[tasks.release-install]
+description = "Build release app, replace installed app, and relaunch it"
+depends = ["release"]
+run = """
+set -euo pipefail
+
+APP_NAME="wrenflow.app"
+BUNDLE_ID="me.gulya.wrenflow"
+SOURCE_APP="build/macos/Build/Products/Release/$APP_NAME"
+
+if [ ! -d "$SOURCE_APP" ]; then
+  echo "Release app not found at $SOURCE_APP" >&2
+  exit 1
+fi
+
+TARGET_APP=""
+for candidate in "/Applications/$APP_NAME" "$HOME/Applications/$APP_NAME"; do
+  if [ -d "$candidate" ]; then
+    TARGET_APP="$candidate"
+    break
+  fi
+done
+
+if [ -z "$TARGET_APP" ]; then
+  TARGET_APP="/Applications/$APP_NAME"
+fi
+
+echo "Installing $SOURCE_APP -> $TARGET_APP"
+
+osascript -e 'tell application id "'"$BUNDLE_ID"'" to quit' >/dev/null 2>&1 || true
+pkill -x wrenflow >/dev/null 2>&1 || true
+
+for _ in $(seq 1 50); do
+  if ! pgrep -x wrenflow >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.1
+done
+
+rm -rf "$TARGET_APP"
+mkdir -p "$(dirname "$TARGET_APP")"
+ditto "$SOURCE_APP" "$TARGET_APP"
+open "$TARGET_APP"
+"""
+
 [tasks.run]
 description = "Build + launch macOS debug app (via open, so TCC works)"
 depends = ["build"]

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:macos_window_utils/macos_window_utils.dart';
@@ -6,7 +8,9 @@ import 'package:window_manager/window_manager.dart';
 
 import 'providers/app_lifecycle_provider.dart';
 import 'providers/overlay_controller.dart';
+import 'providers/settings_provider.dart';
 import 'screens/settings_screen.dart';
+import 'services/app_version.dart';
 import 'screens/setup_wizard_screen.dart';
 import 'src/bindings/bindings.dart';
 import 'state/app_lifecycle_state.dart';
@@ -34,14 +38,6 @@ Future<void> main(List<String> args) async {
 
   final container = ProviderContainer();
 
-  // Initialize system tray — it listens to lifecycle + pipeline state.
-  final tray = SystemTrayManager(container);
-  tray.init();
-
-  // Initialize native overlay controller — bridges pipeline state to NSPanel.
-  final overlay = OverlayController(container);
-  overlay.init();
-
   runApp(
     UncontrolledProviderScope(
       container: container,
@@ -49,12 +45,30 @@ Future<void> main(List<String> args) async {
         title: 'Wrenflow',
         debugShowCheckedModeBanner: false,
         theme: WrenflowStyle.themeData,
-        home: const WindowSynchronizer(
-          child: _AppHome(),
-        ),
+        home: const WindowSynchronizer(child: _AppHome()),
       ),
     ),
   );
+
+  unawaited(_initializeApp(container));
+}
+
+Future<void> _initializeApp(ProviderContainer container) async {
+  await AppVersion.load();
+
+  final settingsNotifier = container.read(settingsProvider.notifier);
+  await settingsNotifier.load();
+  settingsNotifier.syncToRust();
+
+  // Initialize system tray after settings are ready, so menu state and
+  // device selection start from persisted values.
+  final tray = SystemTrayManager(container);
+  await tray.init();
+
+  // Native overlays do not depend on the settings load, but starting them here
+  // keeps all non-UI startup work off the critical path before runApp.
+  final overlay = OverlayController(container);
+  overlay.init();
 }
 
 // ── App home — declarative projection of lifecycle state ──────
@@ -68,26 +82,20 @@ class _AppHome extends ConsumerWidget {
     final activeScreen = ref.watch(activeScreenProvider);
 
     return switch (lifecycle) {
-      Initializing() => const Scaffold(
-          backgroundColor: WrenflowStyle.surface,
-        ),
-      Onboarding() => const SetupWizardScreen(
-          mode: WizardMode.onboarding,
-        ),
+      Initializing() => const Scaffold(backgroundColor: WrenflowStyle.surface),
+      Onboarding() => const SetupWizardScreen(mode: WizardMode.onboarding),
       PermissionRecovery() => const SetupWizardScreen(
-          mode: WizardMode.recovery,
-        ),
+        mode: WizardMode.recovery,
+      ),
       Running() => switch (activeScreen) {
-          ActiveScreen.settings => SettingsScreen(
-              initialTab: ref.watch(settingsInitialTabProvider),
-            ),
-          ActiveScreen.none => const Scaffold(
-              backgroundColor: WrenflowStyle.surface,
-            ),
-        },
-      ShuttingDown() => const Scaffold(
+        ActiveScreen.settings => SettingsScreen(
+          initialTab: ref.watch(settingsInitialTabProvider),
+        ),
+        ActiveScreen.none => const Scaffold(
           backgroundColor: WrenflowStyle.surface,
         ),
+      },
+      ShuttingDown() => const Scaffold(backgroundColor: WrenflowStyle.surface),
     };
   }
 }

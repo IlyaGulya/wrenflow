@@ -11,6 +11,7 @@ import 'package:wrenflow/providers/app_lifecycle_provider.dart';
 import 'package:wrenflow/providers/pipeline_state_provider.dart';
 import 'package:wrenflow/providers/settings_provider.dart';
 import 'package:wrenflow/screens/settings_screen.dart';
+import 'package:wrenflow/services/app_version.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
 import 'package:wrenflow/state/app_lifecycle_state.dart';
 
@@ -31,13 +32,19 @@ class SystemTrayManager with TrayListener {
 
   Future<void> init() async {
     _idleIconPath = await _extractAsset('assets/tray_icons/tray_idle@2x.png');
-    _recordingIconPath =
-        await _extractAsset('assets/tray_icons/tray_recording@2x.png');
-    _transcribingIconPath =
-        await _extractAsset('assets/tray_icons/tray_transcribing@2x.png');
+    _recordingIconPath = await _extractAsset(
+      'assets/tray_icons/tray_recording@2x.png',
+    );
+    _transcribingIconPath = await _extractAsset(
+      'assets/tray_icons/tray_transcribing@2x.png',
+    );
 
     if (_idleIconPath != null) {
-      await _trayManager.setIcon(_idleIconPath!, isTemplate: true, iconSize: 22);
+      await _trayManager.setIcon(
+        _idleIconPath!,
+        isTemplate: true,
+        iconSize: 22,
+      );
     }
 
     _trayManager.addListener(this);
@@ -54,13 +61,13 @@ class SystemTrayManager with TrayListener {
     await _updateContextMenu(const PipelineStateIdle());
 
     // React to pipeline state changes (icon + menu).
-    _ref.listen<AsyncValue<PipelineState>>(
-      pipelineStateProvider,
-      (previous, next) {
-        final state = next.value;
-        if (state != null) _onPipelineStateChanged(state);
-      },
-    );
+    _ref.listen<AsyncValue<PipelineState>>(pipelineStateProvider, (
+      previous,
+      next,
+    ) {
+      final state = next.value;
+      if (state != null) _onPipelineStateChanged(state);
+    });
 
     // React to lifecycle changes.
     _ref.listen<AppLifecycleState>(
@@ -142,7 +149,10 @@ class SystemTrayManager with TrayListener {
 
     final menu = Menu(
       items: [
-        MenuItem(label: 'Wrenflow v1.0.0', disabled: true),
+        MenuItem(
+          label: 'Wrenflow v${AppVersion.displayVersion}',
+          disabled: true,
+        ),
         MenuItem(label: statusText, disabled: true),
         MenuItem.separator(),
         MenuItem.submenu(
@@ -150,19 +160,12 @@ class SystemTrayManager with TrayListener {
           submenu: Menu(items: micItems),
         ),
         MenuItem.separator(),
-        MenuItem(
-          label: 'Settings...',
-          onClick: (_) => _showSettings(),
-        ),
-        MenuItem(
-          label: 'History',
-          onClick: (_) => _showHistory(),
-        ),
+        MenuItem(label: 'Settings...', onClick: (_) => _showSettings()),
+        MenuItem(label: 'History', onClick: (_) => _showHistory()),
         MenuItem.separator(),
         MenuItem(
           label: 'Quit Wrenflow',
-          onClick: (_) =>
-              _ref.read(appLifecycleProvider.notifier).quit(),
+          onClick: (_) => _ref.read(appLifecycleProvider.notifier).quit(),
         ),
       ],
     );

@@ -93,6 +93,8 @@ class SettingsNotifier extends Notifier<AppSettings> {
     return switch (value) {
       'fn' || 'fnKey' => '63',
       'rightOption' => '61',
+      'rightCommand' => '54',
+      'leftCommand' => '55',
       'f5' => '96',
       _ => value,
     };
@@ -103,20 +105,21 @@ class SettingsNotifier extends Notifier<AppSettings> {
     _prefs = await SharedPreferences.getInstance();
     state = AppSettings(
       apiKey: _prefs!.getString(_SettingsKeys.apiKey) ?? '',
-      apiBaseUrl: _prefs!.getString(_SettingsKeys.apiBaseUrl) ??
+      apiBaseUrl:
+          _prefs!.getString(_SettingsKeys.apiBaseUrl) ??
           'https://api.groq.com/openai/v1',
       selectedHotkey: _normalizeHotkey(
-          _prefs!.getString(_SettingsKeys.selectedHotkey) ?? '61'),
+        _prefs!.getString(_SettingsKeys.selectedHotkey) ?? '61',
+      ),
       selectedMicrophoneId:
           _prefs!.getString(_SettingsKeys.selectedMicrophoneId) ?? 'default',
       soundEnabled: _prefs!.getBool(_SettingsKeys.soundEnabled) ?? true,
-      customVocabulary:
-          _prefs!.getString(_SettingsKeys.customVocabulary) ?? '',
+      customVocabulary: _prefs!.getString(_SettingsKeys.customVocabulary) ?? '',
       transcriptionProvider:
           _prefs!.getString(_SettingsKeys.transcriptionProvider) ?? 'groq',
       transcriptionModel:
           _prefs!.getString(_SettingsKeys.transcriptionModel) ??
-              'whisper-large-v3-turbo',
+          'whisper-large-v3-turbo',
       minimumRecordingDurationMs:
           _prefs!.getDouble(_SettingsKeys.minimumRecordingDurationMs) ?? 300.0,
     );
@@ -130,15 +133,23 @@ class SettingsNotifier extends Notifier<AppSettings> {
       prefs.setString(_SettingsKeys.apiBaseUrl, state.apiBaseUrl),
       prefs.setString(_SettingsKeys.selectedHotkey, state.selectedHotkey),
       prefs.setString(
-          _SettingsKeys.selectedMicrophoneId, state.selectedMicrophoneId),
+        _SettingsKeys.selectedMicrophoneId,
+        state.selectedMicrophoneId,
+      ),
       prefs.setBool(_SettingsKeys.soundEnabled, state.soundEnabled),
       prefs.setString(_SettingsKeys.customVocabulary, state.customVocabulary),
       prefs.setString(
-          _SettingsKeys.transcriptionProvider, state.transcriptionProvider),
+        _SettingsKeys.transcriptionProvider,
+        state.transcriptionProvider,
+      ),
       prefs.setString(
-          _SettingsKeys.transcriptionModel, state.transcriptionModel),
-      prefs.setDouble(_SettingsKeys.minimumRecordingDurationMs,
-          state.minimumRecordingDurationMs),
+        _SettingsKeys.transcriptionModel,
+        state.transcriptionModel,
+      ),
+      prefs.setDouble(
+        _SettingsKeys.minimumRecordingDurationMs,
+        state.minimumRecordingDurationMs,
+      ),
     ]);
   }
 
@@ -159,7 +170,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
       _updateAndSync(state.copyWith(apiBaseUrl: value));
 
   Future<void> setSelectedHotkey(String value) =>
-      _updateAndSync(state.copyWith(selectedHotkey: value));
+      _updateAndSync(state.copyWith(selectedHotkey: _normalizeHotkey(value)));
 
   Future<void> setSelectedMicrophoneId(String value) =>
       _updateAndSync(state.copyWith(selectedMicrophoneId: value));

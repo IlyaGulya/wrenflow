@@ -9,13 +9,13 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:wrenflow/providers/history_provider.dart';
 import 'package:wrenflow/providers/settings_provider.dart';
 import 'package:wrenflow/providers/update_provider.dart';
+import 'package:wrenflow/services/app_version.dart';
 import 'package:wrenflow/services/update_service.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
 import 'package:wrenflow/theme/wrenflow_theme.dart';
 import 'package:wrenflow/widgets/green_toggle.dart';
 import 'package:wrenflow/widgets/hotkey_capture.dart';
 import 'package:wrenflow/widgets/settings_card.dart';
-
 
 /// Sidebar tab definition.
 enum SettingsTab {
@@ -96,7 +96,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               'assets/icon.png',
               width: 64,
               height: 64,
-              errorBuilder: (_, __, ___) => Icon(
+              errorBuilder: (context, error, stackTrace) => Icon(
                 CupertinoIcons.waveform,
                 size: 40,
                 color: WrenflowStyle.textOp60,
@@ -111,10 +111,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
           // Version
           Text(
-            'v1.0.0',
-            style: WrenflowStyle.mono(10).copyWith(
-              color: WrenflowStyle.textTertiary,
-            ),
+            'v${AppVersion.displayVersion}',
+            style: WrenflowStyle.mono(
+              10,
+            ).copyWith(color: WrenflowStyle.textTertiary),
           ),
           const SizedBox(height: 12),
 
@@ -126,8 +126,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const SizedBox(height: 8),
 
           // Tab buttons
-          for (final tab in SettingsTab.values)
-            _buildTabButton(tab),
+          for (final tab in SettingsTab.values) _buildTabButton(tab),
 
           const Spacer(),
         ],
@@ -152,7 +151,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             Icon(
               tab.icon,
               size: 11,
-              color: isSelected ? WrenflowStyle.text : WrenflowStyle.textTertiary,
+              color: isSelected
+                  ? WrenflowStyle.text
+                  : WrenflowStyle.textTertiary,
             ),
             const SizedBox(width: 6),
             Text(
@@ -190,11 +191,11 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
   void initState() {
     super.initState();
     final settings = ref.read(settingsProvider);
-    _vocabularyController =
-        TextEditingController(text: settings.customVocabulary);
+    _vocabularyController = TextEditingController(
+      text: settings.customVocabulary,
+    );
 
-    _deviceSubscription =
-        AudioDevicesListed.rustSignalStream.listen((signal) {
+    _deviceSubscription = AudioDevicesListed.rustSignalStream.listen((signal) {
       if (mounted) {
         setState(() {
           _audioDevices = signal.message.devices;
@@ -292,14 +293,13 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
         : 'System Default';
     final items = <_DropdownItem>[
       _DropdownItem('default', defaultLabel),
-      for (final device in _audioDevices)
-        _DropdownItem(device.id, device.name),
+      for (final device in _audioDevices) _DropdownItem(device.id, device.name),
     ];
 
     final effectiveId =
         items.any((i) => i.value == settings.selectedMicrophoneId)
-            ? settings.selectedMicrophoneId
-            : 'default';
+        ? settings.selectedMicrophoneId
+        : 'default';
 
     return Column(
       children: items.map((item) {
@@ -313,8 +313,7 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
             padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 10),
             margin: const EdgeInsets.only(bottom: 2),
             decoration: BoxDecoration(
-              color:
-                  isSelected ? WrenflowStyle.textOp05 : Colors.transparent,
+              color: isSelected ? WrenflowStyle.textOp05 : Colors.transparent,
               borderRadius: BorderRadius.circular(7),
             ),
             child: Row(
@@ -354,9 +353,9 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
             Text('Duration', style: WrenflowStyle.body(12)),
             Text(
               '${durationMs.round()} ms',
-              style: WrenflowStyle.mono(10).copyWith(
-                color: WrenflowStyle.textTertiary,
-              ),
+              style: WrenflowStyle.mono(
+                10,
+              ).copyWith(color: WrenflowStyle.textTertiary),
             ),
           ],
         ),
@@ -465,9 +464,9 @@ class _HistoryContentState extends ConsumerState<_HistoryContent> {
                   onTap: () => _confirmClearAll(context),
                   child: Text(
                     'Clear all',
-                    style: WrenflowStyle.body(12).copyWith(
-                      color: WrenflowStyle.textTertiary,
-                    ),
+                    style: WrenflowStyle.body(
+                      12,
+                    ).copyWith(color: WrenflowStyle.textTertiary),
                   ),
                 ),
             ],
@@ -480,15 +479,16 @@ class _HistoryContentState extends ConsumerState<_HistoryContent> {
               ? Center(
                   child: Text(
                     'No transcriptions yet',
-                    style: WrenflowStyle.body(13).copyWith(
-                      color: WrenflowStyle.textTertiary,
-                    ),
+                    style: WrenflowStyle.body(
+                      13,
+                    ).copyWith(color: WrenflowStyle.textTertiary),
                   ),
                 )
               : ListView.separated(
                   padding: const EdgeInsets.symmetric(horizontal: 24),
                   itemCount: entries.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 6),
+                  separatorBuilder: (context, index) =>
+                      const SizedBox(height: 6),
                   itemBuilder: (context, index) {
                     final entry = entries[index];
                     return _HistoryRow(
@@ -524,21 +524,16 @@ class _HistoryContentState extends ConsumerState<_HistoryContent> {
               ref.read(historyProvider.notifier).clearAll();
               ClearHistory().sendSignalToRust();
             },
-            child: Text('Clear',
-                style: TextStyle(color: WrenflowStyle.red)),
+            child: Text('Clear', style: TextStyle(color: WrenflowStyle.red)),
           ),
         ],
       ),
     );
   }
-
 }
 
 class _HistoryRow extends StatefulWidget {
-  const _HistoryRow({
-    required this.entry,
-    required this.onDelete,
-  });
+  const _HistoryRow({required this.entry, required this.onDelete});
 
   final HistoryEntryData entry;
   final VoidCallback onDelete;
@@ -587,8 +582,10 @@ class _HistoryRowState extends State<_HistoryRow> {
                     children: [
                       Row(
                         children: [
-                          Text('$dateStr $timeStr',
-                              style: WrenflowStyle.caption(11)),
+                          Text(
+                            '$dateStr $timeStr',
+                            style: WrenflowStyle.caption(11),
+                          ),
                           if (durationBadge != null) ...[
                             const SizedBox(width: 6),
                             _MetricBadge(durationBadge),
@@ -599,8 +596,7 @@ class _HistoryRowState extends State<_HistoryRow> {
                       Text(
                         entry.transcript,
                         maxLines: _expanded ? null : 2,
-                        overflow:
-                            _expanded ? null : TextOverflow.ellipsis,
+                        overflow: _expanded ? null : TextOverflow.ellipsis,
                         style: WrenflowStyle.body(13),
                       ),
                     ],
@@ -648,17 +644,17 @@ class _HistoryRowState extends State<_HistoryRow> {
                               width: 160,
                               child: Text(
                                 key,
-                                style: WrenflowStyle.mono(10).copyWith(
-                                  color: WrenflowStyle.textTertiary,
-                                ),
+                                style: WrenflowStyle.mono(
+                                  10,
+                                ).copyWith(color: WrenflowStyle.textTertiary),
                               ),
                             ),
                             Expanded(
                               child: Text(
                                 _formatMetricValue(metrics[key]),
-                                style: WrenflowStyle.mono(10).copyWith(
-                                  color: WrenflowStyle.textSecondary,
-                                ),
+                                style: WrenflowStyle.mono(
+                                  10,
+                                ).copyWith(color: WrenflowStyle.textSecondary),
                               ),
                             ),
                           ],
@@ -677,7 +673,8 @@ class _HistoryRowState extends State<_HistoryRow> {
   Map<String, dynamic> _parseMetrics(String json) {
     if (json.isEmpty || json == '{}') return {};
     try {
-      final decoded = (const JsonDecoder().convert(json)) as Map<String, dynamic>;
+      final decoded =
+          (const JsonDecoder().convert(json)) as Map<String, dynamic>;
       return decoded;
     } catch (_) {
       return {};
@@ -745,7 +742,7 @@ class _AboutContent extends ConsumerWidget {
               'assets/icon.png',
               width: 64,
               height: 64,
-              errorBuilder: (_, __, ___) => Icon(
+              errorBuilder: (context, error, stackTrace) => Icon(
                 CupertinoIcons.waveform,
                 size: 40,
                 color: WrenflowStyle.textOp60,
@@ -756,10 +753,10 @@ class _AboutContent extends ConsumerWidget {
           Text('Wrenflow', style: WrenflowStyle.title(16)),
           const SizedBox(height: 4),
           Text(
-            'v${GitHubUpdateSource.currentVersion}',
-            style: WrenflowStyle.mono(10).copyWith(
-              color: WrenflowStyle.textTertiary,
-            ),
+            'v${AppVersion.displayVersion}',
+            style: WrenflowStyle.mono(
+              10,
+            ).copyWith(color: WrenflowStyle.textTertiary),
           ),
           const SizedBox(height: 8),
           Text(
@@ -775,18 +772,21 @@ class _AboutContent extends ConsumerWidget {
               loading: () => Row(
                 children: [
                   SizedBox(
-                    width: 12, height: 12,
+                    width: 12,
+                    height: 12,
                     child: CircularProgressIndicator(
                       strokeWidth: 1.5,
                       color: WrenflowStyle.textTertiary,
                     ),
                   ),
                   const SizedBox(width: 8),
-                  Text('Checking for updates...',
-                      style: WrenflowStyle.body(12)),
+                  Text(
+                    'Checking for updates...',
+                    style: WrenflowStyle.body(12),
+                  ),
                 ],
               ),
-              error: (_, __) => _updateRow(
+              error: (error, stackTrace) => _updateRow(
                 'Could not check for updates',
                 actionLabel: 'Retry',
                 onAction: () => ref.read(updateProvider.notifier).checkNow(),
@@ -822,7 +822,10 @@ class _AboutContent extends ConsumerWidget {
   }
 
   Widget _updateAvailable(
-      BuildContext context, WidgetRef ref, UpdateInfo info) {
+    BuildContext context,
+    WidgetRef ref,
+    UpdateInfo info,
+  ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -855,7 +858,9 @@ class _AboutContent extends ConsumerWidget {
             ),
             child: Text(
               'Download Update',
-              style: WrenflowStyle.body(12).copyWith(color: WrenflowStyle.surface),
+              style: WrenflowStyle.body(
+                12,
+              ).copyWith(color: WrenflowStyle.surface),
             ),
           ),
         ),
@@ -863,8 +868,11 @@ class _AboutContent extends ConsumerWidget {
     );
   }
 
-  Widget _updateRow(String text,
-      {required String actionLabel, required VoidCallback onAction}) {
+  Widget _updateRow(
+    String text, {
+    required String actionLabel,
+    required VoidCallback onAction,
+  }) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
