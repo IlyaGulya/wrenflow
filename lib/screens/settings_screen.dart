@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rinf/rinf.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wrenflow/providers/history_provider.dart';
+import 'package:wrenflow/providers/launch_at_login_provider.dart';
 import 'package:wrenflow/providers/settings_provider.dart';
 import 'package:wrenflow/providers/update_provider.dart';
 import 'package:wrenflow/services/app_version.dart';
@@ -225,6 +226,7 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
+    final launchAtLogin = ref.watch(launchAtLoginProvider);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
@@ -242,6 +244,12 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
           SettingsCard(
             title: 'Microphone',
             child: _buildMicrophoneDropdown(settings),
+          ),
+          const SizedBox(height: 16),
+
+          SettingsCard(
+            title: 'Launch at login',
+            child: _buildLaunchAtLoginToggle(launchAtLogin),
           ),
           const SizedBox(height: 16),
 
@@ -380,6 +388,42 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildLaunchAtLoginToggle(LaunchAtLoginState launchAtLogin) {
+    return Opacity(
+      opacity: launchAtLogin.isLoading ? 0.55 : 1,
+      child: IgnorePointer(
+        ignoring: launchAtLogin.isLoading,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Open Wrenflow automatically',
+                    style: WrenflowStyle.body(12),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Launch the menu bar app when you sign in.',
+                    style: WrenflowStyle.caption(11),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            GreenToggle(
+              value: launchAtLogin.enabled,
+              onChanged: (value) =>
+                  ref.read(launchAtLoginProvider.notifier).setEnabled(value),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

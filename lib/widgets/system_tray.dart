@@ -8,6 +8,7 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'package:wrenflow/providers/app_lifecycle_provider.dart';
+import 'package:wrenflow/providers/launch_at_login_provider.dart';
 import 'package:wrenflow/providers/pipeline_state_provider.dart';
 import 'package:wrenflow/providers/settings_provider.dart';
 import 'package:wrenflow/screens/settings_screen.dart';
@@ -74,6 +75,11 @@ class SystemTrayManager with TrayListener {
       appLifecycleProvider,
       (previous, next) => _onLifecycleChanged(next),
     );
+
+    _ref.listen<LaunchAtLoginState>(launchAtLoginProvider, (previous, next) {
+      final lastState = _ref.read(pipelineStateProvider).value;
+      _updateContextMenu(lastState ?? const PipelineStateIdle());
+    });
   }
 
   // ── Lifecycle reactions ───────────────────────────────────
@@ -127,6 +133,7 @@ class SystemTrayManager with TrayListener {
     final statusText = _statusText(state);
     final settings = _ref.read(settingsProvider);
     final selectedMicId = settings.selectedMicrophoneId;
+    final launchAtLogin = _ref.read(launchAtLoginProvider);
 
     // Build microphone submenu.
     final defaultLabel = _defaultDeviceName.isNotEmpty
@@ -154,6 +161,14 @@ class SystemTrayManager with TrayListener {
           disabled: true,
         ),
         MenuItem(label: statusText, disabled: true),
+        MenuItem.separator(),
+        MenuItem.checkbox(
+          label: launchAtLogin.isLoading
+              ? 'Launch at Login...'
+              : 'Launch at Login',
+          checked: launchAtLogin.enabled,
+          onClick: (_) => _setLaunchAtLogin(!launchAtLogin.enabled),
+        ),
         MenuItem.separator(),
         MenuItem.submenu(
           label: 'Microphone',
@@ -189,6 +204,12 @@ class SystemTrayManager with TrayListener {
   void _selectMicrophone(String deviceId) {
     _ref.read(settingsProvider.notifier).setSelectedMicrophoneId(deviceId);
     // Refresh menu to update checkmarks.
+    final lastState = _ref.read(pipelineStateProvider).value;
+    _updateContextMenu(lastState ?? const PipelineStateIdle());
+  }
+
+  void _setLaunchAtLogin(bool enabled) {
+    _ref.read(launchAtLoginProvider.notifier).setEnabled(enabled);
     final lastState = _ref.read(pipelineStateProvider).value;
     _updateContextMenu(lastState ?? const PipelineStateIdle());
   }

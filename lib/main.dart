@@ -7,6 +7,7 @@ import 'package:rinf/rinf.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'providers/app_lifecycle_provider.dart';
+import 'providers/launch_at_login_provider.dart';
 import 'providers/overlay_controller.dart';
 import 'providers/settings_provider.dart';
 import 'screens/settings_screen.dart';
@@ -59,6 +60,7 @@ Future<void> _initializeApp(ProviderContainer container) async {
   final settingsNotifier = container.read(settingsProvider.notifier);
   await settingsNotifier.load();
   settingsNotifier.syncToRust();
+  await container.read(launchAtLoginProvider.notifier).refresh();
 
   // Initialize system tray after settings are ready, so menu state and
   // device selection start from persisted values.
