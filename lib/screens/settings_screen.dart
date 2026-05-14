@@ -5,11 +5,10 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:wrenflow/providers/audio_devices_provider.dart';
+import 'package:wrenflow/providers/general_settings_presentation_provider.dart';
 import 'package:wrenflow/providers/history_provider.dart';
 import 'package:wrenflow/providers/launch_at_login_provider.dart';
-import 'package:wrenflow/providers/local_models_provider.dart';
-import 'package:wrenflow/providers/local_model_status_provider.dart';
+import 'package:wrenflow/providers/models_settings_presentation_provider.dart';
 import 'package:wrenflow/providers/settings_provider.dart';
 import 'package:wrenflow/providers/update_provider.dart';
 import 'package:wrenflow/shell/main_window_presentation.dart';
@@ -241,8 +240,7 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
-    final launchAtLogin = ref.watch(launchAtLoginProvider);
-    final shellCapabilities = ref.watch(shellCapabilitiesProvider);
+    final presentation = ref.watch(generalSettingsPresentationProvider);
 
     _hydrateVocabulary(settings);
 
@@ -254,21 +252,21 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
           // Hotkey card
           SettingsCard(
             title: 'Push-to-talk key',
-            child: _buildHotkeyOptions(settings),
+            child: _buildHotkeyOptions(presentation),
           ),
           const SizedBox(height: 16),
 
           // Microphone card
           SettingsCard(
             title: 'Microphone',
-            child: _buildMicrophoneDropdown(settings),
+            child: _buildMicrophoneDropdown(presentation),
           ),
           const SizedBox(height: 16),
 
-          if (shellCapabilities.launchAtLogin) ...[
+          if (presentation.showLaunchAtLogin) ...[
             SettingsCard(
               title: 'Launch at login',
-              child: _buildLaunchAtLoginToggle(launchAtLogin),
+              child: _buildLaunchAtLoginToggle(presentation),
             ),
             const SizedBox(height: 16),
           ],
@@ -281,7 +279,7 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
               children: [
                 Text('Play sounds', style: WrenflowStyle.body(12)),
                 GreenToggle(
-                  value: settings.soundEnabled,
+                  value: presentation.soundEnabled,
                   onChanged: (v) =>
                       ref.read(settingsProvider.notifier).setSoundEnabled(v),
                 ),
@@ -293,7 +291,7 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
           // Min duration card
           SettingsCard(
             title: 'Minimum recording duration',
-            child: _buildDurationSlider(settings),
+            child: _buildDurationSlider(presentation),
           ),
           const SizedBox(height: 16),
 
@@ -307,56 +305,39 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
     );
   }
 
-  Widget _buildHotkeyOptions(AppSettings settings) {
+  Widget _buildHotkeyOptions(GeneralSettingsPresentation presentation) {
     return HotkeyCapture(
-      currentValue: settings.selectedHotkey,
+      currentValue: presentation.selectedHotkey,
       onKeySelected: (value) =>
           ref.read(settingsProvider.notifier).setSelectedHotkey(value),
     );
   }
 
-  Widget _buildMicrophoneDropdown(AppSettings settings) {
-    final audioSnapshot = ref.watch(audioDevicesSnapshotProvider).value;
-    final defaultDeviceName = audioSnapshot?.defaultDeviceName ?? '';
-    final devices = audioSnapshot?.devices ?? const <AudioDeviceInfo>[];
-    final effectiveSelectedId =
-        audioSnapshot?.effectiveSelectedDeviceId ??
-        settings.selectedMicrophoneId;
-    final defaultLabel = defaultDeviceName.isNotEmpty
-        ? 'System Default ($defaultDeviceName)'
-        : 'System Default';
-    final items = <_DropdownItem>[
-      _DropdownItem('default', defaultLabel),
-      for (final device in devices) _DropdownItem(device.id, device.name),
-    ];
-
-    final effectiveId = items.any((i) => i.value == effectiveSelectedId)
-        ? effectiveSelectedId
-        : 'default';
-
+  Widget _buildMicrophoneDropdown(GeneralSettingsPresentation presentation) {
     return Column(
-      children: items.map((item) {
-        final isSelected = effectiveId == item.value;
+      children: presentation.microphones.map((item) {
         return GestureDetector(
           onTap: () => ref
               .read(settingsProvider.notifier)
-              .setSelectedMicrophoneId(item.value),
+              .setSelectedMicrophoneId(item.id),
           child: Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 10),
             margin: const EdgeInsets.only(bottom: 2),
             decoration: BoxDecoration(
-              color: isSelected ? WrenflowStyle.textOp05 : Colors.transparent,
+              color: item.selected
+                  ? WrenflowStyle.textOp05
+                  : Colors.transparent,
               borderRadius: BorderRadius.circular(7),
             ),
             child: Row(
               children: [
                 Icon(
-                  isSelected
+                  item.selected
                       ? CupertinoIcons.checkmark_circle_fill
                       : CupertinoIcons.circle,
                   size: 13,
-                  color: isSelected
+                  color: item.selected
                       ? WrenflowStyle.text
                       : WrenflowStyle.textTertiary,
                 ),
@@ -376,8 +357,8 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
     );
   }
 
-  Widget _buildDurationSlider(AppSettings settings) {
-    final durationMs = settings.minimumRecordingDurationMs;
+  Widget _buildDurationSlider(GeneralSettingsPresentation presentation) {
+    final durationMs = presentation.minimumRecordingDurationMs;
     return Column(
       children: [
         Row(
@@ -416,11 +397,11 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
     );
   }
 
-  Widget _buildLaunchAtLoginToggle(LaunchAtLoginState launchAtLogin) {
+  Widget _buildLaunchAtLoginToggle(GeneralSettingsPresentation presentation) {
     return Opacity(
-      opacity: launchAtLogin.isLoading ? 0.55 : 1,
+      opacity: presentation.launchAtLoginLoading ? 0.55 : 1,
       child: IgnorePointer(
-        ignoring: launchAtLogin.isLoading,
+        ignoring: presentation.launchAtLoginLoading,
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
@@ -442,7 +423,7 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
             ),
             const SizedBox(width: 12),
             GreenToggle(
-              value: launchAtLogin.enabled,
+              value: presentation.launchAtLoginEnabled,
               onChanged: (value) =>
                   ref.read(launchAtLoginProvider.notifier).setEnabled(value),
             ),
@@ -521,28 +502,18 @@ class _ModelsSummaryCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final modelStatus = ref.watch(localModelsStatusProvider);
-    final models = ref.watch(localModelsProvider);
-    final selectedModel = ref.watch(selectedLocalModelProvider);
-    final activeModelId = modelStatus?.activeModelId;
-    final activeModel = activeModelId == null
-        ? null
-        : models.where((model) => model.id == activeModelId).isEmpty
-        ? null
-        : models.firstWhere((model) => model.id == activeModelId);
-    final installedCount = modelStatus?.installedModelIds.length ?? 0;
-    final preferredLabel = selectedModel?.displayName ?? 'Loading...';
+    final presentation = ref.watch(modelsSettingsPresentationProvider);
 
     return SettingsCard(
       title: 'Model status',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _summaryRow('Preferred', preferredLabel),
+          _summaryRow('Preferred', presentation.preferredModelLabel),
           const SizedBox(height: 8),
-          _summaryRow('Active', activeModel?.displayName ?? 'None'),
+          _summaryRow('Active', presentation.activeModelLabel),
           const SizedBox(height: 8),
-          _summaryRow('Installed', '$installedCount'),
+          _summaryRow('Installed', presentation.installedCountLabel),
           const SizedBox(height: 10),
           Text(
             'Changing the selection only updates your preferred model. Downloading and activating stay fully manual.',
@@ -574,12 +545,6 @@ class _ModelsSummaryCard extends ConsumerWidget {
       ],
     );
   }
-}
-
-class _DropdownItem {
-  const _DropdownItem(this.value, this.label);
-  final String value;
-  final String label;
 }
 
 // ── History tab content ───────────────────────────────────────
