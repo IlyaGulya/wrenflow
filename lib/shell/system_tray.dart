@@ -11,10 +11,10 @@ import '../providers/audio_devices_provider.dart';
 import '../providers/launch_at_login_provider.dart';
 import '../providers/pipeline_state_provider.dart';
 import '../providers/settings_provider.dart';
-import '../screens/settings_screen.dart';
 import '../services/app_version.dart';
 import '../src/bindings/signals/signals.dart';
 import '../state/app_lifecycle_state.dart';
+import 'main_window_presentation.dart';
 
 /// Manages the macOS system tray (menu bar) icon and context menu.
 class SystemTrayManager with TrayListener {
@@ -86,7 +86,7 @@ class SystemTrayManager with TrayListener {
 
   void _onLifecycleChanged(AppLifecycleState next) {
     if (next is! Running) {
-      _ref.read(activeScreenProvider.notifier).close();
+      _ref.read(mainWindowNavigationProvider.notifier).close();
     }
     if (next is ShuttingDown) {
       _quit();
@@ -212,16 +212,18 @@ class SystemTrayManager with TrayListener {
 
   void _showSettings() {
     if (_ref.read(appLifecycleProvider) is! Running) return;
-    _ref.read(settingsInitialTabProvider.notifier).set(SettingsTab.general);
-    _ref.read(activeScreenProvider.notifier).show(ActiveScreen.settings);
+    _ref
+        .read(mainWindowNavigationProvider.notifier)
+        .showSettings(SettingsTab.general);
     windowManager.show();
     windowManager.focus();
   }
 
   void _showHistory() {
     if (_ref.read(appLifecycleProvider) is! Running) return;
-    _ref.read(settingsInitialTabProvider.notifier).set(SettingsTab.history);
-    _ref.read(activeScreenProvider.notifier).show(ActiveScreen.settings);
+    _ref
+        .read(mainWindowNavigationProvider.notifier)
+        .showSettings(SettingsTab.history);
     windowManager.show();
     windowManager.focus();
   }

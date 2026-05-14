@@ -5,6 +5,7 @@ import 'package:macos_window_utils/macos_window_utils.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../providers/app_lifecycle_provider.dart';
+import 'main_window_presentation.dart';
 
 const _appPolicyChannel = MethodChannel('dev.gulya.wrenflow/app_policy');
 
@@ -45,7 +46,10 @@ class _WindowSynchronizerState extends ConsumerState<WindowSynchronizer>
 
   @override
   Widget build(BuildContext context) {
-    ref.listen<MainWindowConfig>(mainWindowConfigProvider, (prev, next) {
+    ref.listen<MainWindowPresentation>(mainWindowPresentationProvider, (
+      prev,
+      next,
+    ) {
       _syncWindow();
     });
 
@@ -53,11 +57,13 @@ class _WindowSynchronizerState extends ConsumerState<WindowSynchronizer>
   }
 
   Future<void> _syncWindow() async {
-    final config = ref.read(mainWindowConfigProvider);
+    final presentation = ref.read(mainWindowPresentationProvider);
 
-    if (config.visible && !_isWindowVisible && _hasRenderedFirstFrame) {
+    if (presentation.visible && !_isWindowVisible && _hasRenderedFirstFrame) {
       await _setShowInDock(true);
-      await windowManager.setSize(Size(config.width, config.height));
+      await windowManager.setSize(
+        Size(presentation.width, presentation.height),
+      );
       await windowManager.setMinimumSize(const Size(300, 340));
       await windowManager.setSkipTaskbar(false);
       await windowManager.center();
@@ -65,18 +71,20 @@ class _WindowSynchronizerState extends ConsumerState<WindowSynchronizer>
       await windowManager.focus();
       WindowManipulator.setWindowAlphaValue(1.0);
       _isWindowVisible = true;
-    } else if (config.visible && _isWindowVisible) {
-      await windowManager.setSize(Size(config.width, config.height));
+    } else if (presentation.visible && _isWindowVisible) {
+      await windowManager.setSize(
+        Size(presentation.width, presentation.height),
+      );
       await windowManager.center();
       await windowManager.focus();
-    } else if (!config.visible && _isWindowVisible) {
+    } else if (!presentation.visible && _isWindowVisible) {
       WindowManipulator.setWindowAlphaValue(0.0);
       await windowManager.hide();
       await windowManager.setSkipTaskbar(true);
       await _setShowInDock(false);
       _isWindowVisible = false;
-    } else if (!config.visible && !_isWindowVisible) {
-      await windowManager.setSkipTaskbar(config.skipTaskbar);
+    } else if (!presentation.visible && !_isWindowVisible) {
+      await windowManager.setSkipTaskbar(presentation.skipTaskbar);
     }
   }
 
@@ -90,9 +98,9 @@ class _WindowSynchronizerState extends ConsumerState<WindowSynchronizer>
 
   @override
   void onWindowClose() {
-    final screen = ref.read(activeScreenProvider);
-    if (screen != ActiveScreen.none) {
-      ref.read(activeScreenProvider.notifier).close();
+    final navigation = ref.read(mainWindowNavigationProvider);
+    if (navigation.showsSettings) {
+      ref.read(mainWindowNavigationProvider.notifier).close();
     } else {
       ref.read(appLifecycleProvider.notifier).quit();
     }

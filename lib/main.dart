@@ -6,10 +6,10 @@ import 'package:macos_window_utils/macos_window_utils.dart';
 import 'package:rinf/rinf.dart';
 import 'package:window_manager/window_manager.dart';
 
-import 'providers/app_lifecycle_provider.dart';
 import 'providers/launch_at_login_provider.dart';
 import 'providers/settings_provider.dart';
 import 'screens/settings_screen.dart';
+import 'shell/main_window_presentation.dart';
 import 'shell/overlay_controller.dart';
 import 'shell/system_tray.dart';
 import 'shell/window_synchronizer.dart';
@@ -78,24 +78,24 @@ class _AppHome extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final lifecycle = ref.watch(appLifecycleProvider);
-    final activeScreen = ref.watch(activeScreenProvider);
+    final presentation = ref.watch(mainWindowPresentationProvider);
 
-    return switch (lifecycle) {
-      Initializing() => const Scaffold(backgroundColor: WrenflowStyle.surface),
-      Onboarding() => const SetupWizardScreen(mode: WizardMode.onboarding),
-      PermissionRecovery() => const SetupWizardScreen(
+    return switch (presentation.content) {
+      MainWindowContent.splash => const Scaffold(
+        backgroundColor: WrenflowStyle.surface,
+      ),
+      MainWindowContent.onboarding => const SetupWizardScreen(
+        mode: WizardMode.onboarding,
+      ),
+      MainWindowContent.permissionRecovery => const SetupWizardScreen(
         mode: WizardMode.recovery,
       ),
-      Running() => switch (activeScreen) {
-        ActiveScreen.settings => SettingsScreen(
-          initialTab: ref.watch(settingsInitialTabProvider),
-        ),
-        ActiveScreen.none => const Scaffold(
-          backgroundColor: WrenflowStyle.surface,
-        ),
-      },
-      ShuttingDown() => const Scaffold(backgroundColor: WrenflowStyle.surface),
+      MainWindowContent.settings => SettingsScreen(
+        initialTab: presentation.settingsTab,
+      ),
+      MainWindowContent.blank => const Scaffold(
+        backgroundColor: WrenflowStyle.surface,
+      ),
     };
   }
 }

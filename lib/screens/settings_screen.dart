@@ -12,6 +12,7 @@ import 'package:wrenflow/providers/local_models_provider.dart';
 import 'package:wrenflow/providers/local_model_status_provider.dart';
 import 'package:wrenflow/providers/settings_provider.dart';
 import 'package:wrenflow/providers/update_provider.dart';
+import 'package:wrenflow/shell/main_window_presentation.dart';
 import 'package:wrenflow/shell/shell_capabilities.dart';
 import 'package:wrenflow/services/app_version.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
@@ -22,16 +23,20 @@ import 'package:wrenflow/widgets/local_model_picker.dart';
 import 'package:wrenflow/widgets/model_download_widget.dart';
 import 'package:wrenflow/widgets/settings_card.dart';
 
-/// Sidebar tab definition.
-enum SettingsTab {
-  general(CupertinoIcons.gear, 'General'),
-  models(CupertinoIcons.cube_box, 'Models'),
-  history(CupertinoIcons.clock, 'History'),
-  about(CupertinoIcons.info, 'About');
+extension on SettingsTab {
+  IconData get icon => switch (this) {
+    SettingsTab.general => CupertinoIcons.gear,
+    SettingsTab.models => CupertinoIcons.cube_box,
+    SettingsTab.history => CupertinoIcons.clock,
+    SettingsTab.about => CupertinoIcons.info,
+  };
 
-  const SettingsTab(this.icon, this.label);
-  final IconData icon;
-  final String label;
+  String get label => switch (this) {
+    SettingsTab.general => 'General',
+    SettingsTab.models => 'Models',
+    SettingsTab.history => 'History',
+    SettingsTab.about => 'About',
+  };
 }
 
 /// Settings screen — 720×520, sidebar + content layout.
