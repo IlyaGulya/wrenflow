@@ -1,16 +1,11 @@
-//! Local Parakeet TDT transcription via parakeet-rs (ONNX Runtime).
-//!
-//! Uses `ParakeetTDT` from parakeet-rs which loads from a directory containing:
-//! - encoder-model.int8.onnx (or encoder-model.onnx)
-//! - decoder_joint-model.int8.onnx (or decoder_joint-model.onnx)
-//! - vocab.txt
-//! - nemo128.onnx
+//! Local transcription engine dispatching to the selected ONNX runtime.
 
+use crate::transcription_whisper::WhisperTranscriptionEngine;
 use parakeet_rs::Transcriber;
 use std::path::Path;
 use thiserror::Error;
+use wrenflow_domain::model_management::{ModelInfo, ModelRuntime};
 
-// Re-export the domain ModelState type
 pub use wrenflow_domain::transcription::local::ModelState;
 
 #[derive(Debug, Error)]
@@ -23,17 +18,27 @@ pub enum LocalTranscriptionError {
     AudioTooShort,
 }
 
-/// Local transcription engine using parakeet-rs ParakeetTDT.
+enum LocalBackend {
+    Parakeet(parakeet_rs::ParakeetTDT),
+    Whisper(WhisperTranscriptionEngine),
+}
+
 pub struct LocalTranscriptionEngine {
+    model_id: String,
+    model_display_name: String,
+    runtime: ModelRuntime,
     state: ModelState,
-    model: Option<parakeet_rs::ParakeetTDT>,
+    backend: Option<LocalBackend>,
 }
 
 impl LocalTranscriptionEngine {
-    pub fn new() -> Self {
+    pub fn new(model: &ModelInfo) -> Self {
         Self {
+            model_id: model.id.clone(),
+            model_display_name: model.name.clone(),
+            runtime: model.runtime,
             state: ModelState::NotLoaded,
-            model: None,
+            backend: None,
         }
     }
 
@@ -41,7 +46,14 @@ impl LocalTranscriptionEngine {
         &self.state
     }
 
-    /// Initialize: load TDT model from directory.
+    pub fn model_id(&self) -> &str {
+        &self.model_id
+    }
+
+    pub fn model_display_name(&self) -> &str {
+        &self.model_display_name
+    }
+
     pub fn initialize(
         &mut self,
         model_dir: &Path,
@@ -56,72 +68,82 @@ impl LocalTranscriptionEngine {
             cb(&self.state);
         }
 
-        match parakeet_rs::ParakeetTDT::from_pretrained(model_dir, None) {
-            Ok(model) => {
-                self.model = Some(model);
-                self.state = ModelState::Ready;
-                if let Some(cb) = on_state_change {
-                    cb(&self.state);
-                }
-                log::info!("ParakeetTDT model loaded from {:?}", model_dir);
-                Ok(())
+        let backend = match self.runtime {
+            ModelRuntime::ParakeetOnnx => {
+                let model = parakeet_rs::ParakeetTDT::from_pretrained(model_dir, None)
+                    .map_err(|e| LocalTranscriptionError::TranscriptionFailed(e.to_string()))?;
+                LocalBackend::Parakeet(model)
             }
-            Err(e) => {
-                let msg = format!("Failed to load model: {e}");
-                self.state = ModelState::Error(msg.clone());
-                if let Some(cb) = on_state_change {
-                    cb(&self.state);
-                }
-                Err(LocalTranscriptionError::TranscriptionFailed(msg))
+            ModelRuntime::WhisperOnnx => {
+                let engine = WhisperTranscriptionEngine::from_model_dir(model_dir)
+                    .map_err(|e| LocalTranscriptionError::TranscriptionFailed(e.to_string()))?;
+                LocalBackend::Whisper(engine)
             }
+        };
+
+        self.backend = Some(backend);
+        self.state = ModelState::Ready;
+        if let Some(cb) = on_state_change {
+            cb(&self.state);
         }
-    }
-
-    /// Run dummy inference to force ONNX Runtime graph compilation.
-    /// Call after `initialize()` and before real transcription to eliminate
-    /// cold-start latency on the first real request.
-    pub fn prewarm(&mut self) -> Result<(), LocalTranscriptionError> {
-        let model = self.model.as_mut()
-            .ok_or(LocalTranscriptionError::ModelNotLoaded)?;
-
-        let start = std::time::Instant::now();
-        let silence = vec![0.0f32; 16000]; // 1 second of silence
-        let _ = model.transcribe_samples(silence, 16000, 1, None);
-        log::info!("ParakeetTDT prewarmed in {:?}", start.elapsed());
+        log::info!("Local model loaded from {:?}", model_dir);
         Ok(())
     }
 
-    /// Transcribe 16kHz mono f32 audio samples to text.
-    pub fn transcribe(&mut self, samples: &[f32]) -> Result<String, LocalTranscriptionError> {
-        let model = self.model.as_mut()
-            .ok_or(LocalTranscriptionError::ModelNotLoaded)?;
+    pub fn prewarm(&mut self) -> Result<(), LocalTranscriptionError> {
+        let start = std::time::Instant::now();
+        match self
+            .backend
+            .as_mut()
+            .ok_or(LocalTranscriptionError::ModelNotLoaded)?
+        {
+            LocalBackend::Parakeet(model) => {
+                let silence = vec![0.0f32; 16_000];
+                let _ = model.transcribe_samples(silence, 16_000, 1, None);
+            }
+            LocalBackend::Whisper(engine) => {
+                engine
+                    .prewarm()
+                    .map_err(|e| LocalTranscriptionError::TranscriptionFailed(e.to_string()))?;
+            }
+        }
+        log::info!("Local model prewarmed in {:?}", start.elapsed());
+        Ok(())
+    }
 
-        if samples.len() < 16000 {
+    pub fn transcribe(&mut self, samples: &[f32]) -> Result<String, LocalTranscriptionError> {
+        if samples.len() < 16_000 {
             return Err(LocalTranscriptionError::AudioTooShort);
         }
 
-        let result = model
-            .transcribe_samples(samples.to_vec(), 16000, 1, None)
-            .map_err(|e| LocalTranscriptionError::TranscriptionFailed(e.to_string()))?;
-
-        Ok(result.text)
+        match self
+            .backend
+            .as_mut()
+            .ok_or(LocalTranscriptionError::ModelNotLoaded)?
+        {
+            LocalBackend::Parakeet(model) => model
+                .transcribe_samples(samples.to_vec(), 16_000, 1, None)
+                .map(|result| result.text)
+                .map_err(|e| LocalTranscriptionError::TranscriptionFailed(e.to_string())),
+            LocalBackend::Whisper(engine) => engine
+                .transcribe(samples)
+                .map_err(|e| LocalTranscriptionError::TranscriptionFailed(e.to_string())),
+        }
     }
 
-    /// Transcribe from a WAV file path.
     pub fn transcribe_file(&mut self, path: &Path) -> Result<String, LocalTranscriptionError> {
-        let model = self.model.as_mut()
-            .ok_or(LocalTranscriptionError::ModelNotLoaded)?;
-
-        let result = model
-            .transcribe_file(path, None)
-            .map_err(|e| LocalTranscriptionError::TranscriptionFailed(e.to_string()))?;
-
-        Ok(result.text)
-    }
-}
-
-impl Default for LocalTranscriptionEngine {
-    fn default() -> Self {
-        Self::new()
+        match self
+            .backend
+            .as_mut()
+            .ok_or(LocalTranscriptionError::ModelNotLoaded)?
+        {
+            LocalBackend::Parakeet(model) => model
+                .transcribe_file(path, None)
+                .map(|result| result.text)
+                .map_err(|e| LocalTranscriptionError::TranscriptionFailed(e.to_string())),
+            LocalBackend::Whisper(_) => Err(LocalTranscriptionError::TranscriptionFailed(
+                "Whisper file transcription path is not used in Wrenflow".to_string(),
+            )),
+        }
     }
 }

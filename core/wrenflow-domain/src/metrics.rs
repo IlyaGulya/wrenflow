@@ -45,19 +45,23 @@ impl PipelineMetrics {
 
     // Setters
     pub fn set_double(&mut self, key: &str, value: f64) {
-        self.storage.insert(key.to_string(), MetricValue::Double(value));
+        self.storage
+            .insert(key.to_string(), MetricValue::Double(value));
     }
 
     pub fn set_int(&mut self, key: &str, value: i64) {
-        self.storage.insert(key.to_string(), MetricValue::Int(value));
+        self.storage
+            .insert(key.to_string(), MetricValue::Int(value));
     }
 
     pub fn set_string(&mut self, key: &str, value: String) {
-        self.storage.insert(key.to_string(), MetricValue::String(value));
+        self.storage
+            .insert(key.to_string(), MetricValue::String(value));
     }
 
     pub fn set_bool(&mut self, key: &str, value: bool) {
-        self.storage.insert(key.to_string(), MetricValue::Bool(value));
+        self.storage
+            .insert(key.to_string(), MetricValue::Bool(value));
     }
 
     // Getters
@@ -102,8 +106,7 @@ impl PipelineMetrics {
     }
 
     pub fn from_json(json: &str) -> Self {
-        let storage: BTreeMap<String, MetricValue> =
-            serde_json::from_str(json).unwrap_or_default();
+        let storage: BTreeMap<String, MetricValue> = serde_json::from_str(json).unwrap_or_default();
         Self { storage }
     }
 }

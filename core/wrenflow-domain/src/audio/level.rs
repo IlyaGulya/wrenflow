@@ -110,7 +110,10 @@ mod tests {
         let loud = vec![0.1f32; 1000]; // rms=0.1, scaled=1.0
         let after_loud = lv.process(&loud);
         // After one frame: 0.0 * 0.3 + 1.0 * 0.7 = 0.7
-        assert!((after_loud - 0.7).abs() < 0.001, "rise: expected 0.7, got {after_loud}");
+        assert!(
+            (after_loud - 0.7).abs() < 0.001,
+            "rise: expected 0.7, got {after_loud}"
+        );
 
         // Silence: scaled = 0.0 -> falls slowly
         let silence = vec![0.0f32; 1000];

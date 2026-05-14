@@ -3,9 +3,9 @@
 //! `ConfigStore` handles load/save from disk.
 //! `AppConfig` type itself lives in `wrenflow_domain::config`.
 
-use wrenflow_domain::config::AppConfig;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+use wrenflow_domain::config::AppConfig;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {

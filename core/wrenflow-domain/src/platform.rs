@@ -46,7 +46,10 @@ impl PermissionState {
     }
 
     pub fn is_blocking(self) -> bool {
-        matches!(self, Self::Unknown | Self::NotGranted | Self::Requesting | Self::Denied)
+        matches!(
+            self,
+            Self::Unknown | Self::NotGranted | Self::Requesting | Self::Denied
+        )
     }
 }
 
@@ -117,34 +120,51 @@ pub trait PlatformHost: Send + Sync + 'static {
 
     // -- Launch at Login --
 
-    fn get_launch_at_login(&self) -> bool { false }
+    fn get_launch_at_login(&self) -> bool {
+        false
+    }
     fn set_launch_at_login(&self, _enabled: bool) {}
-    fn launch_at_login_requires_approval(&self) -> bool { false }
+    fn launch_at_login_requires_approval(&self) -> bool {
+        false
+    }
     fn open_launch_at_login_settings(&self) {}
 
     // -- Updates --
 
-    fn get_auto_check_updates(&self) -> bool { true }
+    fn get_auto_check_updates(&self) -> bool {
+        true
+    }
     fn set_auto_check_updates(&self, _enabled: bool) {}
     fn check_for_updates(&self) {}
-    fn get_update_status(&self) -> UpdateStatus { UpdateStatus::Idle }
+    fn get_update_status(&self) -> UpdateStatus {
+        UpdateStatus::Idle
+    }
     fn download_and_install_update(&self) {}
     fn cancel_update_download(&self) {}
 
     // -- Local Transcription Model --
 
-    fn get_local_model_state(&self) -> LocalModelState { LocalModelState::NotLoaded }
+    fn get_local_model_state(&self) -> LocalModelState {
+        LocalModelState::NotLoaded
+    }
     fn load_local_model(&self) {}
     fn retry_local_model(&self) {}
 
     // -- Microphone --
 
-    fn list_microphones(&self) -> Vec<AudioDevice> { vec![] }
+    fn list_microphones(&self) -> Vec<AudioDevice> {
+        vec![]
+    }
     fn refresh_microphones(&self) {}
 
     // -- CLI Tool --
 
-    fn get_cli_status(&self) -> CliToolStatus { CliToolStatus { installed: false, path: None } }
+    fn get_cli_status(&self) -> CliToolStatus {
+        CliToolStatus {
+            installed: false,
+            path: None,
+        }
+    }
     fn install_cli(&self) {}
 }
 

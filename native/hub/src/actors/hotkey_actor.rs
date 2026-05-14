@@ -3,8 +3,8 @@
 //! Target keycode can be changed at runtime via `set_keycode()`.
 
 use raw_input::{Core, Event, Listen};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Instant;
 use tokio::sync::mpsc;
 

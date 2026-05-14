@@ -8,6 +8,7 @@ class _SettingsKeys {
   static const apiBaseUrl = 'settings_api_base_url';
   static const selectedHotkey = 'settings_selected_hotkey';
   static const selectedMicrophoneId = 'settings_selected_microphone_id';
+  static const selectedLocalModelId = 'settings_selected_local_model_id';
   static const soundEnabled = 'settings_sound_enabled';
   static const customVocabulary = 'settings_custom_vocabulary';
   static const transcriptionProvider = 'settings_transcription_provider';
@@ -19,6 +20,7 @@ class _SettingsKeys {
 /// App settings state, mirrors the fields in UpdateConfig signal.
 class AppSettings {
   const AppSettings({
+    this.selectedLocalModelId = 'parakeet-tdt-0.6b-v3-onnx',
     this.apiKey = '',
     this.apiBaseUrl = 'https://api.groq.com/openai/v1',
     this.selectedHotkey = '61',
@@ -30,6 +32,10 @@ class AppSettings {
     this.minimumRecordingDurationMs = 300.0,
   });
 
+  final String selectedLocalModelId;
+
+  /// Legacy cloud-era config. Keep only for migration compatibility until
+  /// remote provider support is intentionally redesigned.
   final String apiKey;
   final String apiBaseUrl;
   final String selectedHotkey;
@@ -41,6 +47,7 @@ class AppSettings {
   final double minimumRecordingDurationMs;
 
   AppSettings copyWith({
+    String? selectedLocalModelId,
     String? apiKey,
     String? apiBaseUrl,
     String? selectedHotkey,
@@ -52,6 +59,7 @@ class AppSettings {
     double? minimumRecordingDurationMs,
   }) {
     return AppSettings(
+      selectedLocalModelId: selectedLocalModelId ?? this.selectedLocalModelId,
       apiKey: apiKey ?? this.apiKey,
       apiBaseUrl: apiBaseUrl ?? this.apiBaseUrl,
       selectedHotkey: selectedHotkey ?? this.selectedHotkey,
@@ -104,6 +112,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
   Future<void> load() async {
     _prefs = await SharedPreferences.getInstance();
     state = AppSettings(
+      selectedLocalModelId:
+          _prefs!.getString(_SettingsKeys.selectedLocalModelId) ??
+          'parakeet-tdt-0.6b-v3-onnx',
       apiKey: _prefs!.getString(_SettingsKeys.apiKey) ?? '',
       apiBaseUrl:
           _prefs!.getString(_SettingsKeys.apiBaseUrl) ??
@@ -129,6 +140,10 @@ class SettingsNotifier extends Notifier<AppSettings> {
     final prefs = _prefs ?? await SharedPreferences.getInstance();
     _prefs = prefs;
     await Future.wait([
+      prefs.setString(
+        _SettingsKeys.selectedLocalModelId,
+        state.selectedLocalModelId,
+      ),
       prefs.setString(_SettingsKeys.apiKey, state.apiKey),
       prefs.setString(_SettingsKeys.apiBaseUrl, state.apiBaseUrl),
       prefs.setString(_SettingsKeys.selectedHotkey, state.selectedHotkey),
@@ -154,6 +169,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
   }
 
   void _syncToRust() {
+    SelectLocalModel(modelId: state.selectedLocalModelId).sendSignalToRust();
     state.toUpdateConfig().sendSignalToRust();
   }
 
@@ -168,6 +184,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
 
   Future<void> setApiBaseUrl(String value) =>
       _updateAndSync(state.copyWith(apiBaseUrl: value));
+
+  Future<void> setSelectedLocalModelId(String value) =>
+      _updateAndSync(state.copyWith(selectedLocalModelId: value));
 
   Future<void> setSelectedHotkey(String value) =>
       _updateAndSync(state.copyWith(selectedHotkey: _normalizeHotkey(value)));

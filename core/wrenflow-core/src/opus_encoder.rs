@@ -120,16 +120,14 @@ mod tests {
         encode_ogg_opus(&mut buf, &samples).unwrap();
         assert!(buf.len() > 0);
         assert!(buf.len() < 16000 * 2); // Should be much smaller than WAV
-        // Check OGG magic
+                                        // Check OGG magic
         assert_eq!(&buf[..4], b"OggS");
     }
 
     #[test]
     fn smaller_than_wav() {
         // 3 seconds of 16kHz mono
-        let samples: Vec<f32> = (0..48000)
-            .map(|i| (i as f32 * 0.01).sin() * 0.5)
-            .collect();
+        let samples: Vec<f32> = (0..48000).map(|i| (i as f32 * 0.01).sin() * 0.5).collect();
         let mut opus_buf = Vec::new();
         encode_ogg_opus(&mut opus_buf, &samples).unwrap();
         let wav_size = 44 + samples.len() * 2; // WAV header + 16-bit PCM

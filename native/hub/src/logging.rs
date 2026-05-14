@@ -83,9 +83,7 @@ pub fn install_panic_hook() {
             .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
             .unwrap_or_else(|| "unknown location".to_string());
 
-        let log_msg = format!(
-            "RUST PANIC on thread '{thread_name}' at {location}: {message}"
-        );
+        let log_msg = format!("RUST PANIC on thread '{thread_name}' at {location}: {message}");
 
         // Print to stderr (captured by flutter run if eprintln works)
         eprintln!("!!! {log_msg}");

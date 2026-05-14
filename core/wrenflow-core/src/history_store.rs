@@ -1,9 +1,9 @@
 //! Pipeline history — SQLite storage for run history.
 
-use wrenflow_domain::history::HistoryEntry;
 use rusqlite::{params, Connection, Result as SqlResult};
 use std::path::Path;
 use thiserror::Error;
+use wrenflow_domain::history::HistoryEntry;
 
 #[derive(Debug, Error)]
 pub enum HistoryError {
@@ -44,7 +44,7 @@ impl HistoryStore {
                 custom_vocabulary TEXT NOT NULL DEFAULT '',
                 audio_file_name TEXT,
                 metrics_json TEXT NOT NULL DEFAULT '{}'
-            )"
+            )",
         )?;
         // Migrate from old Swift schema: raw_transcript → transcript
         self.migrate_legacy_schema()?;
@@ -59,11 +59,13 @@ impl HistoryStore {
 
         if has_raw {
             // Copy data from old column, add new column, drop via rebuild.
-            self.conn.execute_batch(
-                "ALTER TABLE pipeline_history ADD COLUMN transcript TEXT NOT NULL DEFAULT '';
+            self.conn
+                .execute_batch(
+                    "ALTER TABLE pipeline_history ADD COLUMN transcript TEXT NOT NULL DEFAULT '';
                  UPDATE pipeline_history SET transcript = COALESCE(raw_transcript, '')
-                    WHERE transcript = '';"
-            ).ok(); // ALTER may fail if column already exists — that's fine.
+                    WHERE transcript = '';",
+                )
+                .ok(); // ALTER may fail if column already exists — that's fine.
         }
         Ok(())
     }
@@ -74,8 +76,12 @@ impl HistoryStore {
              (id, timestamp, transcript, custom_vocabulary, audio_file_name, metrics_json)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
-                entry.id, entry.timestamp, entry.transcript,
-                entry.custom_vocabulary, entry.audio_file_name, entry.metrics_json,
+                entry.id,
+                entry.timestamp,
+                entry.transcript,
+                entry.custom_vocabulary,
+                entry.audio_file_name,
+                entry.metrics_json,
             ],
         )?;
         Ok(())
@@ -84,29 +90,32 @@ impl HistoryStore {
     pub fn load_all(&self) -> Result<Vec<HistoryEntry>, HistoryError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, timestamp, transcript, custom_vocabulary, audio_file_name, metrics_json
-             FROM pipeline_history ORDER BY timestamp DESC"
+             FROM pipeline_history ORDER BY timestamp DESC",
         )?;
-        let entries = stmt.query_map([], |row| {
-            Ok(HistoryEntry {
-                id: row.get(0)?,
-                timestamp: row.get(1)?,
-                transcript: row.get(2)?,
-                custom_vocabulary: row.get(3)?,
-                audio_file_name: row.get(4)?,
-                metrics_json: row.get(5)?,
-            })
-        })?.collect::<SqlResult<Vec<_>>>()?;
+        let entries = stmt
+            .query_map([], |row| {
+                Ok(HistoryEntry {
+                    id: row.get(0)?,
+                    timestamp: row.get(1)?,
+                    transcript: row.get(2)?,
+                    custom_vocabulary: row.get(3)?,
+                    audio_file_name: row.get(4)?,
+                    metrics_json: row.get(5)?,
+                })
+            })?
+            .collect::<SqlResult<Vec<_>>>()?;
         Ok(entries)
     }
 
     pub fn trim(&self, max_count: usize) -> Result<Vec<String>, HistoryError> {
         let mut stmt = self.conn.prepare(
             "SELECT audio_file_name FROM pipeline_history
-             ORDER BY timestamp DESC LIMIT -1 OFFSET ?1"
+             ORDER BY timestamp DESC LIMIT -1 OFFSET ?1",
         )?;
-        let removed_files: Vec<String> = stmt.query_map(params![max_count], |row| {
-            row.get::<_, Option<String>>(0)
-        })?.filter_map(|r| r.ok().flatten()).collect();
+        let removed_files: Vec<String> = stmt
+            .query_map(params![max_count], |row| row.get::<_, Option<String>>(0))?
+            .filter_map(|r| r.ok().flatten())
+            .collect();
 
         self.conn.execute(
             "DELETE FROM pipeline_history WHERE id NOT IN
@@ -117,28 +126,38 @@ impl HistoryStore {
     }
 
     pub fn delete(&self, id: &str) -> Result<Option<String>, HistoryError> {
-        let audio: Option<String> = self.conn.query_row(
-            "SELECT audio_file_name FROM pipeline_history WHERE id = ?1",
-            params![id],
-            |row| row.get(0),
-        ).ok().flatten();
-        self.conn.execute("DELETE FROM pipeline_history WHERE id = ?1", params![id])?;
+        let audio: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT audio_file_name FROM pipeline_history WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten();
+        self.conn
+            .execute("DELETE FROM pipeline_history WHERE id = ?1", params![id])?;
         Ok(audio)
     }
 
     pub fn clear_all(&self) -> Result<Vec<String>, HistoryError> {
-        let mut stmt = self.conn.prepare("SELECT audio_file_name FROM pipeline_history")?;
-        let files: Vec<String> = stmt.query_map([], |row| {
-            row.get::<_, Option<String>>(0)
-        })?.filter_map(|r| r.ok().flatten()).collect();
+        let mut stmt = self
+            .conn
+            .prepare("SELECT audio_file_name FROM pipeline_history")?;
+        let files: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, Option<String>>(0))?
+            .filter_map(|r| r.ok().flatten())
+            .collect();
         self.conn.execute("DELETE FROM pipeline_history", [])?;
         Ok(files)
     }
 
     pub fn count(&self) -> Result<usize, HistoryError> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM pipeline_history", [], |row| row.get(0)
-        )?;
+        let count: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM pipeline_history", [], |row| {
+                    row.get(0)
+                })?;
         Ok(count as usize)
     }
 }
@@ -172,7 +191,9 @@ mod tests {
     fn trim_keeps_newest() {
         let store = HistoryStore::open_in_memory().unwrap();
         for i in 0..5 {
-            store.insert(&make_entry(&format!("e{i}"), i as f64 * 1000.0)).unwrap();
+            store
+                .insert(&make_entry(&format!("e{i}"), i as f64 * 1000.0))
+                .unwrap();
         }
         let removed = store.trim(3).unwrap();
         assert_eq!(removed.len(), 2);

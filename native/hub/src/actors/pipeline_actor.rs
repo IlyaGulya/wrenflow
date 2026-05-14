@@ -30,10 +30,7 @@ impl PipelineListener for SignalListener {
     }
 
     fn on_transcript_ready(&self, text: String) {
-        signals::TranscriptReady {
-            transcript: text,
-        }
-        .send_signal_to_dart();
+        signals::TranscriptReady { transcript: text }.send_signal_to_dart();
     }
 
     fn on_play_sound(&self, sound: PipelineSound) {
@@ -116,7 +113,8 @@ impl PipelineActor {
     }
 
     pub fn on_transcription_complete(&mut self, result: TranscriptionResult) {
-        self.engine.on_transcription_complete(result, &self.listener);
+        self.engine
+            .on_transcription_complete(result, &self.listener);
         self.indicator_deadline = None;
     }
 
@@ -151,7 +149,6 @@ impl PipelineActor {
             self.indicator_deadline = None;
             self.engine.on_indicator_timeout(&self.listener);
         }
-
     }
 }
 

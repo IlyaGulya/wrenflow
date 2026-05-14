@@ -35,9 +35,6 @@ class AppLifecycleNotifier extends Notifier<AppLifecycleState> {
     final prefs = await SharedPreferences.getInstance();
     final hasCompleted = prefs.getBool(_kHasCompletedSetup) ?? false;
 
-    // Start model download/load in background immediately.
-    const InitializeLocalModel().sendSignalToRust();
-
     if (!hasCompleted) {
       _transitionTo(const Onboarding(currentStep: OnboardingStep.microphone));
       return;
@@ -120,8 +117,8 @@ class AppLifecycleNotifier extends Notifier<AppLifecycleState> {
 
 final appLifecycleProvider =
     NotifierProvider<AppLifecycleNotifier, AppLifecycleState>(
-  AppLifecycleNotifier.new,
-);
+      AppLifecycleNotifier.new,
+    );
 
 // ── Active screen (settings shown in main window) ─────────────
 
@@ -145,13 +142,13 @@ class SettingsInitialTabNotifier extends Notifier<SettingsTab> {
 
 final settingsInitialTabProvider =
     NotifierProvider<SettingsInitialTabNotifier, SettingsTab>(
-  SettingsInitialTabNotifier.new,
-);
+      SettingsInitialTabNotifier.new,
+    );
 
 final activeScreenProvider =
     NotifierProvider<ActiveScreenNotifier, ActiveScreen>(
-  ActiveScreenNotifier.new,
-);
+      ActiveScreenNotifier.new,
+    );
 
 // ── Derived providers ─────────────────────────────────────────
 
@@ -173,20 +170,25 @@ class MainWindowConfig {
 
 MainWindowConfig _configFor(AppLifecycleState state, ActiveScreen screen) {
   return switch (state) {
-    Initializing() =>
-      const MainWindowConfig(visible: false, skipTaskbar: true),
-    Onboarding() =>
-      const MainWindowConfig(visible: true, skipTaskbar: false),
-    PermissionRecovery() =>
-      const MainWindowConfig(visible: true, skipTaskbar: false),
+    Initializing() => const MainWindowConfig(visible: false, skipTaskbar: true),
+    Onboarding() => const MainWindowConfig(visible: true, skipTaskbar: false),
+    PermissionRecovery() => const MainWindowConfig(
+      visible: true,
+      skipTaskbar: false,
+    ),
     Running() => switch (screen) {
-        ActiveScreen.settings => const MainWindowConfig(
-            visible: true, skipTaskbar: false, width: 720, height: 520),
-        ActiveScreen.none =>
-          const MainWindowConfig(visible: false, skipTaskbar: true),
-      },
-    ShuttingDown() =>
-      const MainWindowConfig(visible: false, skipTaskbar: true),
+      ActiveScreen.settings => const MainWindowConfig(
+        visible: true,
+        skipTaskbar: false,
+        width: 720,
+        height: 520,
+      ),
+      ActiveScreen.none => const MainWindowConfig(
+        visible: false,
+        skipTaskbar: true,
+      ),
+    },
+    ShuttingDown() => const MainWindowConfig(visible: false, skipTaskbar: true),
   };
 }
 

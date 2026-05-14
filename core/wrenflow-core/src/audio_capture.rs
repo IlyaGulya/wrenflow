@@ -11,11 +11,11 @@ use std::time::Instant;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, StreamConfig};
 
+use wrenflow_domain::audio::resampler::resample_to_16khz;
 use wrenflow_domain::audio::{
     pad_to_minimum_duration, AudioDeviceInfo, AudioLevel, RecordingMetrics, RecordingResult,
     SpscRingBuffer, TARGET_SAMPLE_RATE,
 };
-use wrenflow_domain::audio::resampler::resample_to_16khz;
 
 // ---------------------------------------------------------------------------
 // Listener trait
@@ -220,8 +220,13 @@ impl AudioCapture {
         // Error listener for cpal stream error callback
         let err_listener = listener.clone();
 
-        log::info!("[audio] build_input_stream: device={}, rate={}, channels={}, format={:?}",
-            device.name().unwrap_or_default(), sample_rate, channels, config.sample_rate);
+        log::info!(
+            "[audio] build_input_stream: device={}, rate={}, channels={}, format={:?}",
+            device.name().unwrap_or_default(),
+            sample_rate,
+            channels,
+            config.sample_rate
+        );
 
         let first_cb_logged = Arc::new(AtomicBool::new(false));
         let first_cb_logged_cb = first_cb_logged.clone();
@@ -237,7 +242,11 @@ impl AudioCapture {
                     // Log first callback + track max amplitude
                     if !first_cb_logged_cb.swap(true, Ordering::Relaxed) {
                         let max = data.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
-                        log::info!("[audio] first callback: {} samples, max_amp={:.6}", data.len(), max);
+                        log::info!(
+                            "[audio] first callback: {} samples, max_amp={:.6}",
+                            data.len(),
+                            max
+                        );
                     }
                     let max = data.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
                     let bits = max.to_bits();
@@ -276,7 +285,9 @@ impl AudioCapture {
             )
             .map_err(|e| format!("Failed to build input stream: {e}"))?;
 
-        stream.play().map_err(|e| format!("Failed to start stream: {e}"))?;
+        stream
+            .play()
+            .map_err(|e| format!("Failed to start stream: {e}"))?;
         log::info!("[audio] stream.play() OK");
 
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -331,8 +342,12 @@ impl AudioCapture {
 
         let max_bits = state.max_sample_seen.load(Ordering::Relaxed);
         let max_amp = f32::from_bits(max_bits);
-        log::info!("[audio] stop: buffers={}, max_cpal_amplitude={:.6}, duration={:.0}ms",
-            state.buffer_count.load(Ordering::Relaxed), max_amp, duration_ms);
+        log::info!(
+            "[audio] stop: buffers={}, max_cpal_amplitude={:.6}, duration={:.0}ms",
+            state.buffer_count.load(Ordering::Relaxed),
+            max_amp,
+            duration_ms
+        );
 
         // Signal drain thread to stop
         state.stop_flag.store(true, Ordering::Release);
@@ -492,14 +507,25 @@ fn drain_loop(
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
-    let native_max = accumulated_native.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
-    log::info!("[audio] drain done: {} native samples, max_amp={:.6}, first_audio={:?}",
-        accumulated_native.len(), native_max, first_audio_ms);
+    let native_max = accumulated_native
+        .iter()
+        .map(|s| s.abs())
+        .fold(0.0f32, f32::max);
+    log::info!(
+        "[audio] drain done: {} native samples, max_amp={:.6}, first_audio={:?}",
+        accumulated_native.len(),
+        native_max,
+        first_audio_ms
+    );
 
     // Resample accumulated audio to 16 kHz
     let samples_16k = resample_to_16khz(&accumulated_native, device_sample_rate);
 
-    log::info!("[audio] resampled: {} → {} samples (16kHz)", accumulated_native.len(), samples_16k.len());
+    log::info!(
+        "[audio] resampled: {} → {} samples (16kHz)",
+        accumulated_native.len(),
+        samples_16k.len()
+    );
 
     DrainResult {
         samples_16k,

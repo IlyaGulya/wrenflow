@@ -99,6 +99,8 @@ pub struct TranscriptionResult {
     pub raw_transcript: String,
     pub duration_ms: f64,
     pub provider: String,
+    pub model_id: String,
+    pub model_name: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -156,7 +158,10 @@ impl PipelineEngine {
 
     /// Called when first real audio buffer arrives.
     pub fn on_first_audio(&mut self, listener: &dyn PipelineListener) {
-        if matches!(self.state, PipelineState::Starting | PipelineState::Initializing) {
+        if matches!(
+            self.state,
+            PipelineState::Starting | PipelineState::Initializing
+        ) {
             self.transition(PipelineState::Recording, listener);
             if self.config.sound_enabled {
                 listener.on_play_sound(PipelineSound::RecordingStarted);
@@ -172,23 +177,36 @@ impl PipelineEngine {
     }
 
     /// Called when hotkey is released — stop recording, begin transcription.
-    pub fn handle_hotkey_up(&mut self, recording_duration_ms: f64, listener: &dyn PipelineListener) -> bool {
+    pub fn handle_hotkey_up(
+        &mut self,
+        recording_duration_ms: f64,
+        listener: &dyn PipelineListener,
+    ) -> bool {
         if !self.state.is_recording() {
             return false;
         }
 
         self.recording_duration_ms = recording_duration_ms;
-        self.metrics.set_double("recording.durationMs", recording_duration_ms);
+        self.metrics
+            .set_double("recording.durationMs", recording_duration_ms);
 
         // Check minimum duration
         if recording_duration_ms < self.config.minimum_recording_duration_ms {
-            log::info!("recording too short ({:.0}ms < {:.0}ms)",
-                recording_duration_ms, self.config.minimum_recording_duration_ms);
+            log::info!(
+                "recording too short ({:.0}ms < {:.0}ms)",
+                recording_duration_ms,
+                self.config.minimum_recording_duration_ms
+            );
             self.transition(PipelineState::Idle, listener);
             return false;
         }
 
-        self.transition(PipelineState::Transcribing { showing_indicator: false }, listener);
+        self.transition(
+            PipelineState::Transcribing {
+                showing_indicator: false,
+            },
+            listener,
+        );
         if self.config.sound_enabled {
             listener.on_play_sound(PipelineSound::RecordingStopped);
         }
@@ -197,8 +215,18 @@ impl PipelineEngine {
 
     /// Called after delayed indicator timeout (1s) during transcribing.
     pub fn on_indicator_timeout(&mut self, listener: &dyn PipelineListener) {
-        if matches!(self.state, PipelineState::Transcribing { showing_indicator: false }) {
-            self.transition(PipelineState::Transcribing { showing_indicator: true }, listener);
+        if matches!(
+            self.state,
+            PipelineState::Transcribing {
+                showing_indicator: false
+            }
+        ) {
+            self.transition(
+                PipelineState::Transcribing {
+                    showing_indicator: true,
+                },
+                listener,
+            );
         }
     }
 
@@ -208,8 +236,14 @@ impl PipelineEngine {
         result: TranscriptionResult,
         listener: &dyn PipelineListener,
     ) {
-        self.metrics.set_double("transcription.durationMs", result.duration_ms);
-        self.metrics.set_string("transcription.provider", result.provider);
+        self.metrics
+            .set_double("transcription.durationMs", result.duration_ms);
+        self.metrics
+            .set_string("transcription.provider", result.provider);
+        self.metrics
+            .set_string("transcription.modelId", result.model_id);
+        self.metrics
+            .set_string("transcription.modelName", result.model_name);
 
         let transcript = result.raw_transcript.trim().to_string();
         self.finish_pipeline(transcript, listener);
@@ -217,23 +251,28 @@ impl PipelineEngine {
 
     /// Called when pipeline encounters an error at any stage.
     pub fn on_pipeline_error(&mut self, message: &str, listener: &dyn PipelineListener) {
-        self.metrics.set_string("pipeline.outcome", "error".to_string());
+        self.metrics
+            .set_string("pipeline.outcome", "error".to_string());
         listener.on_error(message.to_string());
-        self.transition(PipelineState::Error { message: message.to_string() }, listener);
+        self.transition(
+            PipelineState::Error {
+                message: message.to_string(),
+            },
+            listener,
+        );
     }
 
     /// Called after error/pasting auto-dismiss timeout (3s).
     pub fn on_dismiss_timeout(&mut self, listener: &dyn PipelineListener) {
-        if matches!(self.state, PipelineState::Pasting | PipelineState::Error { .. }) {
+        if matches!(
+            self.state,
+            PipelineState::Pasting | PipelineState::Error { .. }
+        ) {
             self.transition(PipelineState::Idle, listener);
         }
     }
 
-    fn finish_pipeline(
-        &mut self,
-        transcript: String,
-        listener: &dyn PipelineListener,
-    ) {
+    fn finish_pipeline(&mut self, transcript: String, listener: &dyn PipelineListener) {
         if let Some(start) = self.pipeline_start {
             let total_ms = start.elapsed().as_secs_f64() * 1000.0;
             self.metrics.set_double("pipeline.totalMs", total_ms);
@@ -241,10 +280,12 @@ impl PipelineEngine {
 
         if transcript.is_empty() {
             log::info!("transcript empty — dismissing");
-            self.metrics.set_string("pipeline.outcome", "empty".to_string());
+            self.metrics
+                .set_string("pipeline.outcome", "empty".to_string());
             self.transition(PipelineState::Idle, listener);
         } else {
-            self.metrics.set_string("pipeline.outcome", "success".to_string());
+            self.metrics
+                .set_string("pipeline.outcome", "success".to_string());
             listener.on_transcript_ready(transcript.clone());
             self.transition(PipelineState::Idle, listener);
         }
@@ -269,7 +310,9 @@ impl PipelineEngine {
 
 fn uuid_v4() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     // Simple pseudo-UUID from timestamp + random-ish bits
     format!(
         "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
@@ -309,7 +352,10 @@ mod tests {
 
     impl PipelineListener for MockListener {
         fn on_state_changed(&self, old: PipelineState, new: PipelineState) {
-            self.transitions.lock().unwrap().push((old.name().to_string(), new.name().to_string()));
+            self.transitions
+                .lock()
+                .unwrap()
+                .push((old.name().to_string(), new.name().to_string()));
         }
         fn on_transcript_ready(&self, text: String) {
             self.pasted.lock().unwrap().push(text);
@@ -354,6 +400,8 @@ mod tests {
                 raw_transcript: "hello world".to_string(),
                 duration_ms: 200.0,
                 provider: "local".to_string(),
+                model_id: "parakeet-tdt-0.6b-v3-onnx".to_string(),
+                model_name: "Parakeet TDT 0.6B".to_string(),
             },
             &*listener,
         );
@@ -392,6 +440,8 @@ mod tests {
                 raw_transcript: "  ".to_string(),
                 duration_ms: 200.0,
                 provider: "local".to_string(),
+                model_id: "parakeet-tdt-0.6b-v3-onnx".to_string(),
+                model_name: "Parakeet TDT 0.6B".to_string(),
             },
             &*listener,
         );
@@ -417,9 +467,19 @@ mod tests {
         engine.on_first_audio(&*listener);
         engine.handle_hotkey_up(500.0, &*listener);
 
-        assert_eq!(engine.state(), &PipelineState::Transcribing { showing_indicator: false });
+        assert_eq!(
+            engine.state(),
+            &PipelineState::Transcribing {
+                showing_indicator: false
+            }
+        );
         engine.on_indicator_timeout(&*listener);
-        assert_eq!(engine.state(), &PipelineState::Transcribing { showing_indicator: true });
+        assert_eq!(
+            engine.state(),
+            &PipelineState::Transcribing {
+                showing_indicator: true
+            }
+        );
     }
 
     #[test]

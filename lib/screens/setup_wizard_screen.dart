@@ -4,6 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/app_lifecycle_provider.dart';
 import '../providers/audio_level_provider.dart';
+import '../providers/launch_at_login_provider.dart';
+import '../providers/local_models_provider.dart';
+import '../providers/local_model_status_provider.dart';
 import '../providers/model_state_provider.dart';
 import '../providers/permissions_provider.dart';
 import '../providers/pipeline_state_provider.dart';
@@ -15,6 +18,8 @@ import '../theme/wrenflow_theme.dart';
 import '../widgets/green_toggle.dart';
 import '../widgets/hotkey_capture.dart';
 import '../widgets/initializing_dots.dart';
+import '../widgets/local_model_picker.dart';
+import '../widgets/model_download_widget.dart';
 import '../widgets/waveform_painter.dart';
 
 /// Setup wizard — used for both onboarding and permission recovery.
@@ -34,7 +39,6 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   final _permissionService = PermissionService();
   String _selectedHotkey = '61';
   final _vocabularyController = TextEditingController();
-  bool _launchAtLogin = true;
   final _autoAdvanced = <OnboardingStep>{};
   final _autoRequested = <OnboardingStep>{};
 
@@ -364,6 +368,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         },
       ),
       OnboardingStep.hotkey => _buildHotkeyStep(key: key),
+      OnboardingStep.model => _buildModelStep(key: key),
       OnboardingStep.vocabulary => _buildVocabularyStep(key: key),
       OnboardingStep.complete => _buildCompleteStep(key: key),
     };
@@ -431,6 +436,24 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     );
   }
 
+  Widget _buildModelStep({Key? key}) {
+    return _StepContent(
+      key: key,
+      icon: CupertinoIcons.waveform_path_ecg,
+      title: 'Transcription Model',
+      subtitle:
+          'Choose your preferred local model first. Nothing downloads or activates until you do it explicitly.',
+      child: const Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          LocalModelPicker(compact: true),
+          SizedBox(height: 12),
+          ModelDownloadWidget(),
+        ],
+      ),
+    );
+  }
+
   Widget _buildVocabularyStep({Key? key}) {
     return _StepContent(
       key: key,
@@ -466,6 +489,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   }
 
   Widget _buildCompleteStep({Key? key}) {
+    final launchAtLogin = ref.watch(launchAtLoginProvider);
     return _StepContent(
       key: key,
       icon: CupertinoIcons.checkmark_seal_fill,
@@ -481,9 +505,16 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text('Launch at login', style: WrenflowStyle.body(12)),
-              GreenToggle(
-                value: _launchAtLogin,
-                onChanged: (v) => setState(() => _launchAtLogin = v),
+              Opacity(
+                opacity: launchAtLogin.isLoading ? 0.55 : 1,
+                child: IgnorePointer(
+                  ignoring: launchAtLogin.isLoading,
+                  child: GreenToggle(
+                    value: launchAtLogin.enabled,
+                    onChanged: (v) =>
+                        ref.read(launchAtLoginProvider.notifier).setEnabled(v),
+                  ),
+                ),
               ),
             ],
           ),
@@ -500,20 +531,33 @@ class _GlobalModelIndicator extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final modelState = ref.watch(modelStateProvider).value;
+    final modelOperation = ref.watch(modelStateProvider).value;
+    final modelState = modelOperation?.state;
+    final models = ref.watch(localModelsProvider);
+    final selectedModel = ref.watch(selectedLocalModelProvider);
+    final operationModelId = modelOperation?.modelId;
+    final operationModel = operationModelId == null
+        ? null
+        : models.where((model) => model.id == operationModelId).isEmpty
+        ? null
+        : models.firstWhere((model) => model.id == operationModelId);
 
-    // Hide when ready — no need to show anything.
-    if (modelState == null || modelState is ModelStateReady) {
+    if (modelState == null ||
+        modelState is ModelStateNotDownloaded ||
+        modelState is ModelStateReady) {
       return const SizedBox.shrink();
     }
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
-      child: _buildContent(modelState),
+      child: _buildContent(
+        modelState,
+        operationModel?.displayName ?? selectedModel.displayName,
+      ),
     );
   }
 
-  Widget _buildContent(ModelState state) {
+  Widget _buildContent(ModelState state, String modelName) {
     if (state is ModelStateDownloading) {
       final pct = (state.progress * 100).toInt();
       return Column(
@@ -529,7 +573,7 @@ class _GlobalModelIndicator extends ConsumerWidget {
           ),
           const SizedBox(height: 3),
           Text(
-            'Downloading model — $pct%',
+            'Downloading $modelName — $pct%',
             style: WrenflowStyle.mono(
               9,
             ).copyWith(color: WrenflowStyle.textTertiary),
@@ -552,7 +596,7 @@ class _GlobalModelIndicator extends ConsumerWidget {
           ),
           const SizedBox(width: 6),
           Text(
-            'Loading model...',
+            'Loading $modelName...',
             style: WrenflowStyle.mono(
               9,
             ).copyWith(color: WrenflowStyle.textTertiary),
@@ -575,7 +619,7 @@ class _GlobalModelIndicator extends ConsumerWidget {
           ),
           const SizedBox(width: 6),
           Text(
-            'Warming up model...',
+            'Warming up $modelName...',
             style: WrenflowStyle.mono(
               9,
             ).copyWith(color: WrenflowStyle.textTertiary),
@@ -593,27 +637,7 @@ class _GlobalModelIndicator extends ConsumerWidget {
       );
     }
 
-    // NotDownloaded or unknown
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        SizedBox(
-          width: 8,
-          height: 8,
-          child: CircularProgressIndicator(
-            strokeWidth: 1.5,
-            valueColor: AlwaysStoppedAnimation(WrenflowStyle.textTertiary),
-          ),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          'Preparing model...',
-          style: WrenflowStyle.mono(
-            9,
-          ).copyWith(color: WrenflowStyle.textTertiary),
-        ),
-      ],
-    );
+    return const SizedBox.shrink();
   }
 }
 
@@ -681,8 +705,27 @@ class _TranscriptionTestWidgetState
   }
 
   Widget _buildContent(PipelineState? pipeline) {
-    // Check model state first — can't test without a loaded model.
-    final modelState = ref.watch(modelStateProvider).value;
+    // Check model state first — can't test without an active model.
+    final modelOperation = ref.watch(modelStateProvider).value;
+    final modelState = modelOperation?.state;
+    final models = ref.watch(localModelsProvider);
+    final modelStatus = ref.watch(localModelsStatusProvider).value;
+    final fallbackSelectedModel = ref.watch(selectedLocalModelProvider);
+    final selectedModelId =
+        modelStatus?.selectedModelId ?? fallbackSelectedModel.id;
+    final selectedModel = models.firstWhere(
+      (model) => model.id == selectedModelId,
+      orElse: () => fallbackSelectedModel,
+    );
+    final operationModelId = modelOperation?.modelId;
+    final operationModel = operationModelId == null
+        ? null
+        : models.where((model) => model.id == operationModelId).isEmpty
+        ? null
+        : models.firstWhere((model) => model.id == operationModelId);
+    final isInstalled = modelStatus?.isInstalled(selectedModel.id) ?? false;
+    final isActive = modelStatus?.isActive(selectedModel.id) ?? false;
+
     if (modelState is ModelStateDownloading) {
       final pct = (modelState.progress * 100).toInt();
       return Column(
@@ -699,7 +742,10 @@ class _TranscriptionTestWidgetState
             ),
           ),
           const SizedBox(height: 4),
-          Text('Downloading model — $pct%', style: WrenflowStyle.caption(10)),
+          Text(
+            'Downloading ${operationModel?.displayName ?? selectedModel.displayName} — $pct%',
+            style: WrenflowStyle.caption(10),
+          ),
         ],
       );
     }
@@ -711,7 +757,10 @@ class _TranscriptionTestWidgetState
           children: [
             const InitializingDots(),
             const SizedBox(width: 8),
-            Text('Loading model...', style: WrenflowStyle.caption(11)),
+            Text(
+              'Loading ${operationModel?.displayName ?? selectedModel.displayName}...',
+              style: WrenflowStyle.caption(11),
+            ),
           ],
         ),
       );
@@ -724,7 +773,10 @@ class _TranscriptionTestWidgetState
           children: [
             const InitializingDots(),
             const SizedBox(width: 8),
-            Text('Warming up model...', style: WrenflowStyle.caption(11)),
+            Text(
+              'Warming up ${operationModel?.displayName ?? selectedModel.displayName}...',
+              style: WrenflowStyle.caption(11),
+            ),
           ],
         ),
       );
@@ -735,22 +787,51 @@ class _TranscriptionTestWidgetState
         child: GestureDetector(
           onTap: () => const InitializeLocalModel().sendSignalToRust(),
           child: Text(
-            'Model error. Tap to retry.',
+            '${operationModel?.displayName ?? selectedModel.displayName} failed. Tap to retry.',
             style: WrenflowStyle.caption(11).copyWith(color: WrenflowStyle.red),
           ),
         ),
       );
     }
+
+    if (!isActive) {
+      return Center(
+        key: const ValueKey('model-manual'),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              isInstalled
+                  ? '${selectedModel.displayName} is selected but not active yet.'
+                  : '${selectedModel.displayName} is selected but not installed yet.',
+              style: WrenflowStyle.caption(11),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: () => const InitializeLocalModel().sendSignalToRust(),
+              child: Text(
+                isInstalled
+                    ? 'Activate ${selectedModel.displayName}'
+                    : 'Download & activate ${selectedModel.displayName}',
+                style: WrenflowStyle.body(
+                  11,
+                ).copyWith(color: WrenflowStyle.textOp50),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     if (modelState is! ModelStateReady) {
       return Center(
-        key: const ValueKey('model-init'),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const InitializingDots(),
-            const SizedBox(width: 8),
-            Text('Preparing model...', style: WrenflowStyle.caption(11)),
-          ],
+        key: const ValueKey('model-pending'),
+        child: Text(
+          'Activate ${selectedModel.displayName} to run a live test.',
+          style: WrenflowStyle.caption(11),
+          textAlign: TextAlign.center,
         ),
       );
     }

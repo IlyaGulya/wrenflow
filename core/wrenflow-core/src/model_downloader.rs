@@ -1,15 +1,27 @@
 //! Model downloader — fetches ONNX model files from HuggingFace.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use wrenflow_domain::model_management::{
     DownloadProgress, LocalModelState, ModelDownloadListener, ModelInfo,
 };
 
 /// Check if a model is already fully downloaded.
 pub fn is_model_present(model: &ModelInfo, model_dir: &Path) -> bool {
-    model.expected_files.iter().all(|f| model_dir.join(f).exists())
+    model
+        .expected_files
+        .iter()
+        .all(|f| model_dir.join(f).exists())
+        && model
+            .generated_files
+            .iter()
+            .all(|f| model_dir.join(f).exists())
+}
+
+fn ensure_runtime_files(model: &ModelInfo, model_dir: &Path) -> Result<(), String> {
+    let _ = (model, model_dir);
+    Ok(())
 }
 
 /// Download model files from HuggingFace.
@@ -72,10 +84,19 @@ pub async fn download_model(
             continue;
         }
 
-        let url = format!("https://huggingface.co/{}/resolve/main/{}", model.repo_id, filename);
+        let url = format!(
+            "https://huggingface.co/{}/resolve/main/{}",
+            model.repo_id, filename
+        );
         log::info!("Downloading {} → {:?}", url, dest);
 
-        let response = client.get(&url)
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Create parent dir for {filename}: {e}"))?;
+        }
+
+        let response = client
+            .get(&url)
             .send()
             .await
             .map_err(|e| format!("Download {filename}: {e}"))?;
@@ -101,8 +122,8 @@ pub async fn download_model(
 
         // Write to temp file
         let tmp_dest = model_dir.join(format!("{filename}.tmp"));
-        let mut file = std::fs::File::create(&tmp_dest)
-            .map_err(|e| format!("Create {filename}: {e}"))?;
+        let mut file =
+            std::fs::File::create(&tmp_dest).map_err(|e| format!("Create {filename}: {e}"))?;
 
         use std::io::Write;
         use tokio_stream::StreamExt;
@@ -115,7 +136,8 @@ pub async fn download_model(
             }
 
             let chunk = chunk.map_err(|e| format!("Read {filename}: {e}"))?;
-            file.write_all(&chunk).map_err(|e| format!("Write {filename}: {e}"))?;
+            file.write_all(&chunk)
+                .map_err(|e| format!("Write {filename}: {e}"))?;
             bytes_so_far += chunk.len() as u64;
 
             listener.on_progress(DownloadProgress {
@@ -128,8 +150,7 @@ pub async fn download_model(
         }
 
         // Rename temp to final
-        std::fs::rename(&tmp_dest, &dest)
-            .map_err(|e| format!("Rename {filename}: {e}"))?;
+        std::fs::rename(&tmp_dest, &dest).map_err(|e| format!("Rename {filename}: {e}"))?;
 
         listener.on_progress(DownloadProgress {
             bytes_downloaded: bytes_so_far,
@@ -140,6 +161,7 @@ pub async fn download_model(
         });
     }
 
+    ensure_runtime_files(model, model_dir)?;
     log::info!("All model files downloaded to {:?}", model_dir);
     Ok(model_dir.to_path_buf())
 }

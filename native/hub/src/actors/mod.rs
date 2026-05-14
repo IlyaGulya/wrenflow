@@ -58,7 +58,11 @@ pub async fn create_actors() {
         while recv.recv().await.is_some() {
             let devices = AudioActor::list_devices();
             let default_name = AudioActor::default_device_name();
-            signals::AudioDevicesListed { devices, default_device_name: default_name }.send_signal_to_dart();
+            signals::AudioDevicesListed {
+                devices,
+                default_device_name: default_name,
+            }
+            .send_signal_to_dart();
         }
     });
 
@@ -146,11 +150,15 @@ pub async fn create_actors() {
                                         let start = std::time::Instant::now();
                                         let mut guard = engine.lock().ok()?;
                                         let engine_mut = guard.as_mut()?;
+                                        let model_id = engine_mut.model_id().to_string();
+                                        let model_name = engine_mut.model_display_name().to_string();
                                         match engine_mut.transcribe(&samples) {
                                             Ok(text) => Some(TranscriptionResult {
                                                 raw_transcript: text,
                                                 duration_ms: start.elapsed().as_secs_f64() * 1000.0,
                                                 provider: "local".to_string(),
+                                                model_id,
+                                                model_name,
                                             }),
                                             Err(e) => {
                                                 log::error!("Transcription failed: {e}");

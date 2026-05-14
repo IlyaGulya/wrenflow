@@ -2,6 +2,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:wrenflow/providers/local_models_provider.dart';
+import 'package:wrenflow/providers/local_model_status_provider.dart';
 import 'package:wrenflow/providers/model_state_provider.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
 
@@ -16,61 +18,167 @@ class ModelDownloadWidget extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final modelStateAsync = ref.watch(modelStateProvider);
+    final modelsStatus = ref.watch(localModelsStatusProvider).value;
+    final localModels = ref.watch(localModelsProvider);
+    final fallbackSelectedModel = ref.watch(selectedLocalModelProvider);
+    final selectedModelId =
+        modelsStatus?.selectedModelId ?? fallbackSelectedModel.id;
+    final selectedModel = localModels.firstWhere(
+      (model) => model.id == selectedModelId,
+      orElse: () => fallbackSelectedModel,
+    );
+    final isInstalled = modelsStatus?.isInstalled(selectedModel.id) ?? false;
+    final isActive = modelsStatus?.isActive(selectedModel.id) ?? false;
+    final activeModelId = modelsStatus?.activeModelId;
+    final activeModel = activeModelId == null
+        ? null
+        : localModels.where((model) => model.id == activeModelId).isEmpty
+        ? null
+        : localModels.firstWhere((model) => model.id == activeModelId);
+    final operation = modelStateAsync.value;
+    final operationModelId = operation?.modelId;
+    final operationModel = operationModelId == null
+        ? null
+        : localModels.where((model) => model.id == operationModelId).isEmpty
+        ? null
+        : localModels.firstWhere((model) => model.id == operationModelId);
+
+    if (!selectedModel.isAvailable) {
+      return _buildUnavailable(selectedModel);
+    }
 
     return modelStateAsync.when(
-      loading: () => _buildNotDownloaded(),
-      error: (error, _) => _buildError(error.toString()),
-      data: (state) => switch (state) {
-        ModelStateNotDownloaded() => _buildNotDownloaded(),
-        ModelStateDownloading() => _buildDownloading(state),
-        ModelStateLoading() => _buildLoading(),
-        ModelStateWarming() => _buildWarming(),
-        ModelStateReady() => _buildReady(),
-        ModelStateError() => _buildError(state.message),
-        _ => _buildNotDownloaded(),
+      loading: () => _buildIdle(
+        selectedModel,
+        isInstalled: isInstalled,
+        isActive: isActive,
+      ),
+      error: (error, _) =>
+          _buildError(error.toString(), selectedModel.displayName),
+      data: (operationState) => switch (operationState.state) {
+        ModelStateNotDownloaded() => _buildIdle(
+          selectedModel,
+          isInstalled: isInstalled,
+          isActive: isActive,
+          activeModelName: activeModel?.displayName,
+        ),
+        ModelStateDownloading() => _buildDownloading(
+          operationState.state as ModelStateDownloading,
+          operationModel?.displayName ?? selectedModel.displayName,
+        ),
+        ModelStateLoading() => _buildLoading(
+          operationModel?.displayName ?? selectedModel.displayName,
+        ),
+        ModelStateWarming() => _buildWarming(
+          operationModel?.displayName ?? selectedModel.displayName,
+        ),
+        ModelStateReady() =>
+          isActive
+              ? _buildReady(
+                  activeModel?.displayName ?? selectedModel.displayName,
+                )
+              : _buildIdle(
+                  selectedModel,
+                  isInstalled: isInstalled,
+                  isActive: isActive,
+                  activeModelName: activeModel?.displayName,
+                ),
+        ModelStateError() => _buildError(
+          (operationState.state as ModelStateError).message,
+          operationModel?.displayName ?? selectedModel.displayName,
+        ),
+        _ => _buildIdle(
+          selectedModel,
+          isInstalled: isInstalled,
+          isActive: isActive,
+          activeModelName: activeModel?.displayName,
+        ),
       },
     );
   }
 
-  Widget _buildNotDownloaded() {
+  Widget _buildUnavailable(LocalModelDescriptor selectedModel) {
     return _CardContainer(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           const Icon(
-            CupertinoIcons.arrow_down_circle,
+            CupertinoIcons.lock_circle,
             size: 40,
-            color: CupertinoColors.activeBlue,
+            color: CupertinoColors.systemGrey,
           ),
           const SizedBox(height: 12),
-          const Text(
-            'Local Transcription Model',
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w600,
-            ),
+          Text(
+            selectedModel.displayName,
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 6),
-          const Text(
-            'Download the Parakeet speech-to-text model for '
-            'fast, private, on-device transcription.',
+          Text(
+            selectedModel.subtitle,
             textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 12,
-              color: Color(0xFF8E8E93),
-            ),
+            style: const TextStyle(fontSize: 12, color: Color(0xFF8E8E93)),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'This model is not shipped in the current build yet.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12, color: Color(0xFF8E8E93)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIdle(
+    LocalModelDescriptor selectedModel, {
+    required bool isInstalled,
+    required bool isActive,
+    String? activeModelName,
+  }) {
+    final primaryLabel = isInstalled
+        ? (isActive ? 'Active' : 'Activate ${selectedModel.displayName}')
+        : 'Download & Activate ${selectedModel.displayName}';
+
+    final subtitle = isActive
+        ? '${selectedModel.displayName} is the active transcription model.'
+        : isInstalled
+        ? activeModelName != null
+              ? '$activeModelName is active right now. ${selectedModel.displayName} is installed and ready to activate.'
+              : '${selectedModel.displayName} is installed and ready to activate.'
+        : 'Selecting a model does not start anything automatically. Use the button below when you want to install and activate it.';
+
+    return _CardContainer(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            isInstalled
+                ? (isActive ? 'Current Active Model' : 'Ready To Activate')
+                : 'Manual Activation',
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            subtitle,
+            style: const TextStyle(fontSize: 12, color: Color(0xFF8E8E93)),
           ),
           const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
             child: CupertinoButton.filled(
               padding: const EdgeInsets.symmetric(vertical: 12),
-              onPressed: () {
-                const InitializeLocalModel().sendSignalToRust();
-              },
-              child: const Text(
-                'Download Parakeet model (~400 MB)',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+              onPressed: isActive
+                  ? null
+                  : () {
+                      const InitializeLocalModel().sendSignalToRust();
+                    },
+              child: Text(
+                primaryLabel,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ),
           ),
@@ -79,7 +187,7 @@ class ModelDownloadWidget extends ConsumerWidget {
     );
   }
 
-  Widget _buildDownloading(ModelStateDownloading state) {
+  Widget _buildDownloading(ModelStateDownloading state, String modelName) {
     final progressPercent = (state.progress * 100).clamp(0.0, 100.0);
     final speedMBps = state.speedBps / 1000000;
     final eta = _formatEta(state.etaSecs);
@@ -91,12 +199,9 @@ class ModelDownloadWidget extends ConsumerWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
-                'Downloading model...',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
+              Text(
+                'Downloading $modelName...',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
               ),
               Text(
                 '${progressPercent.toStringAsFixed(1)}%',
@@ -126,17 +231,11 @@ class ModelDownloadWidget extends ConsumerWidget {
             children: [
               Text(
                 '${speedMBps.toStringAsFixed(1)} MB/s',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Color(0xFF8E8E93),
-                ),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF8E8E93)),
               ),
               Text(
                 '$eta remaining',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Color(0xFF8E8E93),
-                ),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF8E8E93)),
               ),
             ],
           ),
@@ -164,20 +263,20 @@ class ModelDownloadWidget extends ConsumerWidget {
     );
   }
 
-  Widget _buildLoading() {
-    return const _CardContainer(
+  Widget _buildLoading(String modelName) {
+    return _CardContainer(
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          SizedBox(
+          const SizedBox(
             width: 20,
             height: 20,
             child: CupertinoActivityIndicator(),
           ),
-          SizedBox(width: 12),
+          const SizedBox(width: 12),
           Text(
-            'Loading model...',
-            style: TextStyle(
+            'Loading $modelName...',
+            style: const TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w500,
               color: Color(0xFF8E8E93),
@@ -188,20 +287,20 @@ class ModelDownloadWidget extends ConsumerWidget {
     );
   }
 
-  Widget _buildWarming() {
-    return const _CardContainer(
+  Widget _buildWarming(String modelName) {
+    return _CardContainer(
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          SizedBox(
+          const SizedBox(
             width: 20,
             height: 20,
             child: CupertinoActivityIndicator(),
           ),
-          SizedBox(width: 12),
+          const SizedBox(width: 12),
           Text(
-            'Warming up model...',
-            style: TextStyle(
+            'Warming up $modelName...',
+            style: const TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w500,
               color: Color(0xFF8E8E93),
@@ -212,20 +311,20 @@ class ModelDownloadWidget extends ConsumerWidget {
     );
   }
 
-  Widget _buildReady() {
-    return const _CardContainer(
+  Widget _buildReady(String modelName) {
+    return _CardContainer(
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
+          const Icon(
             CupertinoIcons.check_mark_circled_solid,
             color: CupertinoColors.activeGreen,
             size: 22,
           ),
-          SizedBox(width: 10),
+          const SizedBox(width: 10),
           Text(
-            'Model ready',
-            style: TextStyle(
+            '$modelName ready',
+            style: const TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w600,
               color: CupertinoColors.activeGreen,
@@ -236,7 +335,7 @@ class ModelDownloadWidget extends ConsumerWidget {
     );
   }
 
-  Widget _buildError(String message) {
+  Widget _buildError(String message, String modelName) {
     return _CardContainer(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -247,8 +346,8 @@ class ModelDownloadWidget extends ConsumerWidget {
             size: 32,
           ),
           const SizedBox(height: 10),
-          const Text(
-            'Download failed',
+          Text(
+            '$modelName failed',
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w600,
@@ -259,10 +358,7 @@ class ModelDownloadWidget extends ConsumerWidget {
           Text(
             message,
             textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontSize: 12,
-              color: Color(0xFF8E8E93),
-            ),
+            style: const TextStyle(fontSize: 12, color: Color(0xFF8E8E93)),
             maxLines: 3,
             overflow: TextOverflow.ellipsis,
           ),

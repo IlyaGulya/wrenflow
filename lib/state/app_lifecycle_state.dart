@@ -30,8 +30,9 @@ enum OnboardingStep {
   microphone,
   accessibility,
   hotkey,
+  model,
   vocabulary,
-  complete;
+  complete,
 }
 
 /// How the wizard is being used.

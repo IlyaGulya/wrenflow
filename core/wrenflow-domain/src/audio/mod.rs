@@ -1,18 +1,18 @@
 //! Audio processing — ring buffer, resampling, WAV encoding, silence padding
 
-pub mod ring_buffer;
-pub mod resampler;
-pub mod wav;
-pub mod level;
 pub mod device;
+pub mod level;
 pub mod recording;
+pub mod resampler;
+pub mod ring_buffer;
+pub mod wav;
 
-pub use ring_buffer::SpscRingBuffer;
-pub use resampler::resample_to_16khz;
-pub use wav::{encode_wav, WavError};
-pub use level::AudioLevel;
 pub use device::AudioDeviceInfo;
+pub use level::AudioLevel;
 pub use recording::{RecordingMetrics, RecordingResult};
+pub use resampler::resample_to_16khz;
+pub use ring_buffer::SpscRingBuffer;
+pub use wav::{encode_wav, WavError};
 
 /// Minimum recording duration in seconds (Parakeet requirement).
 pub const MIN_DURATION_SECS: f64 = 1.0;

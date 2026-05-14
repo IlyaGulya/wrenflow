@@ -21,7 +21,13 @@ impl HistoryActor {
         let store =
             HistoryStore::open(&db_path).map_err(|e| format!("Failed to open history db: {e}"))?;
         let (tx, rx) = mpsc::unbounded_channel();
-        Ok((Self { store, insert_rx: rx }, tx))
+        Ok((
+            Self {
+                store,
+                insert_rx: rx,
+            },
+            tx,
+        ))
     }
 
     /// Run in a dedicated thread (rusqlite Connection is !Send).
@@ -33,7 +39,8 @@ impl HistoryActor {
 
         let Ok(rt) = tokio::runtime::Builder::new_current_thread()
             .enable_all()
-            .build() else {
+            .build()
+        else {
             log::error!("Failed to create history runtime");
             return;
         };
@@ -102,10 +109,7 @@ impl HistoryActor {
     fn handle_clear(&self) {
         match self.store.clear_all() {
             Ok(_) => {
-                signals::HistoryLoaded {
-                    entries: vec![],
-                }
-                .send_signal_to_dart();
+                signals::HistoryLoaded { entries: vec![] }.send_signal_to_dart();
             }
             Err(e) => {
                 log::error!("Failed to clear history: {e}");
@@ -141,9 +145,18 @@ mod tests {
         let path_str = path.to_string_lossy();
         // Must not be in /tmp or relative
         assert!(path.is_absolute(), "path should be absolute: {path_str}");
-        assert!(!path_str.contains("/tmp"), "path should not be in /tmp: {path_str}");
-        assert!(path_str.contains("Wrenflow"), "path should contain Wrenflow: {path_str}");
-        assert!(path_str.ends_with("history.sqlite"), "path should end with history.sqlite: {path_str}");
+        assert!(
+            !path_str.contains("/tmp"),
+            "path should not be in /tmp: {path_str}"
+        );
+        assert!(
+            path_str.contains("Wrenflow"),
+            "path should contain Wrenflow: {path_str}"
+        );
+        assert!(
+            path_str.ends_with("history.sqlite"),
+            "path should end with history.sqlite: {path_str}"
+        );
         eprintln!("history path: {path_str}");
     }
 }

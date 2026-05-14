@@ -203,7 +203,7 @@ mod tests {
         let rb = SpscRingBuffer::new(4);
         let data = vec![1.0f32, 2.0, 3.0, 4.0];
         assert_eq!(rb.write(&data), 4); // full
-        // Attempt to write more — should write 0
+                                        // Attempt to write more — should write 0
         let extra = vec![5.0f32];
         assert_eq!(rb.write(&extra), 0);
         // Contents unchanged

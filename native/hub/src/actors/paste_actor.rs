@@ -42,11 +42,18 @@ pub fn paste_text(text: &str) -> Result<(), String> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        use enigo::{Enigo, Keyboard, Key, Settings, Direction};
-        let mut enigo = Enigo::new(&Settings::default()).map_err(|e| format!("enigo error: {e}"))?;
-        enigo.key(Key::Control, Direction::Press).map_err(|e| format!("key error: {e}"))?;
-        enigo.key(Key::Unicode('v'), Direction::Click).map_err(|e| format!("key error: {e}"))?;
-        enigo.key(Key::Control, Direction::Release).map_err(|e| format!("key error: {e}"))?;
+        use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+        let mut enigo =
+            Enigo::new(&Settings::default()).map_err(|e| format!("enigo error: {e}"))?;
+        enigo
+            .key(Key::Control, Direction::Press)
+            .map_err(|e| format!("key error: {e}"))?;
+        enigo
+            .key(Key::Unicode('v'), Direction::Click)
+            .map_err(|e| format!("key error: {e}"))?;
+        enigo
+            .key(Key::Control, Direction::Release)
+            .map_err(|e| format!("key error: {e}"))?;
     }
 
     Ok(())

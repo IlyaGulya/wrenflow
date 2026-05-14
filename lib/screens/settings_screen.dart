@@ -8,6 +8,8 @@ import 'package:rinf/rinf.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wrenflow/providers/history_provider.dart';
 import 'package:wrenflow/providers/launch_at_login_provider.dart';
+import 'package:wrenflow/providers/local_models_provider.dart';
+import 'package:wrenflow/providers/local_model_status_provider.dart';
 import 'package:wrenflow/providers/settings_provider.dart';
 import 'package:wrenflow/providers/update_provider.dart';
 import 'package:wrenflow/services/app_version.dart';
@@ -16,11 +18,14 @@ import 'package:wrenflow/src/bindings/signals/signals.dart';
 import 'package:wrenflow/theme/wrenflow_theme.dart';
 import 'package:wrenflow/widgets/green_toggle.dart';
 import 'package:wrenflow/widgets/hotkey_capture.dart';
+import 'package:wrenflow/widgets/local_model_picker.dart';
+import 'package:wrenflow/widgets/model_download_widget.dart';
 import 'package:wrenflow/widgets/settings_card.dart';
 
 /// Sidebar tab definition.
 enum SettingsTab {
   general(CupertinoIcons.gear, 'General'),
+  models(CupertinoIcons.cube_box, 'Models'),
   history(CupertinoIcons.clock, 'History'),
   about(CupertinoIcons.info, 'About');
 
@@ -72,6 +77,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           Expanded(
             child: switch (_selectedTab) {
               SettingsTab.general => const _GeneralContent(),
+              SettingsTab.models => const _ModelsContent(),
               SettingsTab.history => const _HistoryContent(),
               SettingsTab.about => const _AboutContent(),
             },
@@ -467,6 +473,95 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
   }
 }
 
+class _ModelsContent extends StatelessWidget {
+  const _ModelsContent();
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: const [
+          _ModelsSummaryCard(),
+          SizedBox(height: 16),
+          SettingsCard(title: 'Choose model', child: LocalModelPicker()),
+          SizedBox(height: 16),
+          SettingsCard(
+            title: 'Install / Activate',
+            child: ModelDownloadWidget(),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ModelsSummaryCard extends ConsumerWidget {
+  const _ModelsSummaryCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final modelStatus = ref.watch(localModelsStatusProvider).value;
+    final models = ref.watch(localModelsProvider);
+    final fallbackSelectedModel = ref.watch(selectedLocalModelProvider);
+    final selectedModelId =
+        modelStatus?.selectedModelId ?? fallbackSelectedModel.id;
+    final selectedModel = models.firstWhere(
+      (model) => model.id == selectedModelId,
+      orElse: () => fallbackSelectedModel,
+    );
+    final activeModelId = modelStatus?.activeModelId;
+    final activeModel = activeModelId == null
+        ? null
+        : models.where((model) => model.id == activeModelId).isEmpty
+        ? null
+        : models.firstWhere((model) => model.id == activeModelId);
+    final installedCount = modelStatus?.installedModelIds.length ?? 0;
+
+    return SettingsCard(
+      title: 'Model status',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _summaryRow('Preferred', selectedModel.displayName),
+          const SizedBox(height: 8),
+          _summaryRow('Active', activeModel?.displayName ?? 'None'),
+          const SizedBox(height: 8),
+          _summaryRow('Installed', '$installedCount'),
+          const SizedBox(height: 10),
+          Text(
+            'Changing the selection only updates your preferred model. Downloading and activating stay fully manual.',
+            style: WrenflowStyle.caption(11),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _summaryRow(String label, String value) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 72,
+          child: Text(
+            label,
+            style: WrenflowStyle.body(
+              12,
+            ).copyWith(color: WrenflowStyle.textSecondary),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: WrenflowStyle.body(12).copyWith(fontWeight: FontWeight.w500),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _DropdownItem {
   const _DropdownItem(this.value, this.label);
   final String value;
@@ -602,6 +697,7 @@ class _HistoryRowState extends State<_HistoryRow> {
 
     final metrics = _parseMetrics(entry.metricsJson);
     final durationBadge = _formatDuration(metrics);
+    final modelBadge = _formatModel(metrics);
 
     return GestureDetector(
       onTap: () => setState(() => _expanded = !_expanded),
@@ -633,6 +729,10 @@ class _HistoryRowState extends State<_HistoryRow> {
                           if (durationBadge != null) ...[
                             const SizedBox(width: 6),
                             _MetricBadge(durationBadge),
+                          ],
+                          if (modelBadge != null) ...[
+                            const SizedBox(width: 6),
+                            _MetricBadge(modelBadge),
                           ],
                         ],
                       ),
@@ -736,11 +836,24 @@ class _HistoryRowState extends State<_HistoryRow> {
     return null;
   }
 
+  String? _formatModel(Map<String, dynamic> metrics) {
+    final modelName = metrics['transcription.modelName'];
+    if (modelName is String && modelName.trim().isNotEmpty) {
+      return modelName.trim();
+    }
+    final modelId = metrics['transcription.modelId'];
+    if (modelId is String && modelId.trim().isNotEmpty) {
+      return modelId.trim();
+    }
+    return null;
+  }
+
   String _formatMetricValue(dynamic value) {
     if (value is double) {
       if (value >= 1000) return '${(value / 1000).toStringAsFixed(1)}s';
       return '${value.toStringAsFixed(1)}ms';
     }
+    if (value is num) return value.toString();
     if (value is int) return value.toString();
     if (value is bool) return value ? 'true' : 'false';
     return value?.toString() ?? '';

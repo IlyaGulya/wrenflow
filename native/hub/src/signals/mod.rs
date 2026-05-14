@@ -35,11 +35,17 @@ pub struct HistoryEntryData {
 #[derive(Serialize, Deserialize, SignalPiece, Clone, Debug)]
 pub enum ModelState {
     NotDownloaded,
-    Downloading { progress: f64, speed_bps: f64, eta_secs: f64 },
+    Downloading {
+        progress: f64,
+        speed_bps: f64,
+        eta_secs: f64,
+    },
     Loading,
     Warming,
     Ready,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, SignalPiece, Clone, Debug)]
@@ -152,11 +158,30 @@ pub struct ClearHistory;
 #[derive(Serialize, RustSignal)]
 pub struct ModelStateChanged {
     pub state: ModelState,
+    pub model_id: Option<String>,
+}
+
+/// Rust → Dart: current selected / active / installed local model snapshot
+#[derive(Serialize, RustSignal)]
+pub struct LocalModelsStatusChanged {
+    pub selected_model_id: String,
+    pub active_model_id: Option<String>,
+    pub installed_model_ids: Vec<String>,
 }
 
 /// Dart → Rust: start downloading/loading local model
 #[derive(Deserialize, DartSignal)]
 pub struct InitializeLocalModel;
+
+/// Dart → Rust: request the latest local model inventory snapshot
+#[derive(Deserialize, DartSignal)]
+pub struct RequestLocalModelsStatus;
+
+/// Dart → Rust: select which local model should be active
+#[derive(Deserialize, DartSignal)]
+pub struct SelectLocalModel {
+    pub model_id: String,
+}
 
 /// Dart → Rust: cancel model download
 #[derive(Deserialize, DartSignal)]

@@ -28,7 +28,10 @@ impl AudioCaptureListener for HubAudioListener {
     }
 
     fn on_recording_ready(&self) {
-        if !self.first_audio_sent.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        if !self
+            .first_audio_sent
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
             let _ = self.event_tx.send(AudioEvent::FirstAudio);
         }
     }
