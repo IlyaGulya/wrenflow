@@ -27,20 +27,24 @@ impl AudioDevicesRuntimeState {
         }
     }
 
-    fn effective_selected_device_id(&self) -> String {
-        if self.selected_device_id == "default" {
+    fn effective_device_id_for(&self, preferred_device_id: &str) -> String {
+        if preferred_device_id == "default" {
             return "default".to_string();
         }
 
         if self
             .devices
             .iter()
-            .any(|device| device.id == self.selected_device_id)
+            .any(|device| device.id == preferred_device_id)
         {
-            self.selected_device_id.clone()
+            preferred_device_id.to_string()
         } else {
             "default".to_string()
         }
+    }
+
+    fn effective_selected_device_id(&self) -> String {
+        self.effective_device_id_for(&self.selected_device_id)
     }
 }
 
@@ -77,10 +81,13 @@ fn update_state(
     send_snapshot(state);
 }
 
-pub fn current_selected_device_id(state: &SharedAudioDevicesState) -> String {
+pub fn effective_device_id_for(
+    state: &SharedAudioDevicesState,
+    preferred_device_id: &str,
+) -> String {
     state
         .lock()
-        .map(|guard| guard.effective_selected_device_id())
+        .map(|guard| guard.effective_device_id_for(preferred_device_id))
         .unwrap_or_else(|_| "default".to_string())
 }
 

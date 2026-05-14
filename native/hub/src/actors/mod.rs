@@ -123,6 +123,7 @@ pub async fn create_actors() {
     // Main loop: hotkey + audio events drive the pipeline
     let transcription_engine = engine_handle.clone();
     let audio_devices_for_loop = audio_devices_state.clone();
+    let settings_runtime_for_loop = settings_runtime.clone();
     let mut config_rx = settings_actor::subscribe(&settings_runtime);
     spawn(async move {
         loop {
@@ -132,7 +133,12 @@ pub async fn create_actors() {
                         hotkey_actor::HotkeyEvent::KeyDown => {
                             log::info!("Hotkey DOWN");
                             pipeline.handle_hotkey_down();
-                            let device_id = audio_devices_actor::current_selected_device_id(&audio_devices_for_loop);
+                            let preferred_device_id = settings_actor::current_config(&settings_runtime_for_loop)
+                                .selected_microphone_id;
+                            let device_id = audio_devices_actor::effective_device_id_for(
+                                &audio_devices_for_loop,
+                                &preferred_device_id,
+                            );
                             if let Err(e) = audio.start(&device_id) {
                                 log::error!("Failed to start audio: {e}");
                             }
@@ -255,10 +261,6 @@ pub async fn create_actors() {
                     let current_config = config_rx.borrow().clone();
                     let kc = hotkey_actor::keycode_from_name(&current_config.selected_hotkey);
                     hotkey.set_keycode(kc);
-                    audio_devices_actor::set_selected_device_id(
-                        &audio_devices_for_loop,
-                        current_config.selected_microphone_id.clone(),
-                    );
                     pipeline.handle_config_update(current_config.clone());
                 }
                 // Wake up to check init/indicator timers during active recording.
