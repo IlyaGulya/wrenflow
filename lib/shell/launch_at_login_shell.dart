@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 
 abstract class LaunchAtLoginShell {
   bool get isSupported;
+  Future<bool> isFeatureAvailable();
+  Future<String?> unsupportedReason();
   Future<bool> isEnabled();
   Future<void> setEnabled(bool enabled);
 }
@@ -21,6 +23,28 @@ class _MacOsLaunchAtLoginShell implements LaunchAtLoginShell {
   bool get isSupported => true;
 
   static const _channel = MethodChannel('dev.gulya.wrenflow/launch_at_login');
+
+  @override
+  Future<bool> isFeatureAvailable() async {
+    try {
+      return await _channel.invokeMethod<bool>('isSupported') ?? true;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
+  @override
+  Future<String?> unsupportedReason() async {
+    try {
+      return await _channel.invokeMethod<String?>('unsupportedReason');
+    } on MissingPluginException {
+      return 'Launch at login is unavailable in the current app build.';
+    } on PlatformException catch (e) {
+      return e.message;
+    }
+  }
 
   @override
   Future<bool> isEnabled() async {
@@ -50,6 +74,16 @@ class _UnsupportedLaunchAtLoginShell implements LaunchAtLoginShell {
 
   @override
   bool get isSupported => false;
+
+  @override
+  Future<bool> isFeatureAvailable() async {
+    return false;
+  }
+
+  @override
+  Future<String?> unsupportedReason() async {
+    return 'Launch at login is unavailable on this platform.';
+  }
 
   @override
   Future<bool> isEnabled() async {

@@ -120,14 +120,16 @@ class SystemTrayManager implements TrayShellListener {
         ),
         TrayMenuLabelItem(label: presentation.statusText, disabled: true),
         const TrayMenuSeparator(),
-        TrayMenuCheckboxItem(
-          label: presentation.launchAtLoginLoading
-              ? 'Launch at Login...'
-              : 'Launch at Login',
-          checked: presentation.launchAtLoginEnabled,
-          onTap: () => _setLaunchAtLogin(!presentation.launchAtLoginEnabled),
-        ),
-        const TrayMenuSeparator(),
+        if (presentation.showLaunchAtLogin) ...[
+          TrayMenuCheckboxItem(
+            label: presentation.launchAtLoginLoading
+                ? 'Launch at Login...'
+                : 'Launch at Login',
+            checked: presentation.launchAtLoginEnabled,
+            onTap: () => _setLaunchAtLogin(!presentation.launchAtLoginEnabled),
+          ),
+          const TrayMenuSeparator(),
+        ],
         TrayMenuSubmenuItem(
           label: 'Microphone',
           children: micItems,

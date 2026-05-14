@@ -19,6 +19,7 @@ class WizardPresentation {
     required this.showLaunchAtLogin,
     required this.launchAtLoginEnabled,
     required this.launchAtLoginLoading,
+    this.launchAtLoginHint,
     this.hotkeyStepMessage,
     this.modelStepMessage,
     this.recoveryMissing,
@@ -32,6 +33,7 @@ class WizardPresentation {
   final bool showLaunchAtLogin;
   final bool launchAtLoginEnabled;
   final bool launchAtLoginLoading;
+  final String? launchAtLoginHint;
   final String? hotkeyStepMessage;
   final String? modelStepMessage;
   final MissingPermissions? recoveryMissing;
@@ -107,6 +109,8 @@ final wizardPresentationProvider =
             currentStep == OnboardingStep.complete,
         launchAtLoginEnabled: launchAtLogin.enabled,
         launchAtLoginLoading: launchAtLogin.isLoading,
+        launchAtLoginHint:
+            launchAtLogin.unavailableReason ?? launchAtLogin.errorMessage,
         hotkeyStepMessage: currentStep == OnboardingStep.hotkey
             ? hotkeyStepMessage
             : null,

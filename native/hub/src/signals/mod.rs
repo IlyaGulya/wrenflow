@@ -86,8 +86,10 @@ pub struct RuntimeCapabilitiesSnapshot {
 
 #[derive(Serialize, Deserialize, SignalPiece, Clone, Debug)]
 pub struct LaunchAtLoginSnapshot {
+    pub is_available: bool,
     pub enabled: bool,
     pub is_loading: bool,
+    pub unavailable_reason: Option<String>,
     pub error_message: Option<String>,
 }
 

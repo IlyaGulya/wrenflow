@@ -424,35 +424,52 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
   }
 
   Widget _buildLaunchAtLoginToggle(GeneralSettingsPresentation presentation) {
+    final isUnavailable = presentation.launchAtLoginHint != null &&
+        presentation.launchAtLoginEnabled == false &&
+        !presentation.launchAtLoginLoading;
+
     return Opacity(
-      opacity: presentation.launchAtLoginLoading ? 0.55 : 1,
+      opacity: presentation.launchAtLoginLoading || isUnavailable ? 0.55 : 1,
       child: IgnorePointer(
-        ignoring: presentation.launchAtLoginLoading,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        ignoring: presentation.launchAtLoginLoading || isUnavailable,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Open Wrenflow automatically',
-                    style: WrenflowStyle.body(12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Open Wrenflow automatically',
+                        style: WrenflowStyle.body(12),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Launch the menu bar app when you sign in.',
+                        style: WrenflowStyle.caption(11),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    'Launch the menu bar app when you sign in.',
-                    style: WrenflowStyle.caption(11),
-                  ),
-                ],
+                ),
+                const SizedBox(width: 12),
+                GreenToggle(
+                  value: presentation.launchAtLoginEnabled,
+                  onChanged: (value) => ref
+                      .read(launchAtLoginProvider.notifier)
+                      .setEnabled(value),
+                ),
+              ],
+            ),
+            if (presentation.launchAtLoginHint != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                presentation.launchAtLoginHint!,
+                style: WrenflowStyle.caption(11),
               ),
-            ),
-            const SizedBox(width: 12),
-            GreenToggle(
-              value: presentation.launchAtLoginEnabled,
-              onChanged: (value) =>
-                  ref.read(launchAtLoginProvider.notifier).setEnabled(value),
-            ),
+            ],
           ],
         ),
       ),

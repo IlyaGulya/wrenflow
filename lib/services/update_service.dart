@@ -3,6 +3,15 @@ import 'dart:io';
 
 import 'app_version.dart';
 
+class UpdateCheckException implements Exception {
+  const UpdateCheckException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 /// Information about an available update.
 class UpdateInfo {
   const UpdateInfo({
@@ -42,68 +51,76 @@ class GitHubUpdateSource implements UpdateSource {
 
   @override
   Future<UpdateInfo> checkForUpdate() async {
+    final client = HttpClient();
     try {
-      final client = HttpClient();
-      try {
-        client.connectionTimeout = const Duration(seconds: 10);
-        final url = 'https://api.github.com/repos/$owner/$repo/releases/latest';
-        final request = await client.getUrl(Uri.parse(url));
-        request.headers.set(HttpHeaders.userAgentHeader, 'Wrenflow');
-        request.headers.set(
-          HttpHeaders.acceptHeader,
-          'application/vnd.github+json',
-        );
+      client.connectionTimeout = const Duration(seconds: 10);
+      final url = 'https://api.github.com/repos/$owner/$repo/releases/latest';
+      final request = await client.getUrl(Uri.parse(url));
+      request.headers.set(HttpHeaders.userAgentHeader, 'Wrenflow');
+      request.headers.set(
+        HttpHeaders.acceptHeader,
+        'application/vnd.github+json',
+      );
 
-        final response = await request.close();
-        if (response.statusCode != 200) {
-          await response.drain<void>();
-          return UpdateInfo.none;
-        }
-
+      final response = await request.close();
+      if (response.statusCode != 200) {
         final body = await response.transform(utf8.decoder).join();
-        final json = jsonDecode(body) as Map<String, dynamic>;
-
-        final tagName = json['tag_name'] as String? ?? '';
-        final htmlUrl = json['html_url'] as String? ?? '';
-        final publishedAtStr = json['published_at'] as String?;
-        final publishedAt = publishedAtStr != null
-            ? DateTime.tryParse(publishedAtStr)
-            : null;
-
-        final latestVersion = tagName.startsWith('v')
-            ? tagName.substring(1)
-            : tagName;
-        final currentVersion = AppVersion.currentVersion;
-
-        if (latestVersion.isEmpty) return UpdateInfo.none;
-        if (currentVersion.isEmpty) return UpdateInfo.none;
-        if (!_isNewerVersion(latestVersion, currentVersion)) {
-          return UpdateInfo.none;
-        }
-
-        // Find DMG asset for download.
-        final assets = json['assets'] as List<dynamic>? ?? [];
-        String downloadUrl = '';
-        for (final asset in assets) {
-          final name = (asset['name'] as String? ?? '').toLowerCase();
-          if (name.endsWith('.dmg') || name.endsWith('.zip')) {
-            downloadUrl = asset['browser_download_url'] as String? ?? '';
-            break;
-          }
-        }
-
-        return UpdateInfo(
-          isAvailable: true,
-          latestVersion: latestVersion,
-          releaseUrl: htmlUrl,
-          downloadUrl: downloadUrl,
-          publishedAt: publishedAt,
+        throw UpdateCheckException(
+          'GitHub update check failed (${response.statusCode})'
+          '${body.isNotEmpty ? ': $body' : ''}',
         );
-      } finally {
-        client.close();
       }
-    } on Exception {
-      return UpdateInfo.none;
+
+      final body = await response.transform(utf8.decoder).join();
+      final json = jsonDecode(body) as Map<String, dynamic>;
+
+      final tagName = json['tag_name'] as String? ?? '';
+      final htmlUrl = json['html_url'] as String? ?? '';
+      final publishedAtStr = json['published_at'] as String?;
+      final publishedAt = publishedAtStr != null
+          ? DateTime.tryParse(publishedAtStr)
+          : null;
+
+      final latestVersion = tagName.startsWith('v')
+          ? tagName.substring(1)
+          : tagName;
+      final currentVersion = AppVersion.currentVersion;
+
+      if (latestVersion.isEmpty) return UpdateInfo.none;
+      if (currentVersion.isEmpty) {
+        throw const UpdateCheckException(
+          'Current app version is unavailable, so updates cannot be compared.',
+        );
+      }
+      if (!_isNewerVersion(latestVersion, currentVersion)) {
+        return UpdateInfo.none;
+      }
+
+      final assets = json['assets'] as List<dynamic>? ?? [];
+      String downloadUrl = '';
+      for (final asset in assets) {
+        final name = (asset['name'] as String? ?? '').toLowerCase();
+        if (name.endsWith('.dmg') || name.endsWith('.zip')) {
+          downloadUrl = asset['browser_download_url'] as String? ?? '';
+          break;
+        }
+      }
+
+      return UpdateInfo(
+        isAvailable: true,
+        latestVersion: latestVersion,
+        releaseUrl: htmlUrl,
+        downloadUrl: downloadUrl,
+        publishedAt: publishedAt,
+      );
+    } on SocketException catch (error) {
+      throw UpdateCheckException('Network error while checking for updates: $error');
+    } on HandshakeException catch (error) {
+      throw UpdateCheckException('TLS error while checking for updates: $error');
+    } on FormatException catch (error) {
+      throw UpdateCheckException('Invalid update response: $error');
+    } finally {
+      client.close();
     }
   }
 

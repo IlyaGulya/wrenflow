@@ -10,8 +10,10 @@ pub async fn run() {
 
     super::snapshot_mirror::run_snapshot_mirror(
         signals::LaunchAtLoginSnapshot {
+            is_available: true,
             enabled: false,
             is_loading: true,
+            unavailable_reason: None,
             error_message: None,
         },
         request_recv,

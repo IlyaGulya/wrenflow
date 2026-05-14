@@ -12,6 +12,20 @@ class LaunchAtLoginHandler {
 
     private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
+        case "isSupported":
+            if #available(macOS 13.0, *) {
+                result(true)
+            } else {
+                result(false)
+            }
+
+        case "unsupportedReason":
+            if #available(macOS 13.0, *) {
+                result(nil)
+            } else {
+                result("Requires macOS 13.0+")
+            }
+
         case "isEnabled":
             if #available(macOS 13.0, *) {
                 result(SMAppService.mainApp.status == .enabled)

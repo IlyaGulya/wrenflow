@@ -23,15 +23,19 @@ class TrayMenuPresentation {
   const TrayMenuPresentation({
     required this.versionLabel,
     required this.statusText,
+    required this.showLaunchAtLogin,
     required this.launchAtLoginEnabled,
     required this.launchAtLoginLoading,
+    required this.launchAtLoginHint,
     required this.microphones,
   });
 
   final String versionLabel;
   final String statusText;
+  final bool showLaunchAtLogin;
   final bool launchAtLoginEnabled;
   final bool launchAtLoginLoading;
+  final String? launchAtLoginHint;
   final List<TrayMicrophoneItem> microphones;
 }
 
@@ -66,8 +70,10 @@ final trayMenuPresentationProvider = Provider<TrayMenuPresentation>((ref) {
   return TrayMenuPresentation(
     versionLabel: 'Wrenflow $versionLabel',
     statusText: pipeline.statusText,
+    showLaunchAtLogin: launchAtLogin.isAvailable,
     launchAtLoginEnabled: launchAtLogin.enabled,
     launchAtLoginLoading: launchAtLogin.isLoading,
+    launchAtLoginHint: launchAtLogin.unavailableReason ?? launchAtLogin.errorMessage,
     microphones: microphones,
   );
 });

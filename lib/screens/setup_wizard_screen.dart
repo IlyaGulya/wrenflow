@@ -510,9 +510,15 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
               children: [
                 Text('Launch at login', style: WrenflowStyle.body(12)),
                 Opacity(
-                  opacity: presentation.launchAtLoginLoading ? 0.55 : 1,
+                  opacity:
+                      presentation.launchAtLoginLoading ||
+                          presentation.launchAtLoginHint != null
+                      ? 0.55
+                      : 1,
                   child: IgnorePointer(
-                    ignoring: presentation.launchAtLoginLoading,
+                    ignoring:
+                        presentation.launchAtLoginLoading ||
+                        presentation.launchAtLoginHint != null,
                     child: GreenToggle(
                       value: presentation.launchAtLoginEnabled,
                       onChanged: (v) => ref
@@ -523,6 +529,14 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                 ),
               ],
             ),
+            if (presentation.launchAtLoginHint != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                presentation.launchAtLoginHint!,
+                textAlign: TextAlign.center,
+                style: WrenflowStyle.caption(11),
+              ),
+            ],
           ],
         ],
       ),

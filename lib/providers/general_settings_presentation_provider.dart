@@ -32,6 +32,7 @@ class GeneralSettingsPresentation {
     required this.showLaunchAtLogin,
     required this.launchAtLoginEnabled,
     required this.launchAtLoginLoading,
+    required this.launchAtLoginHint,
     required this.microphones,
   });
 
@@ -45,6 +46,7 @@ class GeneralSettingsPresentation {
   final bool showLaunchAtLogin;
   final bool launchAtLoginEnabled;
   final bool launchAtLoginLoading;
+  final String? launchAtLoginHint;
   final List<MicrophoneOptionPresentation> microphones;
 }
 
@@ -95,6 +97,8 @@ final generalSettingsPresentationProvider =
         showLaunchAtLogin: shellCapabilities.launchAtLogin,
         launchAtLoginEnabled: launchAtLogin.enabled,
         launchAtLoginLoading: launchAtLogin.isLoading,
+        launchAtLoginHint:
+            launchAtLogin.unavailableReason ?? launchAtLogin.errorMessage,
         microphones: microphones,
       );
     });
