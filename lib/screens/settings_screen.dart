@@ -14,7 +14,6 @@ import 'package:wrenflow/providers/settings_provider.dart';
 import 'package:wrenflow/providers/update_provider.dart';
 import 'package:wrenflow/shell/shell_capabilities.dart';
 import 'package:wrenflow/services/app_version.dart';
-import 'package:wrenflow/services/update_service.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
 import 'package:wrenflow/theme/wrenflow_theme.dart';
 import 'package:wrenflow/widgets/green_toggle.dart';
@@ -875,7 +874,7 @@ class _AboutContent extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final updateAsync = ref.watch(updateProvider);
+    final updateState = ref.watch(updateProvider);
     final shellCapabilities = ref.watch(shellCapabilitiesProvider);
 
     return SingleChildScrollView(
@@ -915,8 +914,8 @@ class _AboutContent extends ConsumerWidget {
           if (shellCapabilities.updates) ...[
             SettingsCard(
               title: 'Updates',
-              child: updateAsync.when(
-                loading: () => Row(
+              child: switch (updateState.phase) {
+                UpdatePhase.checking => Row(
                   children: [
                     SizedBox(
                       width: 12,
@@ -933,20 +932,22 @@ class _AboutContent extends ConsumerWidget {
                     ),
                   ],
                 ),
-                error: (error, stackTrace) => _updateRow(
+                UpdatePhase.error => _updateRow(
                   'Could not check for updates',
                   actionLabel: 'Retry',
                   onAction: () => ref.read(updateProvider.notifier).checkNow(),
                 ),
-                data: (info) => info.isAvailable
-                    ? _updateAvailable(context, ref, info)
-                    : _updateRow(
-                        'You\'re up to date',
-                        actionLabel: 'Check now',
-                        onAction: () =>
-                            ref.read(updateProvider.notifier).checkNow(),
-                      ),
-              ),
+                UpdatePhase.available => _updateAvailable(
+                  context,
+                  ref,
+                  updateState,
+                ),
+                _ => _updateRow(
+                  'You\'re up to date',
+                  actionLabel: 'Check now',
+                  onAction: () => ref.read(updateProvider.notifier).checkNow(),
+                ),
+              },
             ),
             const SizedBox(height: 16),
           ],
@@ -972,7 +973,7 @@ class _AboutContent extends ConsumerWidget {
   Widget _updateAvailable(
     BuildContext context,
     WidgetRef ref,
-    UpdateInfo info,
+    UpdateState info,
   ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

@@ -97,6 +97,23 @@ pub enum AppSessionState {
     ShuttingDown,
 }
 
+#[derive(Serialize, Deserialize, SignalPiece, Clone, Debug, PartialEq, Eq)]
+pub enum UpdateStatus {
+    Unsupported,
+    Idle,
+    Checking,
+    UpToDate,
+    Available {
+        latest_version: String,
+        release_url: String,
+        download_url: String,
+        published_at_iso: Option<String>,
+    },
+    Error {
+        message: String,
+    },
+}
+
 #[derive(Serialize, Deserialize, SignalPiece, Clone, Debug)]
 pub struct LocalModelCatalogItem {
     pub id: String,
@@ -302,6 +319,26 @@ pub struct CompleteOnboarding;
 /// Dart → Rust: request application shutdown
 #[derive(Deserialize, DartSignal)]
 pub struct RequestQuit;
+
+// ============================================================================
+// Updates signals (bidirectional)
+// ============================================================================
+
+/// Rust → Dart: current updates snapshot
+#[derive(Serialize, RustSignal)]
+pub struct UpdatesSnapshotChanged {
+    pub status: UpdateStatus,
+}
+
+/// Dart → Rust: request current updates snapshot
+#[derive(Deserialize, DartSignal)]
+pub struct RequestUpdatesSnapshot;
+
+/// Dart → Rust: report the latest updater status observed by shell/UI layer
+#[derive(Deserialize, DartSignal)]
+pub struct ReportUpdatesStatus {
+    pub status: UpdateStatus,
+}
 
 // ============================================================================
 // Device signals (Rust → Dart)

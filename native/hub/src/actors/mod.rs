@@ -9,6 +9,7 @@ pub mod model_actor;
 pub mod paste_actor;
 pub mod permissions_actor;
 mod pipeline_actor;
+pub mod updates_actor;
 
 use audio_actor::{AudioActor, AudioEvent};
 use history_actor::HistoryActor;
@@ -70,6 +71,11 @@ pub async fn create_actors() {
     let audio_devices_for_actor = audio_devices_state.clone();
     spawn(async move {
         audio_devices_actor::run(audio_devices_for_actor).await;
+    });
+
+    // Updates actor
+    spawn(async {
+        updates_actor::run().await;
     });
 
     // TranscriptAction listener
