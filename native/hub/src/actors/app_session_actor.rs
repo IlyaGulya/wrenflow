@@ -1,6 +1,8 @@
 //! App session actor — owns the top-level application lifecycle FSM.
 
 use rinf::{DartSignal, RustSignal};
+use tokio::sync::watch;
+use wrenflow_domain::config::AppConfig;
 
 use crate::signals;
 
@@ -183,9 +185,15 @@ impl AppSessionRuntimeState {
         self.state = signals::AppSessionState::Onboarding { step: previous };
     }
 
-    fn complete_onboarding(&mut self) {
-        self.has_completed_setup = true;
+    fn set_has_completed_setup(&mut self, has_completed_setup: bool) {
+        self.has_completed_setup = has_completed_setup;
         self.bootstrapped = true;
+
+        if !has_completed_setup {
+            self.evaluate_bootstrap();
+            return;
+        }
+
         if self.has_permission_snapshot && self.all_permissions_granted() {
             self.state = signals::AppSessionState::Ready;
         } else if self.has_permission_snapshot {
@@ -207,13 +215,12 @@ fn send_snapshot(state: &AppSessionRuntimeState) {
     .send_signal_to_dart();
 }
 
-pub async fn run(has_completed_setup: bool) {
-    let mut state = AppSessionRuntimeState::new(has_completed_setup);
+pub async fn run(mut config_rx: watch::Receiver<AppConfig>) {
+    let mut state = AppSessionRuntimeState::new(config_rx.borrow().has_completed_setup);
     let request_recv = signals::RequestAppSessionSnapshot::get_dart_signal_receiver();
     let permissions_recv = signals::ReportPermissionsSnapshot::get_dart_signal_receiver();
     let next_recv = signals::AdvanceOnboarding::get_dart_signal_receiver();
     let back_recv = signals::RetreatOnboarding::get_dart_signal_receiver();
-    let complete_recv = signals::CompleteOnboarding::get_dart_signal_receiver();
     let quit_recv = signals::RequestQuit::get_dart_signal_receiver();
 
     state.evaluate_bootstrap();
@@ -236,8 +243,8 @@ pub async fn run(has_completed_setup: bool) {
                 state.onboarding_back();
                 send_snapshot(&state);
             }
-            Some(_) = complete_recv.recv() => {
-                state.complete_onboarding();
+            Ok(()) = config_rx.changed() => {
+                state.set_has_completed_setup(config_rx.borrow().has_completed_setup);
                 send_snapshot(&state);
             }
             Some(_) = quit_recv.recv() => {

@@ -105,15 +105,8 @@ impl PipelineActor {
         }
     }
 
-    pub fn handle_config_update(&mut self, c: signals::UpdateConfig) {
-        self.engine.update_config(AppConfig {
-            selected_hotkey: c.selected_hotkey,
-            selected_microphone_id: c.selected_microphone_id,
-            sound_enabled: c.sound_enabled,
-            custom_vocabulary: c.custom_vocabulary,
-            minimum_recording_duration_ms: c.minimum_recording_duration_ms,
-            ..AppConfig::default()
-        });
+    pub fn handle_config_update(&mut self, config: AppConfig) {
+        self.engine.update_config(config);
     }
 
     pub fn on_transcription_complete(&mut self, result: TranscriptionResult) {

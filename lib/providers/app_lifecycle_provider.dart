@@ -75,7 +75,6 @@ class AppLifecycleNotifier extends RustSnapshotNotifier<AppLifecycleState> {
 
   Future<void> completeOnboarding() async {
     await ref.read(settingsProvider.notifier).setHasCompletedSetup(true);
-    const sig.CompleteOnboarding().sendSignalToRust();
   }
 
   // ── Global actions ────────────────────────────────────────

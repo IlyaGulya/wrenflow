@@ -2,6 +2,8 @@
 
 use rinf::{DartSignal, RustSignal};
 use std::sync::{Arc, Mutex};
+use tokio::sync::watch;
+use wrenflow_domain::config::AppConfig;
 
 use crate::signals;
 
@@ -98,9 +100,8 @@ fn refresh_inventory(state: &SharedAudioDevicesState) {
     });
 }
 
-pub async fn run(state: SharedAudioDevicesState) {
+pub async fn run(state: SharedAudioDevicesState, mut config_rx: watch::Receiver<AppConfig>) {
     let request_recv = signals::RequestAudioDevicesSnapshot::get_dart_signal_receiver();
-    let config_recv = signals::UpdateConfig::get_dart_signal_receiver();
 
     refresh_inventory(&state);
 
@@ -109,8 +110,9 @@ pub async fn run(state: SharedAudioDevicesState) {
             Some(_) = request_recv.recv() => {
                 refresh_inventory(&state);
             }
-            Some(pack) = config_recv.recv() => {
-                set_selected_device_id(&state, pack.message.selected_microphone_id);
+            Ok(()) = config_rx.changed() => {
+                let selected_device_id = config_rx.borrow().selected_microphone_id.clone();
+                set_selected_device_id(&state, selected_device_id);
             }
             else => break,
         }

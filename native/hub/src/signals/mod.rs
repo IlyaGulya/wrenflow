@@ -203,15 +203,6 @@ pub struct StopRecording {
     pub duration_ms: f64,
 }
 
-#[derive(Deserialize, DartSignal)]
-pub struct UpdateConfig {
-    pub selected_hotkey: String,
-    pub selected_microphone_id: String,
-    pub sound_enabled: bool,
-    pub custom_vocabulary: String,
-    pub minimum_recording_duration_ms: f64,
-}
-
 /// Dart → Rust: set what happens after transcription
 #[derive(Deserialize, DartSignal)]
 pub struct SetTranscriptAction {
@@ -232,10 +223,46 @@ pub struct SettingsSnapshotChanged {
 #[derive(Deserialize, DartSignal)]
 pub struct RequestSettingsSnapshot;
 
-/// Dart → Rust: replace the persisted settings snapshot
+/// Dart → Rust: update preferred local model id
 #[derive(Deserialize, DartSignal)]
-pub struct UpdateSettingsSnapshot {
-    pub snapshot: SettingsSnapshot,
+pub struct SelectLocalModel {
+    pub model_id: String,
+}
+
+/// Dart → Rust: update selected hotkey
+#[derive(Deserialize, DartSignal)]
+pub struct SetSelectedHotkey {
+    pub selected_hotkey: String,
+}
+
+/// Dart → Rust: update selected microphone device id
+#[derive(Deserialize, DartSignal)]
+pub struct SetSelectedMicrophoneId {
+    pub selected_microphone_id: String,
+}
+
+/// Dart → Rust: update sound effects preference
+#[derive(Deserialize, DartSignal)]
+pub struct SetSoundEnabled {
+    pub sound_enabled: bool,
+}
+
+/// Dart → Rust: update custom vocabulary
+#[derive(Deserialize, DartSignal)]
+pub struct SetCustomVocabulary {
+    pub custom_vocabulary: String,
+}
+
+/// Dart → Rust: update minimum recording duration threshold
+#[derive(Deserialize, DartSignal)]
+pub struct SetMinimumRecordingDurationMs {
+    pub minimum_recording_duration_ms: f64,
+}
+
+/// Dart → Rust: update onboarding completion flag
+#[derive(Deserialize, DartSignal)]
+pub struct SetHasCompletedSetup {
+    pub has_completed_setup: bool,
 }
 
 // ============================================================================
@@ -299,12 +326,6 @@ pub struct InitializeLocalModel;
 #[derive(Deserialize, DartSignal)]
 pub struct RequestLocalModelsSnapshot;
 
-/// Dart → Rust: select which local model should be active
-#[derive(Deserialize, DartSignal)]
-pub struct SelectLocalModel {
-    pub model_id: String,
-}
-
 /// Dart → Rust: cancel model download
 #[derive(Deserialize, DartSignal)]
 pub struct CancelModelDownload;
@@ -359,10 +380,6 @@ pub struct AdvanceOnboarding;
 /// Dart → Rust: move onboarding back
 #[derive(Deserialize, DartSignal)]
 pub struct RetreatOnboarding;
-
-/// Dart → Rust: mark onboarding complete
-#[derive(Deserialize, DartSignal)]
-pub struct CompleteOnboarding;
 
 /// Dart → Rust: request application shutdown
 #[derive(Deserialize, DartSignal)]

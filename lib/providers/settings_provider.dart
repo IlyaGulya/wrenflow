@@ -44,28 +44,6 @@ class AppSettings {
     );
   }
 
-  UpdateConfig toUpdateConfig() {
-    return UpdateConfig(
-      selectedHotkey: selectedHotkey,
-      selectedMicrophoneId: selectedMicrophoneId,
-      soundEnabled: soundEnabled,
-      customVocabulary: customVocabulary,
-      minimumRecordingDurationMs: minimumRecordingDurationMs,
-    );
-  }
-
-  SettingsSnapshot toSignalSnapshot() {
-    return SettingsSnapshot(
-      selectedLocalModelId: selectedLocalModelId,
-      selectedHotkey: selectedHotkey,
-      selectedMicrophoneId: selectedMicrophoneId,
-      soundEnabled: soundEnabled,
-      customVocabulary: customVocabulary,
-      minimumRecordingDurationMs: minimumRecordingDurationMs,
-      hasCompletedSetup: hasCompletedSetup,
-    );
-  }
-
   static AppSettings fromSignalSnapshot(SettingsSnapshot snapshot) {
     return AppSettings(
       selectedLocalModelId: snapshot.selectedLocalModelId,
@@ -101,52 +79,54 @@ class SettingsNotifier extends RustSnapshotNotifier<AppSettings> {
     };
   }
 
-  void _persistSnapshot(AppSettings nextState) {
-    UpdateSettingsSnapshot(
-      snapshot: nextState.toSignalSnapshot(),
-    ).sendSignalToRust();
-  }
-
-  void _syncRuntime(AppSettings snapshot) {
-    SelectLocalModel(modelId: snapshot.selectedLocalModelId).sendSignalToRust();
-    snapshot.toUpdateConfig().sendSignalToRust();
-  }
-
-  Future<void> _updateAndSync(
-    AppSettings nextState, {
-    bool syncRuntime = true,
-  }) async {
+  Future<void> _updateAndSend(
+    AppSettings nextState,
+    void Function() sendSignal,
+  ) async {
     state = nextState;
-    _persistSnapshot(nextState);
-    if (syncRuntime) {
-      _syncRuntime(nextState);
-    }
+    sendSignal();
   }
 
-  Future<void> setSelectedLocalModelId(String value) =>
-      _updateAndSync(state.copyWith(selectedLocalModelId: value));
-
-  Future<void> setSelectedHotkey(String value) =>
-      _updateAndSync(state.copyWith(selectedHotkey: _normalizeHotkey(value)));
-
-  Future<void> setSelectedMicrophoneId(String value) =>
-      _updateAndSync(state.copyWith(selectedMicrophoneId: value));
-
-  Future<void> setSoundEnabled(bool value) =>
-      _updateAndSync(state.copyWith(soundEnabled: value));
-
-  Future<void> setCustomVocabulary(String value) =>
-      _updateAndSync(state.copyWith(customVocabulary: value));
-
-  Future<void> setMinimumRecordingDurationMs(double value) =>
-      _updateAndSync(state.copyWith(minimumRecordingDurationMs: value));
-
-  Future<void> setHasCompletedSetup(bool value) => _updateAndSync(
-    state.copyWith(hasCompletedSetup: value),
-    syncRuntime: false,
+  Future<void> setSelectedLocalModelId(String value) => _updateAndSend(
+    state.copyWith(selectedLocalModelId: value),
+    () => SelectLocalModel(modelId: value).sendSignalToRust(),
   );
 
-  void syncRuntime() => _syncRuntime(state);
+  Future<void> setSelectedHotkey(String value) {
+    final normalized = _normalizeHotkey(value);
+    return _updateAndSend(
+      state.copyWith(selectedHotkey: normalized),
+      () => SetSelectedHotkey(selectedHotkey: normalized).sendSignalToRust(),
+    );
+  }
+
+  Future<void> setSelectedMicrophoneId(String value) => _updateAndSend(
+    state.copyWith(selectedMicrophoneId: value),
+    () =>
+        SetSelectedMicrophoneId(selectedMicrophoneId: value).sendSignalToRust(),
+  );
+
+  Future<void> setSoundEnabled(bool value) => _updateAndSend(
+    state.copyWith(soundEnabled: value),
+    () => SetSoundEnabled(soundEnabled: value).sendSignalToRust(),
+  );
+
+  Future<void> setCustomVocabulary(String value) => _updateAndSend(
+    state.copyWith(customVocabulary: value),
+    () => SetCustomVocabulary(customVocabulary: value).sendSignalToRust(),
+  );
+
+  Future<void> setMinimumRecordingDurationMs(double value) => _updateAndSend(
+    state.copyWith(minimumRecordingDurationMs: value),
+    () => SetMinimumRecordingDurationMs(
+      minimumRecordingDurationMs: value,
+    ).sendSignalToRust(),
+  );
+
+  Future<void> setHasCompletedSetup(bool value) => _updateAndSend(
+    state.copyWith(hasCompletedSetup: value),
+    () => SetHasCompletedSetup(hasCompletedSetup: value).sendSignalToRust(),
+  );
 }
 
 final settingsProvider = NotifierProvider<SettingsNotifier, AppSettings>(

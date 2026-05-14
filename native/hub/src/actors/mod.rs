@@ -33,6 +33,7 @@ static SHOULD_PASTE: AtomicBool = AtomicBool::new(false);
 
 pub async fn create_actors() {
     let initial_config = settings_actor::load_initial_config();
+    let settings_runtime = settings_actor::shared_runtime(initial_config.clone());
     let engine_handle = model_actor::shared_engine();
     let audio_devices_state = audio_devices_actor::shared_state();
     audio_devices_actor::set_selected_device_id(
@@ -65,8 +66,9 @@ pub async fn create_actors() {
     // Model actor
     let model_engine = engine_handle.clone();
     let initial_selected_model_id = initial_config.selected_local_model_id.clone();
+    let model_config_rx = settings_actor::subscribe(&settings_runtime);
     spawn(async move {
-        model_actor::run(model_engine, initial_selected_model_id).await;
+        model_actor::run(model_engine, initial_selected_model_id, model_config_rx).await;
     });
 
     // Permissions actor
@@ -75,15 +77,16 @@ pub async fn create_actors() {
     });
 
     // App session actor
-    let has_completed_setup = initial_config.has_completed_setup;
+    let app_session_config_rx = settings_actor::subscribe(&settings_runtime);
     spawn(async move {
-        app_session_actor::run(has_completed_setup).await;
+        app_session_actor::run(app_session_config_rx).await;
     });
 
     // Audio devices snapshot actor
     let audio_devices_for_actor = audio_devices_state.clone();
+    let audio_devices_config_rx = settings_actor::subscribe(&settings_runtime);
     spawn(async move {
-        audio_devices_actor::run(audio_devices_for_actor).await;
+        audio_devices_actor::run(audio_devices_for_actor, audio_devices_config_rx).await;
     });
 
     // Updates actor
@@ -102,8 +105,9 @@ pub async fn create_actors() {
     });
 
     // Settings actor
+    let settings_runtime_for_actor = settings_runtime.clone();
     spawn(async move {
-        settings_actor::run(initial_config).await;
+        settings_actor::run(settings_runtime_for_actor).await;
     });
 
     // TranscriptAction listener
@@ -119,9 +123,8 @@ pub async fn create_actors() {
     // Main loop: hotkey + audio events drive the pipeline
     let transcription_engine = engine_handle.clone();
     let audio_devices_for_loop = audio_devices_state.clone();
+    let mut config_rx = settings_actor::subscribe(&settings_runtime);
     spawn(async move {
-        let config_recv = signals::UpdateConfig::get_dart_signal_receiver();
-
         loop {
             tokio::select! {
                 Some(event) = hotkey.recv() => {
@@ -248,14 +251,15 @@ pub async fn create_actors() {
                         AudioEvent::RecordingComplete(_) => {}
                     }
                 }
-                Some(pack) = config_recv.recv() => {
-                    let kc = hotkey_actor::keycode_from_name(&pack.message.selected_hotkey);
+                Ok(()) = config_rx.changed() => {
+                    let current_config = config_rx.borrow().clone();
+                    let kc = hotkey_actor::keycode_from_name(&current_config.selected_hotkey);
                     hotkey.set_keycode(kc);
                     audio_devices_actor::set_selected_device_id(
                         &audio_devices_for_loop,
-                        pack.message.selected_microphone_id.clone(),
+                        current_config.selected_microphone_id.clone(),
                     );
-                    pipeline.handle_config_update(pack.message);
+                    pipeline.handle_config_update(current_config.clone());
                 }
                 // Wake up to check init/indicator timers during active recording.
                 _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}

@@ -7,12 +7,14 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use tokio::sync::watch;
 use wrenflow_core::model_downloader;
 use wrenflow_core::model_management::{
     DownloadProgress, LocalModelState, ModelDownloadListener, all_local_model_catalog_entries,
     all_local_models, local_model_by_id,
 };
 use wrenflow_core::transcription_local::LocalTranscriptionEngine;
+use wrenflow_domain::config::AppConfig;
 
 use crate::signals;
 
@@ -198,10 +200,13 @@ fn set_model_state(
 }
 
 /// Run the model actor. Stores loaded engine in `engine_handle`.
-pub async fn run(engine_handle: SharedTranscriptionEngine, initial_selected_model_id: String) {
+pub async fn run(
+    engine_handle: SharedTranscriptionEngine,
+    initial_selected_model_id: String,
+    mut config_rx: watch::Receiver<AppConfig>,
+) {
     let init_recv = signals::InitializeLocalModel::get_dart_signal_receiver();
     let snapshot_recv = signals::RequestLocalModelsSnapshot::get_dart_signal_receiver();
-    let select_recv = signals::SelectLocalModel::get_dart_signal_receiver();
     let cancel_recv = signals::CancelModelDownload::get_dart_signal_receiver();
     let cancel_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let snapshot: SharedLocalModelsSnapshot = Arc::new(Mutex::new(LocalModelsRuntimeState::new(
@@ -228,9 +233,8 @@ pub async fn run(engine_handle: SharedTranscriptionEngine, initial_selected_mode
             Some(_) = snapshot_recv.recv() => {
                 send_models_snapshot(&snapshot);
             }
-            Some(pack) = select_recv.recv() => {
-                let model_id = pack.message.model_id;
-                log::info!("Selected local model: {model_id}");
+            Ok(()) = config_rx.changed() => {
+                let model_id = config_rx.borrow().selected_local_model_id.clone();
                 update_models_snapshot(&snapshot, |runtime| {
                     runtime.selected_model_id = model_id;
                 });
