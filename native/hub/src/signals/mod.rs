@@ -83,14 +83,10 @@ pub struct LaunchAtLoginSnapshot {
 #[derive(Serialize, Deserialize, SignalPiece, Clone, Debug)]
 pub struct SettingsSnapshot {
     pub selected_local_model_id: String,
-    pub api_key: String,
-    pub api_base_url: String,
     pub selected_hotkey: String,
     pub selected_microphone_id: String,
     pub sound_enabled: bool,
     pub custom_vocabulary: String,
-    pub transcription_provider: String,
-    pub transcription_model: String,
     pub minimum_recording_duration_ms: f64,
     pub has_completed_setup: bool,
 }

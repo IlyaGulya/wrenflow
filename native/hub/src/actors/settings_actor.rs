@@ -11,14 +11,10 @@ const APP_NAME: &str = "Wrenflow";
 fn config_to_snapshot(config: &AppConfig) -> signals::SettingsSnapshot {
     signals::SettingsSnapshot {
         selected_local_model_id: config.selected_local_model_id.clone(),
-        api_key: config.api_key.clone(),
-        api_base_url: config.api_base_url.clone(),
         selected_hotkey: config.selected_hotkey.clone(),
         selected_microphone_id: config.selected_microphone_id.clone(),
         sound_enabled: config.sound_enabled,
         custom_vocabulary: config.custom_vocabulary.clone(),
-        transcription_provider: config.transcription_provider.clone(),
-        transcription_model: config.transcription_model.clone(),
         minimum_recording_duration_ms: config.minimum_recording_duration_ms,
         has_completed_setup: config.has_completed_setup,
     }
@@ -32,10 +28,6 @@ fn snapshot_to_config(snapshot: &signals::SettingsSnapshot) -> AppConfig {
         selected_microphone_id: snapshot.selected_microphone_id.clone(),
         selected_local_model_id: snapshot.selected_local_model_id.clone(),
         sound_enabled: snapshot.sound_enabled,
-        api_key: snapshot.api_key.clone(),
-        api_base_url: snapshot.api_base_url.clone(),
-        transcription_provider: snapshot.transcription_provider.clone(),
-        transcription_model: snapshot.transcription_model.clone(),
         has_completed_setup: snapshot.has_completed_setup,
     }
 }
