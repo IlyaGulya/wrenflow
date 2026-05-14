@@ -57,13 +57,11 @@ Future<void> main(List<String> args) async {
 Future<void> _initializeApp(ProviderContainer container) async {
   await AppVersion.load();
 
-  final settingsNotifier = container.read(settingsProvider.notifier);
-  await settingsNotifier.load();
-  settingsNotifier.syncToRust();
+  container.read(settingsProvider);
   await container.read(launchAtLoginProvider.notifier).refresh();
 
-  // Initialize system tray after settings are ready, so menu state and
-  // device selection start from persisted values.
+  // Initialize system tray after the settings snapshot subscription is active,
+  // so fallback values resolve from the Rust-owned config if needed.
   final tray = SystemTrayManager(container);
   await tray.init();
 

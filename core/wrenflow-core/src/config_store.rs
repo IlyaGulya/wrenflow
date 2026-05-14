@@ -90,13 +90,14 @@ mod tests {
         store.save(&config).unwrap();
         let loaded = store.load().unwrap();
         assert!(loaded.sound_enabled);
-        assert_eq!(loaded.selected_hotkey, "fn");
+        assert_eq!(loaded.selected_hotkey, "61");
+        assert_eq!(loaded.selected_local_model_id, "parakeet-tdt-0.6b-v3-onnx");
     }
 
     #[test]
     fn load_or_default_missing_file() {
         let store = ConfigStore::new(PathBuf::from("/nonexistent/config.json"));
         let config = store.load_or_default();
-        assert_eq!(config.minimum_recording_duration_ms, 200.0);
+        assert_eq!(config.minimum_recording_duration_ms, 300.0);
     }
 }

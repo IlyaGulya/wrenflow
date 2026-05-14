@@ -10,6 +10,7 @@ pub mod model_actor;
 pub mod paste_actor;
 pub mod permissions_actor;
 mod pipeline_actor;
+pub mod settings_actor;
 pub mod shell_capabilities_actor;
 mod snapshot_mirror;
 pub mod updates_actor;
@@ -31,11 +32,18 @@ use crate::signals;
 static SHOULD_PASTE: AtomicBool = AtomicBool::new(false);
 
 pub async fn create_actors() {
+    let initial_config = settings_actor::load_initial_config();
     let engine_handle = model_actor::shared_engine();
     let audio_devices_state = audio_devices_actor::shared_state();
+    audio_devices_actor::set_selected_device_id(
+        &audio_devices_state,
+        initial_config.selected_microphone_id.clone(),
+    );
 
     let mut audio = AudioActor::new();
-    let mut hotkey = HotkeyActor::new(hotkey_actor::keycode_from_name("rightOption"));
+    let mut hotkey = HotkeyActor::new(hotkey_actor::keycode_from_name(
+        &initial_config.selected_hotkey,
+    ));
 
     // History actor
     let history_path = history_actor::default_history_path();
@@ -52,12 +60,13 @@ pub async fn create_actors() {
         }
     };
 
-    let mut pipeline = PipelineActor::new(history_insert_tx);
+    let mut pipeline = PipelineActor::new(history_insert_tx, initial_config.clone());
 
     // Model actor
     let model_engine = engine_handle.clone();
+    let initial_selected_model_id = initial_config.selected_local_model_id.clone();
     spawn(async move {
-        model_actor::run(model_engine).await;
+        model_actor::run(model_engine, initial_selected_model_id).await;
     });
 
     // Permissions actor
@@ -66,8 +75,9 @@ pub async fn create_actors() {
     });
 
     // App session actor
-    spawn(async {
-        app_session_actor::run().await;
+    let has_completed_setup = initial_config.has_completed_setup;
+    spawn(async move {
+        app_session_actor::run(has_completed_setup).await;
     });
 
     // Audio devices snapshot actor
@@ -89,6 +99,11 @@ pub async fn create_actors() {
     // Launch-at-login actor
     spawn(async {
         launch_at_login_actor::run().await;
+    });
+
+    // Settings actor
+    spawn(async move {
+        settings_actor::run(initial_config).await;
     });
 
     // TranscriptAction listener

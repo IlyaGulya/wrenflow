@@ -1,23 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
 
-/// Keys used for shared_preferences storage.
-class _SettingsKeys {
-  static const apiKey = 'settings_api_key';
-  static const apiBaseUrl = 'settings_api_base_url';
-  static const selectedHotkey = 'settings_selected_hotkey';
-  static const selectedMicrophoneId = 'settings_selected_microphone_id';
-  static const selectedLocalModelId = 'settings_selected_local_model_id';
-  static const soundEnabled = 'settings_sound_enabled';
-  static const customVocabulary = 'settings_custom_vocabulary';
-  static const transcriptionProvider = 'settings_transcription_provider';
-  static const transcriptionModel = 'settings_transcription_model';
-  static const minimumRecordingDurationMs =
-      'settings_minimum_recording_duration_ms';
-}
+import 'rust_snapshot_bridge.dart';
 
-/// App settings state, mirrors the fields in UpdateConfig signal.
+/// App settings state mirrored from the Rust-owned persisted config.
 class AppSettings {
   const AppSettings({
     this.selectedLocalModelId = 'parakeet-tdt-0.6b-v3-onnx',
@@ -30,12 +16,10 @@ class AppSettings {
     this.transcriptionProvider = 'groq',
     this.transcriptionModel = 'whisper-large-v3-turbo',
     this.minimumRecordingDurationMs = 300.0,
+    this.hasCompletedSetup = false,
   });
 
   final String selectedLocalModelId;
-
-  /// Legacy cloud-era config. Keep only for migration compatibility until
-  /// remote provider support is intentionally redesigned.
   final String apiKey;
   final String apiBaseUrl;
   final String selectedHotkey;
@@ -45,6 +29,7 @@ class AppSettings {
   final String transcriptionProvider;
   final String transcriptionModel;
   final double minimumRecordingDurationMs;
+  final bool hasCompletedSetup;
 
   AppSettings copyWith({
     String? selectedLocalModelId,
@@ -57,6 +42,7 @@ class AppSettings {
     String? transcriptionProvider,
     String? transcriptionModel,
     double? minimumRecordingDurationMs,
+    bool? hasCompletedSetup,
   }) {
     return AppSettings(
       selectedLocalModelId: selectedLocalModelId ?? this.selectedLocalModelId,
@@ -71,10 +57,10 @@ class AppSettings {
       transcriptionModel: transcriptionModel ?? this.transcriptionModel,
       minimumRecordingDurationMs:
           minimumRecordingDurationMs ?? this.minimumRecordingDurationMs,
+      hasCompletedSetup: hasCompletedSetup ?? this.hasCompletedSetup,
     );
   }
 
-  /// Convert to the rinf UpdateConfig signal for sending to Rust.
   UpdateConfig toUpdateConfig() {
     return UpdateConfig(
       selectedHotkey: selectedHotkey,
@@ -84,19 +70,51 @@ class AppSettings {
       minimumRecordingDurationMs: minimumRecordingDurationMs,
     );
   }
+
+  SettingsSnapshot toSignalSnapshot() {
+    return SettingsSnapshot(
+      selectedLocalModelId: selectedLocalModelId,
+      apiKey: apiKey,
+      apiBaseUrl: apiBaseUrl,
+      selectedHotkey: selectedHotkey,
+      selectedMicrophoneId: selectedMicrophoneId,
+      soundEnabled: soundEnabled,
+      customVocabulary: customVocabulary,
+      transcriptionProvider: transcriptionProvider,
+      transcriptionModel: transcriptionModel,
+      minimumRecordingDurationMs: minimumRecordingDurationMs,
+      hasCompletedSetup: hasCompletedSetup,
+    );
+  }
+
+  static AppSettings fromSignalSnapshot(SettingsSnapshot snapshot) {
+    return AppSettings(
+      selectedLocalModelId: snapshot.selectedLocalModelId,
+      apiKey: snapshot.apiKey,
+      apiBaseUrl: snapshot.apiBaseUrl,
+      selectedHotkey: snapshot.selectedHotkey,
+      selectedMicrophoneId: snapshot.selectedMicrophoneId,
+      soundEnabled: snapshot.soundEnabled,
+      customVocabulary: snapshot.customVocabulary,
+      transcriptionProvider: snapshot.transcriptionProvider,
+      transcriptionModel: snapshot.transcriptionModel,
+      minimumRecordingDurationMs: snapshot.minimumRecordingDurationMs,
+      hasCompletedSetup: snapshot.hasCompletedSetup,
+    );
+  }
 }
 
-/// Manages app settings with persistence via shared_preferences.
-/// Automatically sends UpdateConfig to Rust when settings change.
-class SettingsNotifier extends Notifier<AppSettings> {
-  SharedPreferences? _prefs;
-
+class SettingsNotifier extends RustSnapshotNotifier<AppSettings> {
   @override
   AppSettings build() {
+    bindRustSnapshotState<SettingsSnapshotChanged>(
+      requestSnapshot: () => const RequestSettingsSnapshot().sendSignalToRust(),
+      signalStream: SettingsSnapshotChanged.rustSignalStream,
+      map: (message) => AppSettings.fromSignalSnapshot(message.snapshot),
+    );
     return const AppSettings();
   }
 
-  /// Normalize legacy hotkey names to keycode strings.
   static String _normalizeHotkey(String value) {
     return switch (value) {
       'fn' || 'fnKey' => '63',
@@ -108,82 +126,33 @@ class SettingsNotifier extends Notifier<AppSettings> {
     };
   }
 
-  /// Load saved settings from shared_preferences.
-  Future<void> load() async {
-    _prefs = await SharedPreferences.getInstance();
-    state = AppSettings(
-      selectedLocalModelId:
-          _prefs!.getString(_SettingsKeys.selectedLocalModelId) ??
-          'parakeet-tdt-0.6b-v3-onnx',
-      apiKey: _prefs!.getString(_SettingsKeys.apiKey) ?? '',
-      apiBaseUrl:
-          _prefs!.getString(_SettingsKeys.apiBaseUrl) ??
-          'https://api.groq.com/openai/v1',
-      selectedHotkey: _normalizeHotkey(
-        _prefs!.getString(_SettingsKeys.selectedHotkey) ?? '61',
-      ),
-      selectedMicrophoneId:
-          _prefs!.getString(_SettingsKeys.selectedMicrophoneId) ?? 'default',
-      soundEnabled: _prefs!.getBool(_SettingsKeys.soundEnabled) ?? true,
-      customVocabulary: _prefs!.getString(_SettingsKeys.customVocabulary) ?? '',
-      transcriptionProvider:
-          _prefs!.getString(_SettingsKeys.transcriptionProvider) ?? 'groq',
-      transcriptionModel:
-          _prefs!.getString(_SettingsKeys.transcriptionModel) ??
-          'whisper-large-v3-turbo',
-      minimumRecordingDurationMs:
-          _prefs!.getDouble(_SettingsKeys.minimumRecordingDurationMs) ?? 300.0,
-    );
+  void _persistSnapshot(AppSettings nextState) {
+    UpdateSettingsSnapshot(
+      snapshot: nextState.toSignalSnapshot(),
+    ).sendSignalToRust();
   }
 
-  Future<void> _save() async {
-    final prefs = _prefs ?? await SharedPreferences.getInstance();
-    _prefs = prefs;
-    await Future.wait([
-      prefs.setString(
-        _SettingsKeys.selectedLocalModelId,
-        state.selectedLocalModelId,
-      ),
-      prefs.setString(_SettingsKeys.apiKey, state.apiKey),
-      prefs.setString(_SettingsKeys.apiBaseUrl, state.apiBaseUrl),
-      prefs.setString(_SettingsKeys.selectedHotkey, state.selectedHotkey),
-      prefs.setString(
-        _SettingsKeys.selectedMicrophoneId,
-        state.selectedMicrophoneId,
-      ),
-      prefs.setBool(_SettingsKeys.soundEnabled, state.soundEnabled),
-      prefs.setString(_SettingsKeys.customVocabulary, state.customVocabulary),
-      prefs.setString(
-        _SettingsKeys.transcriptionProvider,
-        state.transcriptionProvider,
-      ),
-      prefs.setString(
-        _SettingsKeys.transcriptionModel,
-        state.transcriptionModel,
-      ),
-      prefs.setDouble(
-        _SettingsKeys.minimumRecordingDurationMs,
-        state.minimumRecordingDurationMs,
-      ),
-    ]);
+  void _syncRuntime(AppSettings snapshot) {
+    SelectLocalModel(modelId: snapshot.selectedLocalModelId).sendSignalToRust();
+    snapshot.toUpdateConfig().sendSignalToRust();
   }
 
-  void _syncToRust() {
-    SelectLocalModel(modelId: state.selectedLocalModelId).sendSignalToRust();
-    state.toUpdateConfig().sendSignalToRust();
-  }
-
-  Future<void> _updateAndSync(AppSettings newState) async {
-    state = newState;
-    await _save();
-    _syncToRust();
+  Future<void> _updateAndSync(
+    AppSettings nextState, {
+    bool syncRuntime = true,
+  }) async {
+    state = nextState;
+    _persistSnapshot(nextState);
+    if (syncRuntime) {
+      _syncRuntime(nextState);
+    }
   }
 
   Future<void> setApiKey(String value) =>
-      _updateAndSync(state.copyWith(apiKey: value));
+      _updateAndSync(state.copyWith(apiKey: value), syncRuntime: false);
 
   Future<void> setApiBaseUrl(String value) =>
-      _updateAndSync(state.copyWith(apiBaseUrl: value));
+      _updateAndSync(state.copyWith(apiBaseUrl: value), syncRuntime: false);
 
   Future<void> setSelectedLocalModelId(String value) =>
       _updateAndSync(state.copyWith(selectedLocalModelId: value));
@@ -200,17 +169,25 @@ class SettingsNotifier extends Notifier<AppSettings> {
   Future<void> setCustomVocabulary(String value) =>
       _updateAndSync(state.copyWith(customVocabulary: value));
 
-  Future<void> setTranscriptionProvider(String value) =>
-      _updateAndSync(state.copyWith(transcriptionProvider: value));
+  Future<void> setTranscriptionProvider(String value) => _updateAndSync(
+    state.copyWith(transcriptionProvider: value),
+    syncRuntime: false,
+  );
 
-  Future<void> setTranscriptionModel(String value) =>
-      _updateAndSync(state.copyWith(transcriptionModel: value));
+  Future<void> setTranscriptionModel(String value) => _updateAndSync(
+    state.copyWith(transcriptionModel: value),
+    syncRuntime: false,
+  );
 
   Future<void> setMinimumRecordingDurationMs(double value) =>
       _updateAndSync(state.copyWith(minimumRecordingDurationMs: value));
 
-  /// Send the current settings to Rust without changing them.
-  void syncToRust() => _syncToRust();
+  Future<void> setHasCompletedSetup(bool value) => _updateAndSync(
+    state.copyWith(hasCompletedSetup: value),
+    syncRuntime: false,
+  );
+
+  void syncRuntime() => _syncRuntime(state);
 }
 
 final settingsProvider = NotifierProvider<SettingsNotifier, AppSettings>(

@@ -39,6 +39,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   String _selectedHotkey = '61';
   final _vocabularyController = TextEditingController();
   final _autoRequested = <OnboardingStep>{};
+  String? _lastSyncedHotkey;
+  String? _lastSyncedVocabulary;
 
   @override
   void dispose() {
@@ -51,6 +53,27 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
 
   PermissionsNotifier get _permissions =>
       ref.read(permissionsProvider.notifier);
+
+  void _hydrateSettings(AppSettings settings) {
+    final hotkeyWasEdited =
+        _lastSyncedHotkey != null && _selectedHotkey != _lastSyncedHotkey;
+    if (!hotkeyWasEdited) {
+      _selectedHotkey = settings.selectedHotkey;
+      _lastSyncedHotkey = settings.selectedHotkey;
+    }
+
+    final vocabularyWasEdited =
+        _lastSyncedVocabulary != null &&
+        _vocabularyController.text != _lastSyncedVocabulary;
+    if (!vocabularyWasEdited) {
+      final text = settings.customVocabulary;
+      _vocabularyController.value = TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: text.length),
+      );
+      _lastSyncedVocabulary = text;
+    }
+  }
 
   /// Whether the user can advance past the given step.
   /// Permission steps block until permission is granted.
@@ -78,6 +101,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   Widget build(BuildContext context) {
     final lifecycle = ref.watch(appLifecycleProvider);
     final permissions = ref.watch(permissionsProvider);
+    final settings = ref.watch(settingsProvider);
 
     // Recovery mode — auto-returns via provider, just show permission steps.
     if (widget.mode == WizardMode.recovery && lifecycle is PermissionRecovery) {
@@ -89,6 +113,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         ? lifecycle.currentStep
         : OnboardingStep.microphone;
 
+    _hydrateSettings(settings);
     _handleAutoAdvance(permissions, currentStep);
     _syncSettingsIfNeeded(currentStep);
 
@@ -423,7 +448,10 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       subtitle: 'Hold to record, release to transcribe and paste.',
       child: HotkeyCapture(
         currentValue: _selectedHotkey,
-        onKeySelected: (value) => setState(() => _selectedHotkey = value),
+        onKeySelected: (value) => setState(() {
+          _selectedHotkey = value;
+          _lastSyncedHotkey = value;
+        }),
       ),
     );
   }

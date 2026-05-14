@@ -18,11 +18,11 @@ struct AppSessionRuntimeState {
 }
 
 impl AppSessionRuntimeState {
-    fn new() -> Self {
+    fn new(has_completed_setup: bool) -> Self {
         Self {
             state: signals::AppSessionState::Initializing,
-            bootstrapped: false,
-            has_completed_setup: false,
+            bootstrapped: true,
+            has_completed_setup,
             has_permission_snapshot: false,
             microphone: signals::PermissionStatus::Unknown,
             accessibility: signals::PermissionStatus::Unknown,
@@ -207,27 +207,21 @@ fn send_snapshot(state: &AppSessionRuntimeState) {
     .send_signal_to_dart();
 }
 
-pub async fn run() {
-    let mut state = AppSessionRuntimeState::new();
+pub async fn run(has_completed_setup: bool) {
+    let mut state = AppSessionRuntimeState::new(has_completed_setup);
     let request_recv = signals::RequestAppSessionSnapshot::get_dart_signal_receiver();
-    let bootstrap_recv = signals::BootstrapAppSession::get_dart_signal_receiver();
     let permissions_recv = signals::ReportPermissionsSnapshot::get_dart_signal_receiver();
     let next_recv = signals::AdvanceOnboarding::get_dart_signal_receiver();
     let back_recv = signals::RetreatOnboarding::get_dart_signal_receiver();
     let complete_recv = signals::CompleteOnboarding::get_dart_signal_receiver();
     let quit_recv = signals::RequestQuit::get_dart_signal_receiver();
 
+    state.evaluate_bootstrap();
     send_snapshot(&state);
 
     loop {
         tokio::select! {
             Some(_) = request_recv.recv() => {
-                send_snapshot(&state);
-            }
-            Some(pack) = bootstrap_recv.recv() => {
-                state.bootstrapped = true;
-                state.has_completed_setup = pack.message.has_completed_setup;
-                state.evaluate_bootstrap();
                 send_snapshot(&state);
             }
             Some(pack) = permissions_recv.recv() => {

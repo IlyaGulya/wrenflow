@@ -76,9 +76,12 @@ pub struct PipelineActor {
 }
 
 impl PipelineActor {
-    pub fn new(history_tx: Option<super::history_actor::HistoryInsertSender>) -> Self {
+    pub fn new(
+        history_tx: Option<super::history_actor::HistoryInsertSender>,
+        config: AppConfig,
+    ) -> Self {
         Self {
-            engine: PipelineEngine::new(AppConfig::default()),
+            engine: PipelineEngine::new(config),
             listener: SignalListener { history_tx },
             init_deadline: None,
             indicator_deadline: None,
@@ -109,6 +112,7 @@ impl PipelineActor {
             sound_enabled: c.sound_enabled,
             custom_vocabulary: c.custom_vocabulary,
             minimum_recording_duration_ms: c.minimum_recording_duration_ms,
+            ..AppConfig::default()
         });
     }
 

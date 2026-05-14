@@ -1,15 +1,11 @@
-import 'dart:async';
-
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
+import '../providers/settings_provider.dart';
 import '../screens/settings_screen.dart';
 import '../src/bindings/signals/signals.dart' as sig;
 import '../state/app_lifecycle_state.dart';
 import 'rust_snapshot_bridge.dart';
-
-const _kHasCompletedSetup = 'has_completed_setup';
 
 /// Projects the Rust-owned app session FSM into Flutter and forwards user
 /// intents back to Rust.
@@ -17,7 +13,6 @@ class AppLifecycleNotifier extends RustSnapshotNotifier<AppLifecycleState> {
   @override
   AppLifecycleState build() {
     _startSnapshotBridge();
-    _bootstrap();
     return const Initializing();
   }
 
@@ -30,12 +25,6 @@ class AppLifecycleNotifier extends RustSnapshotNotifier<AppLifecycleState> {
         _transitionTo(_mapSignalState(message.state));
       },
     );
-  }
-
-  Future<void> _bootstrap() async {
-    final prefs = await SharedPreferences.getInstance();
-    final hasCompleted = prefs.getBool(_kHasCompletedSetup) ?? false;
-    sig.BootstrapAppSession(hasCompletedSetup: hasCompleted).sendSignalToRust();
   }
 
   AppLifecycleState _mapSignalState(sig.AppSessionState state) {
@@ -85,8 +74,7 @@ class AppLifecycleNotifier extends RustSnapshotNotifier<AppLifecycleState> {
   }
 
   Future<void> completeOnboarding() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kHasCompletedSetup, true);
+    await ref.read(settingsProvider.notifier).setHasCompletedSetup(true);
     const sig.CompleteOnboarding().sendSignalToRust();
   }
 

@@ -80,6 +80,21 @@ pub struct LaunchAtLoginSnapshot {
     pub error_message: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, SignalPiece, Clone, Debug)]
+pub struct SettingsSnapshot {
+    pub selected_local_model_id: String,
+    pub api_key: String,
+    pub api_base_url: String,
+    pub selected_hotkey: String,
+    pub selected_microphone_id: String,
+    pub sound_enabled: bool,
+    pub custom_vocabulary: String,
+    pub transcription_provider: String,
+    pub transcription_model: String,
+    pub minimum_recording_duration_ms: f64,
+    pub has_completed_setup: bool,
+}
+
 #[derive(Serialize, Deserialize, SignalPiece, Clone, Debug, PartialEq, Eq)]
 pub enum PermissionStatus {
     Unknown,
@@ -205,6 +220,26 @@ pub struct UpdateConfig {
 #[derive(Deserialize, DartSignal)]
 pub struct SetTranscriptAction {
     pub action: String, // "paste" or "display_only"
+}
+
+// ============================================================================
+// Settings signals (bidirectional)
+// ============================================================================
+
+/// Rust → Dart: current persisted application settings snapshot
+#[derive(Serialize, RustSignal)]
+pub struct SettingsSnapshotChanged {
+    pub snapshot: SettingsSnapshot,
+}
+
+/// Dart → Rust: request current settings snapshot
+#[derive(Deserialize, DartSignal)]
+pub struct RequestSettingsSnapshot;
+
+/// Dart → Rust: replace the persisted settings snapshot
+#[derive(Deserialize, DartSignal)]
+pub struct UpdateSettingsSnapshot {
+    pub snapshot: SettingsSnapshot,
 }
 
 // ============================================================================

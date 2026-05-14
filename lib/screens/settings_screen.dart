@@ -190,6 +190,7 @@ class _GeneralContent extends ConsumerStatefulWidget {
 class _GeneralContentState extends ConsumerState<_GeneralContent> {
   late TextEditingController _vocabularyController;
   Timer? _vocabularyDebounce;
+  String? _lastSyncedVocabulary;
 
   @override
   void initState() {
@@ -214,11 +215,31 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
     });
   }
 
+  void _hydrateVocabulary(AppSettings settings) {
+    final userHasEdited =
+        _lastSyncedVocabulary != null &&
+        _vocabularyController.text != _lastSyncedVocabulary;
+    if (userHasEdited) return;
+
+    final text = settings.customVocabulary;
+    if (_vocabularyController.text == text && _lastSyncedVocabulary == text) {
+      return;
+    }
+
+    _vocabularyController.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+    _lastSyncedVocabulary = text;
+  }
+
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
     final launchAtLogin = ref.watch(launchAtLoginProvider);
     final shellCapabilities = ref.watch(shellCapabilitiesProvider);
+
+    _hydrateVocabulary(settings);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
