@@ -216,29 +216,17 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                     _permissionRow(
                       'Microphone',
                       permissions.microphone == PermissionUiStatus.granted,
-                      () async {
-                        await _permissions.requestMicrophone();
-                        final granted =
-                            ref.read(permissionsProvider).microphone ==
-                            PermissionUiStatus.granted;
-                        if (!granted && mounted) {
-                          await _permissions.openMicrophoneSettings();
-                        }
-                      },
+                      () => _permissions.requestMicrophone(
+                        openSettingsOnDeny: true,
+                      ),
                     ),
                   if (missing.accessibility)
                     _permissionRow(
                       'Accessibility',
                       permissions.accessibility == PermissionUiStatus.granted,
-                      () async {
-                        await _permissions.requestAccessibility();
-                        final granted =
-                            ref.read(permissionsProvider).accessibility ==
-                            PermissionUiStatus.granted;
-                        if (!granted && mounted) {
-                          await _permissions.openAccessibilitySettings();
-                        }
-                      },
+                      () => _permissions.requestAccessibility(
+                        openSettingsOnDeny: true,
+                      ),
                     ),
                 ],
               ),
@@ -358,15 +346,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         title: 'Microphone',
         subtitle: 'Wrenflow needs microphone access to record your voice.',
         isGranted: permissions.microphone == PermissionUiStatus.granted,
-        onGrant: () async {
-          await _permissions.requestMicrophone();
-          final granted =
-              ref.read(permissionsProvider).microphone ==
-              PermissionUiStatus.granted;
-          if (!granted && mounted) {
-            await _permissions.openMicrophoneSettings();
-          }
-        },
+        onGrant: () =>
+            _permissions.requestMicrophone(openSettingsOnDeny: true),
       ),
       OnboardingStep.accessibility => _buildPermissionStep(
         key: key,
@@ -374,15 +355,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         title: 'Accessibility',
         subtitle: 'Required for global hotkey and pasting text.',
         isGranted: permissions.accessibility == PermissionUiStatus.granted,
-        onGrant: () async {
-          await _permissions.requestAccessibility();
-          final granted =
-              ref.read(permissionsProvider).accessibility ==
-              PermissionUiStatus.granted;
-          if (!granted && mounted) {
-            await _permissions.openAccessibilitySettings();
-          }
-        },
+        onGrant: () =>
+            _permissions.requestAccessibility(openSettingsOnDeny: true),
       ),
       OnboardingStep.hotkey => _buildHotkeyStep(key: key),
       OnboardingStep.model => _buildModelStep(key: key),

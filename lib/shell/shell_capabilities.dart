@@ -28,7 +28,6 @@ class ShellCapabilitiesNotifier
     extends RustSnapshotNotifier<ShellCapabilities> {
   @override
   ShellCapabilities build() {
-    final localSnapshot = _detectLocalCapabilities();
     bindRustSnapshotState<ShellCapabilitiesSnapshotChanged>(
       requestSnapshot: () =>
           const RequestShellCapabilitiesSnapshot().sendSignalToRust(),
@@ -45,7 +44,12 @@ class ShellCapabilitiesNotifier
         );
       },
     );
+    return _detectLocalCapabilities();
+  }
 
+  void reportLocalCapabilities() {
+    final localSnapshot = _detectLocalCapabilities();
+    state = localSnapshot;
     ReportShellCapabilitiesSnapshot(
       snapshot: ShellCapabilitiesSnapshot(
         launchAtLogin: localSnapshot.launchAtLogin,
@@ -56,8 +60,6 @@ class ShellCapabilitiesNotifier
         overlays: localSnapshot.overlays,
       ),
     ).sendSignalToRust();
-
-    return localSnapshot;
   }
 
   ShellCapabilities _detectLocalCapabilities() {

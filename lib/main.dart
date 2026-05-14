@@ -6,12 +6,10 @@ import 'package:macos_window_utils/macos_window_utils.dart';
 import 'package:rinf/rinf.dart';
 import 'package:window_manager/window_manager.dart';
 
-import 'providers/launch_at_login_provider.dart';
 import 'providers/settings_provider.dart';
 import 'screens/settings_screen.dart';
+import 'shell/shell_app_coordinator.dart';
 import 'shell/main_window_presentation.dart';
-import 'shell/overlay_controller.dart';
-import 'shell/system_tray.dart';
 import 'shell/window_synchronizer.dart';
 import 'services/app_version.dart';
 import 'screens/setup_wizard_screen.dart';
@@ -58,17 +56,8 @@ Future<void> _initializeApp(ProviderContainer container) async {
   await AppVersion.load();
 
   container.read(settingsProvider);
-  await container.read(launchAtLoginProvider.notifier).refresh();
-
-  // Initialize system tray after the settings snapshot subscription is active,
-  // so fallback values resolve from the Rust-owned config if needed.
-  final tray = SystemTrayManager(container);
-  await tray.init();
-
-  // Native overlays do not depend on the settings load, but starting them here
-  // keeps all non-UI startup work off the critical path before runApp.
-  final overlay = OverlayController(container);
-  overlay.init();
+  final shell = ShellAppCoordinator(container);
+  await shell.init();
 }
 
 // ── App home — declarative projection of lifecycle state ──────

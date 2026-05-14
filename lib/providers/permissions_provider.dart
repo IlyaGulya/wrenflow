@@ -51,12 +51,12 @@ class PermissionsState {
 class PermissionsNotifier extends RustSnapshotNotifier<PermissionsState> {
   late final PermissionService _permissionService;
   Timer? _pollTimer;
+  bool _monitoringStarted = false;
 
   @override
   PermissionsState build() {
     _permissionService = PermissionService();
     _startRustSnapshotBridge();
-    _startPolling();
     ref.onDispose(() => _pollTimer?.cancel());
     return const PermissionsState();
   }
@@ -74,8 +74,10 @@ class PermissionsNotifier extends RustSnapshotNotifier<PermissionsState> {
     );
   }
 
-  void _startPolling() {
-    _pollAndReport();
+  Future<void> startMonitoring() async {
+    if (_monitoringStarted) return;
+    _monitoringStarted = true;
+    await _pollAndReport();
     _pollTimer = Timer.periodic(
       const Duration(seconds: 1),
       (_) => _pollAndReport(),
@@ -143,23 +145,27 @@ class PermissionsNotifier extends RustSnapshotNotifier<PermissionsState> {
     };
   }
 
-  Future<void> requestMicrophone() async {
+  Future<bool> requestMicrophone({bool openSettingsOnDeny = false}) async {
     _reportSnapshot(microphone: PermissionUiStatus.requesting);
     await _permissionService.requestMicrophone();
     await refreshPermissions();
+    final granted = state.microphone == PermissionUiStatus.granted;
+    if (!granted && openSettingsOnDeny) {
+      await _permissionService.openMicrophoneSettings();
+    }
+    return granted;
   }
 
-  Future<void> requestAccessibility() async {
+  Future<bool> requestAccessibility({bool openSettingsOnDeny = false}) async {
     _reportSnapshot(accessibility: PermissionUiStatus.requesting);
     await _permissionService.requestAccessibility();
     await refreshPermissions();
+    final granted = state.accessibility == PermissionUiStatus.granted;
+    if (!granted && openSettingsOnDeny) {
+      await _permissionService.openAccessibilitySettings();
+    }
+    return granted;
   }
-
-  Future<void> openAccessibilitySettings() =>
-      _permissionService.openAccessibilitySettings();
-
-  Future<void> openMicrophoneSettings() =>
-      _permissionService.openMicrophoneSettings();
 
   Future<void> refreshPermissions() => _pollAndReport();
 }

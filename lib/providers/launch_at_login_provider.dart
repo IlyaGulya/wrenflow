@@ -56,8 +56,6 @@ class LaunchAtLoginNotifier extends RustSnapshotNotifier<LaunchAtLoginState> {
         );
       },
     );
-
-    unawaited(refresh());
     return const LaunchAtLoginState.initial();
   }
 
