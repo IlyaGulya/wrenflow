@@ -5,6 +5,7 @@ pub mod audio_actor;
 pub mod audio_devices_actor;
 pub mod history_actor;
 pub mod hotkey_actor;
+pub mod launch_at_login_actor;
 pub mod model_actor;
 pub mod paste_actor;
 pub mod permissions_actor;
@@ -82,6 +83,11 @@ pub async fn create_actors() {
     // Shell capabilities actor
     spawn(async {
         shell_capabilities_actor::run().await;
+    });
+
+    // Launch-at-login actor
+    spawn(async {
+        launch_at_login_actor::run().await;
     });
 
     // TranscriptAction listener

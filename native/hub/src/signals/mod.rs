@@ -73,6 +73,13 @@ pub struct ShellCapabilitiesSnapshot {
     pub overlays: bool,
 }
 
+#[derive(Serialize, Deserialize, SignalPiece, Clone, Debug)]
+pub struct LaunchAtLoginSnapshot {
+    pub enabled: bool,
+    pub is_loading: bool,
+    pub error_message: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, SignalPiece, Clone, Debug, PartialEq, Eq)]
 pub enum PermissionStatus {
     Unknown,
@@ -368,6 +375,26 @@ pub struct RequestShellCapabilitiesSnapshot;
 #[derive(Deserialize, DartSignal)]
 pub struct ReportShellCapabilitiesSnapshot {
     pub snapshot: ShellCapabilitiesSnapshot,
+}
+
+// ============================================================================
+// Launch at login signals (bidirectional)
+// ============================================================================
+
+/// Rust → Dart: current launch-at-login snapshot
+#[derive(Serialize, RustSignal)]
+pub struct LaunchAtLoginSnapshotChanged {
+    pub snapshot: LaunchAtLoginSnapshot,
+}
+
+/// Dart → Rust: request current launch-at-login snapshot
+#[derive(Deserialize, DartSignal)]
+pub struct RequestLaunchAtLoginSnapshot;
+
+/// Dart → Rust: report launch-at-login state observed in shell
+#[derive(Deserialize, DartSignal)]
+pub struct ReportLaunchAtLoginSnapshot {
+    pub snapshot: LaunchAtLoginSnapshot,
 }
 
 // ============================================================================
