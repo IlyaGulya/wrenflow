@@ -202,13 +202,13 @@ fn set_model_state(
 /// Run the model actor. Stores loaded engine in `engine_handle`.
 pub async fn run(
     engine_handle: SharedTranscriptionEngine,
-    initial_selected_model_id: String,
     mut config_rx: watch::Receiver<AppConfig>,
 ) {
     let init_recv = signals::InitializeLocalModel::get_dart_signal_receiver();
     let snapshot_recv = signals::RequestLocalModelsSnapshot::get_dart_signal_receiver();
     let cancel_recv = signals::CancelModelDownload::get_dart_signal_receiver();
     let cancel_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    let initial_selected_model_id = config_rx.borrow().selected_local_model_id.clone();
     let snapshot: SharedLocalModelsSnapshot = Arc::new(Mutex::new(LocalModelsRuntimeState::new(
         &initial_selected_model_id,
     )));

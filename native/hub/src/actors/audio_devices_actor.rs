@@ -110,6 +110,8 @@ fn refresh_inventory(state: &SharedAudioDevicesState) {
 pub async fn run(state: SharedAudioDevicesState, mut config_rx: watch::Receiver<AppConfig>) {
     let request_recv = signals::RequestAudioDevicesSnapshot::get_dart_signal_receiver();
 
+    let initial_selected_device_id = config_rx.borrow().selected_microphone_id.clone();
+    set_selected_device_id(&state, initial_selected_device_id);
     refresh_inventory(&state);
 
     loop {

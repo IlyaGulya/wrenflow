@@ -23,6 +23,7 @@ use rinf::{DartSignal, RustSignal};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::spawn;
+use wrenflow_domain::config::AppConfig;
 use wrenflow_domain::pipeline::TranscriptionResult;
 
 use crate::signals;
@@ -31,24 +32,47 @@ use crate::signals;
 /// true = paste, false = display only.
 static SHOULD_PASTE: AtomicBool = AtomicBool::new(false);
 
+struct RuntimeGraph {
+    startup_config: AppConfig,
+    settings_runtime: settings_actor::SettingsRuntime,
+    engine_handle: model_actor::SharedTranscriptionEngine,
+    audio_devices_state: audio_devices_actor::SharedAudioDevicesState,
+}
+
+impl RuntimeGraph {
+    fn new() -> Self {
+        let settings_runtime =
+            settings_actor::shared_runtime(settings_actor::load_initial_config());
+        let startup_config = settings_actor::current_config(&settings_runtime);
+
+        Self {
+            startup_config,
+            settings_runtime,
+            engine_handle: model_actor::shared_engine(),
+            audio_devices_state: audio_devices_actor::shared_state(),
+        }
+    }
+}
+
 pub async fn create_actors() {
-    let initial_config = settings_actor::load_initial_config();
-    let settings_runtime = settings_actor::shared_runtime(initial_config.clone());
-    let engine_handle = model_actor::shared_engine();
-    let audio_devices_state = audio_devices_actor::shared_state();
-    audio_devices_actor::set_selected_device_id(
-        &audio_devices_state,
-        initial_config.selected_microphone_id.clone(),
-    );
+    let runtime = RuntimeGraph::new();
+    let history_insert_tx = spawn_history_actor();
 
-    let mut audio = AudioActor::new();
-    let mut hotkey = HotkeyActor::new(hotkey_actor::keycode_from_name(
-        &initial_config.selected_hotkey,
-    ));
+    spawn_settings_actor(runtime.settings_runtime.clone());
+    spawn_model_actor(&runtime);
+    spawn_permissions_actor();
+    spawn_app_session_actor(&runtime);
+    spawn_audio_devices_actor(&runtime);
+    spawn_updates_actor();
+    spawn_shell_capabilities_actor();
+    spawn_launch_at_login_actor();
+    spawn_transcript_action_listener();
+    spawn_pipeline_loop(runtime, history_insert_tx);
+}
 
-    // History actor
+fn spawn_history_actor() -> Option<history_actor::HistoryInsertSender> {
     let history_path = history_actor::default_history_path();
-    let history_insert_tx = match HistoryActor::new(history_path) {
+    match HistoryActor::new(history_path) {
         Ok((history, tx)) => {
             std::thread::spawn(move || {
                 history.run_blocking();
@@ -59,58 +83,63 @@ pub async fn create_actors() {
             log::error!("Failed to start history actor: {e}");
             None
         }
-    };
+    }
+}
 
-    let mut pipeline = PipelineActor::new(history_insert_tx, initial_config.clone());
-
-    // Model actor
-    let model_engine = engine_handle.clone();
-    let initial_selected_model_id = initial_config.selected_local_model_id.clone();
-    let model_config_rx = settings_actor::subscribe(&settings_runtime);
+fn spawn_settings_actor(settings_runtime: settings_actor::SettingsRuntime) {
     spawn(async move {
-        model_actor::run(model_engine, initial_selected_model_id, model_config_rx).await;
+        settings_actor::run(settings_runtime).await;
     });
+}
 
-    // Permissions actor
+fn spawn_model_actor(runtime: &RuntimeGraph) {
+    let model_engine = runtime.engine_handle.clone();
+    let model_config_rx = settings_actor::subscribe(&runtime.settings_runtime);
+    spawn(async move {
+        model_actor::run(model_engine, model_config_rx).await;
+    });
+}
+
+fn spawn_permissions_actor() {
     spawn(async {
         permissions_actor::run().await;
     });
+}
 
-    // App session actor
-    let app_session_config_rx = settings_actor::subscribe(&settings_runtime);
+fn spawn_app_session_actor(runtime: &RuntimeGraph) {
+    let app_session_config_rx = settings_actor::subscribe(&runtime.settings_runtime);
     spawn(async move {
         app_session_actor::run(app_session_config_rx).await;
     });
+}
 
-    // Audio devices snapshot actor
-    let audio_devices_for_actor = audio_devices_state.clone();
-    let audio_devices_config_rx = settings_actor::subscribe(&settings_runtime);
+fn spawn_audio_devices_actor(runtime: &RuntimeGraph) {
+    let audio_devices_state = runtime.audio_devices_state.clone();
+    let audio_devices_config_rx = settings_actor::subscribe(&runtime.settings_runtime);
     spawn(async move {
-        audio_devices_actor::run(audio_devices_for_actor, audio_devices_config_rx).await;
+        audio_devices_actor::run(audio_devices_state, audio_devices_config_rx).await;
     });
+}
 
-    // Updates actor
+fn spawn_updates_actor() {
     spawn(async {
         updates_actor::run().await;
     });
+}
 
-    // Shell capabilities actor
+fn spawn_shell_capabilities_actor() {
     spawn(async {
         shell_capabilities_actor::run().await;
     });
+}
 
-    // Launch-at-login actor
+fn spawn_launch_at_login_actor() {
     spawn(async {
         launch_at_login_actor::run().await;
     });
+}
 
-    // Settings actor
-    let settings_runtime_for_actor = settings_runtime.clone();
-    spawn(async move {
-        settings_actor::run(settings_runtime_for_actor).await;
-    });
-
-    // TranscriptAction listener
+fn spawn_transcript_action_listener() {
     spawn(async {
         let recv = signals::SetTranscriptAction::get_dart_signal_receiver();
         while let Some(pack) = recv.recv().await {
@@ -119,12 +148,22 @@ pub async fn create_actors() {
             log::info!("Transcript action set to: {}", pack.message.action);
         }
     });
+}
 
-    // Main loop: hotkey + audio events drive the pipeline
-    let transcription_engine = engine_handle.clone();
-    let audio_devices_for_loop = audio_devices_state.clone();
-    let settings_runtime_for_loop = settings_runtime.clone();
-    let mut config_rx = settings_actor::subscribe(&settings_runtime);
+fn spawn_pipeline_loop(
+    runtime: RuntimeGraph,
+    history_insert_tx: Option<history_actor::HistoryInsertSender>,
+) {
+    let mut audio = AudioActor::new();
+    let mut hotkey = HotkeyActor::new(hotkey_actor::keycode_from_name(
+        &runtime.startup_config.selected_hotkey,
+    ));
+    let mut pipeline = PipelineActor::new(history_insert_tx, runtime.startup_config.clone());
+    let transcription_engine = runtime.engine_handle.clone();
+    let audio_devices_state = runtime.audio_devices_state.clone();
+    let settings_runtime = runtime.settings_runtime.clone();
+    let mut config_rx = settings_actor::subscribe(&runtime.settings_runtime);
+
     spawn(async move {
         loop {
             tokio::select! {
@@ -133,10 +172,10 @@ pub async fn create_actors() {
                         hotkey_actor::HotkeyEvent::KeyDown => {
                             log::info!("Hotkey DOWN");
                             pipeline.handle_hotkey_down();
-                            let preferred_device_id = settings_actor::current_config(&settings_runtime_for_loop)
+                            let preferred_device_id = settings_actor::current_config(&settings_runtime)
                                 .selected_microphone_id;
                             let device_id = audio_devices_actor::effective_device_id_for(
-                                &audio_devices_for_loop,
+                                &audio_devices_state,
                                 &preferred_device_id,
                             );
                             if let Err(e) = audio.start(&device_id) {
