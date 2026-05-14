@@ -9,7 +9,7 @@ import '../providers/model_state_provider.dart';
 import '../providers/permissions_provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/transcription_test_presentation_provider.dart';
-import '../shell/shell_capabilities.dart';
+import '../providers/wizard_presentation_provider.dart';
 import '../src/bindings/signals/signals.dart';
 import '../state/app_lifecycle_state.dart';
 import '../theme/wrenflow_theme.dart';
@@ -73,18 +73,6 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     }
   }
 
-  /// Whether the user can advance past the given step.
-  /// Permission steps block until permission is granted.
-  bool _canAdvance(OnboardingStep step, PermissionsState permissions) {
-    return switch (step) {
-      OnboardingStep.microphone =>
-        permissions.microphone == PermissionUiStatus.granted,
-      OnboardingStep.accessibility =>
-        permissions.accessibility == PermissionUiStatus.granted,
-      _ => true,
-    };
-  }
-
   Future<void> _finish() async {
     final notifier = ref.read(settingsProvider.notifier);
     await notifier.setSelectedHotkey(_selectedHotkey);
@@ -97,23 +85,21 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final lifecycle = ref.watch(appLifecycleProvider);
-    final permissions = ref.watch(permissionsProvider);
+    final presentation = ref.watch(wizardPresentationProvider(widget.mode));
     final settings = ref.watch(settingsProvider);
 
     // Recovery mode — auto-returns via provider, just show permission steps.
-    if (widget.mode == WizardMode.recovery && lifecycle is PermissionRecovery) {
-      return _buildRecoveryScreen(permissions, lifecycle.missing);
+    if (widget.mode == WizardMode.recovery &&
+        presentation.recoveryMissing != null) {
+      return _buildRecoveryScreen(
+        presentation.permissions,
+        presentation.recoveryMissing!,
+      );
     }
 
-    // Onboarding mode — driven by lifecycle state.
-    final currentStep = lifecycle is Onboarding
-        ? lifecycle.currentStep
-        : OnboardingStep.microphone;
-
     _hydrateSettings(settings);
-    _handleAutoAdvance(permissions, currentStep);
-    _syncSettingsIfNeeded(currentStep);
+    _handleAutoAdvance(presentation.permissions, presentation.currentStep);
+    _syncSettingsIfNeeded(presentation.currentStep);
 
     return Scaffold(
       backgroundColor: WrenflowStyle.surface,
@@ -137,16 +123,12 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                   ),
                 );
               },
-              child: _buildStep(
-                currentStep,
-                permissions,
-                key: ValueKey(currentStep),
-              ),
+              child: _buildStep(presentation, key: ValueKey(presentation.currentStep)),
             ),
           ),
-          if (currentStep != OnboardingStep.complete)
+          if (presentation.showGlobalModelIndicator)
             const _GlobalModelIndicator(),
-          _buildFooter(currentStep),
+          _buildFooter(presentation),
         ],
       ),
     );
@@ -271,7 +253,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
 
   // ── Onboarding footer ─────────────────────────────────────
 
-  Widget _buildFooter(OnboardingStep step) {
+  Widget _buildFooter(WizardPresentation presentation) {
+    final step = presentation.currentStep;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
@@ -295,7 +278,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
               ? _FooterButton(label: 'Finish', onTap: _finish)
               : _FooterButton(
                   label: 'Next',
-                  onTap: _canAdvance(step, ref.read(permissionsProvider))
+                  onTap: presentation.canAdvance
                       ? () => _lifecycle.onboardingNext()
                       : null,
                 ),
@@ -332,11 +315,9 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
 
   // ── Step content ──────────────────────────────────────────
 
-  Widget _buildStep(
-    OnboardingStep step,
-    PermissionsState permissions, {
-    Key? key,
-  }) {
+  Widget _buildStep(WizardPresentation presentation, {Key? key}) {
+    final step = presentation.currentStep;
+    final permissions = presentation.permissions;
     return switch (step) {
       OnboardingStep.microphone => _buildPermissionStep(
         key: key,
@@ -359,7 +340,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       OnboardingStep.hotkey => _buildHotkeyStep(key: key),
       OnboardingStep.model => _buildModelStep(key: key),
       OnboardingStep.vocabulary => _buildVocabularyStep(key: key),
-      OnboardingStep.complete => _buildCompleteStep(key: key),
+      OnboardingStep.complete => _buildCompleteStep(presentation, key: key),
     };
   }
 
@@ -480,9 +461,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     );
   }
 
-  Widget _buildCompleteStep({Key? key}) {
-    final launchAtLogin = ref.watch(launchAtLoginProvider);
-    final shellCapabilities = ref.watch(shellCapabilitiesProvider);
+  Widget _buildCompleteStep(WizardPresentation presentation, {Key? key}) {
     return _StepContent(
       key: key,
       icon: CupertinoIcons.checkmark_seal_fill,
@@ -493,18 +472,18 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         children: [
           // Live pipeline state + transcription result
           const _TranscriptionTestWidget(),
-          if (shellCapabilities.launchAtLogin) ...[
+          if (presentation.showLaunchAtLogin) ...[
             const SizedBox(height: 12),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text('Launch at login', style: WrenflowStyle.body(12)),
                 Opacity(
-                  opacity: launchAtLogin.isLoading ? 0.55 : 1,
+                  opacity: presentation.launchAtLoginLoading ? 0.55 : 1,
                   child: IgnorePointer(
-                    ignoring: launchAtLogin.isLoading,
+                    ignoring: presentation.launchAtLoginLoading,
                     child: GreenToggle(
-                      value: launchAtLogin.enabled,
+                      value: presentation.launchAtLoginEnabled,
                       onChanged: (v) => ref
                           .read(launchAtLoginProvider.notifier)
                           .setEnabled(v),

@@ -1,18 +1,17 @@
 import 'dart:async';
-import 'dart:convert';
-
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:wrenflow/providers/about_settings_presentation_provider.dart';
 import 'package:wrenflow/providers/general_settings_presentation_provider.dart';
 import 'package:wrenflow/providers/history_provider.dart';
+import 'package:wrenflow/providers/history_entry_presentation.dart';
 import 'package:wrenflow/providers/launch_at_login_provider.dart';
 import 'package:wrenflow/providers/models_settings_presentation_provider.dart';
 import 'package:wrenflow/providers/settings_provider.dart';
 import 'package:wrenflow/providers/update_provider.dart';
 import 'package:wrenflow/shell/main_window_presentation.dart';
-import 'package:wrenflow/shell/shell_capabilities.dart';
 import 'package:wrenflow/services/app_version.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
 import 'package:wrenflow/theme/wrenflow_theme.dart';
@@ -666,6 +665,7 @@ class _HistoryRowState extends State<_HistoryRow> {
   @override
   Widget build(BuildContext context) {
     final entry = widget.entry;
+    final presentation = HistoryEntryPresentation.fromEntry(entry);
     final date = DateTime.fromMillisecondsSinceEpoch(
       (entry.timestamp * 1000).toInt(),
     );
@@ -673,10 +673,6 @@ class _HistoryRowState extends State<_HistoryRow> {
         '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
     final dateStr =
         '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-
-    final metrics = _parseMetrics(entry.metricsJson);
-    final durationBadge = _formatDuration(metrics);
-    final modelBadge = _formatModel(metrics);
 
     return GestureDetector(
       onTap: () => setState(() => _expanded = !_expanded),
@@ -705,13 +701,13 @@ class _HistoryRowState extends State<_HistoryRow> {
                             '$dateStr $timeStr',
                             style: WrenflowStyle.caption(11),
                           ),
-                          if (durationBadge != null) ...[
+                          if (presentation.durationBadge != null) ...[
                             const SizedBox(width: 6),
-                            _MetricBadge(durationBadge),
+                            _MetricBadge(presentation.durationBadge!),
                           ],
-                          if (modelBadge != null) ...[
+                          if (presentation.modelBadge != null) ...[
                             const SizedBox(width: 6),
-                            _MetricBadge(modelBadge),
+                            _MetricBadge(presentation.modelBadge!),
                           ],
                         ],
                       ),
@@ -746,7 +742,7 @@ class _HistoryRowState extends State<_HistoryRow> {
             ),
 
             // Expanded metrics
-            if (_expanded && metrics.isNotEmpty) ...[
+            if (_expanded && presentation.metrics.isNotEmpty) ...[
               const SizedBox(height: 10),
               Container(
                 width: double.infinity,
@@ -758,7 +754,7 @@ class _HistoryRowState extends State<_HistoryRow> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    for (final key in metrics.keys.toList()..sort())
+                    for (final key in presentation.metrics.keys.toList()..sort())
                       Padding(
                         padding: const EdgeInsets.only(bottom: 3),
                         child: Row(
@@ -774,7 +770,9 @@ class _HistoryRowState extends State<_HistoryRow> {
                             ),
                             Expanded(
                               child: Text(
-                                _formatMetricValue(metrics[key]),
+                                formatHistoryMetricValue(
+                                  presentation.metrics[key],
+                                ),
                                 style: WrenflowStyle.mono(
                                   10,
                                 ).copyWith(color: WrenflowStyle.textSecondary),
@@ -791,51 +789,6 @@ class _HistoryRowState extends State<_HistoryRow> {
         ),
       ),
     );
-  }
-
-  Map<String, dynamic> _parseMetrics(String json) {
-    if (json.isEmpty || json == '{}') return {};
-    try {
-      final decoded =
-          (const JsonDecoder().convert(json)) as Map<String, dynamic>;
-      return decoded;
-    } catch (_) {
-      return {};
-    }
-  }
-
-  String? _formatDuration(Map<String, dynamic> metrics) {
-    final rec = metrics['recording.durationMs'];
-    if (rec is num && rec > 0) {
-      if (rec >= 1000) {
-        return '${(rec / 1000).toStringAsFixed(1)}s';
-      }
-      return '${rec.round()}ms';
-    }
-    return null;
-  }
-
-  String? _formatModel(Map<String, dynamic> metrics) {
-    final modelName = metrics['transcription.modelName'];
-    if (modelName is String && modelName.trim().isNotEmpty) {
-      return modelName.trim();
-    }
-    final modelId = metrics['transcription.modelId'];
-    if (modelId is String && modelId.trim().isNotEmpty) {
-      return modelId.trim();
-    }
-    return null;
-  }
-
-  String _formatMetricValue(dynamic value) {
-    if (value is double) {
-      if (value >= 1000) return '${(value / 1000).toStringAsFixed(1)}s';
-      return '${value.toStringAsFixed(1)}ms';
-    }
-    if (value is num) return value.toString();
-    if (value is int) return value.toString();
-    if (value is bool) return value ? 'true' : 'false';
-    return value?.toString() ?? '';
   }
 }
 
@@ -865,8 +818,7 @@ class _AboutContent extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final updateState = ref.watch(updateProvider);
-    final shellCapabilities = ref.watch(shellCapabilitiesProvider);
+    final presentation = ref.watch(aboutSettingsPresentationProvider);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
@@ -890,7 +842,7 @@ class _AboutContent extends ConsumerWidget {
           Text('Wrenflow', style: WrenflowStyle.title(16)),
           const SizedBox(height: 4),
           Text(
-            'v${AppVersion.displayVersion}',
+            presentation.versionLabel,
             style: WrenflowStyle.mono(
               10,
             ).copyWith(color: WrenflowStyle.textTertiary),
@@ -902,11 +854,11 @@ class _AboutContent extends ConsumerWidget {
           ),
           const SizedBox(height: 20),
 
-          if (shellCapabilities.updates) ...[
+          if (presentation.showUpdates) ...[
             SettingsCard(
               title: 'Updates',
-              child: switch (updateState.phase) {
-                UpdatePhase.checking => Row(
+              child: switch (presentation.updatePhase) {
+                AboutUpdateCardPhase.checking => Row(
                   children: [
                     SizedBox(
                       width: 12,
@@ -918,26 +870,20 @@ class _AboutContent extends ConsumerWidget {
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      'Checking for updates...',
+                      presentation.updateMessage!,
                       style: WrenflowStyle.body(12),
                     ),
                   ],
                 ),
-                UpdatePhase.error => _updateRow(
-                  'Could not check for updates',
-                  actionLabel: 'Retry',
+                AboutUpdateCardPhase.action => _updateRow(
+                  presentation.updateMessage!,
+                  actionLabel: presentation.updateActionLabel!,
                   onAction: () => ref.read(updateProvider.notifier).checkNow(),
                 ),
-                UpdatePhase.available => _updateAvailable(
-                  context,
-                  ref,
-                  updateState,
+                AboutUpdateCardPhase.available => _updateAvailable(
+                  presentation,
                 ),
-                _ => _updateRow(
-                  'You\'re up to date',
-                  actionLabel: 'Check now',
-                  onAction: () => ref.read(updateProvider.notifier).checkNow(),
-                ),
+                AboutUpdateCardPhase.hidden => const SizedBox.shrink(),
               },
             ),
             const SizedBox(height: 16),
@@ -961,19 +907,15 @@ class _AboutContent extends ConsumerWidget {
     );
   }
 
-  Widget _updateAvailable(
-    BuildContext context,
-    WidgetRef ref,
-    UpdateState info,
-  ) {
+  Widget _updateAvailable(AboutSettingsPresentation presentation) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'v${info.latestVersion} is available',
+          presentation.updateMessage!,
           style: WrenflowStyle.body(12),
         ),
-        if (info.isRecent)
+        if (presentation.isRecentUpdate)
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
@@ -984,10 +926,7 @@ class _AboutContent extends ConsumerWidget {
         const SizedBox(height: 8),
         GestureDetector(
           onTap: () async {
-            final url = info.downloadUrl.isNotEmpty
-                ? info.downloadUrl
-                : info.releaseUrl;
-            final uri = Uri.parse(url);
+            final uri = Uri.parse(presentation.updateDownloadUrl!);
             if (await canLaunchUrl(uri)) await launchUrl(uri);
           },
           child: Container(
