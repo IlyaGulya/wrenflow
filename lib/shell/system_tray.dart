@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:tray_manager/tray_manager.dart';
 
 import '../providers/app_lifecycle_provider.dart';
 import '../providers/launch_at_login_provider.dart';
@@ -11,14 +10,15 @@ import '../providers/settings_provider.dart';
 import '../state/app_lifecycle_state.dart';
 import 'main_window_presentation.dart';
 import 'shell_pipeline_presentation.dart';
+import 'tray_shell.dart';
 import 'tray_menu_presentation.dart';
 
 /// Manages the macOS system tray (menu bar) icon and context menu.
-class SystemTrayManager with TrayListener {
+class SystemTrayManager implements TrayShellListener {
   SystemTrayManager(this._ref);
 
   final ProviderContainer _ref;
-  final _trayManager = TrayManager.instance;
+  final _trayShell = platformTrayShell;
 
   String? _idleIconPath;
   String? _recordingIconPath;
@@ -34,14 +34,10 @@ class SystemTrayManager with TrayListener {
     );
 
     if (_idleIconPath != null) {
-      await _trayManager.setIcon(
-        _idleIconPath!,
-        isTemplate: true,
-        iconSize: 22,
-      );
+      await _trayShell.setIcon(_idleIconPath!);
     }
 
-    _trayManager.addListener(this);
+    _trayShell.addListener(this);
 
     await _updateContextMenu(_ref.read(trayMenuPresentationProvider));
 
@@ -101,54 +97,53 @@ class SystemTrayManager with TrayListener {
     }
 
     if (iconPath != null) {
-      await _trayManager.setIcon(iconPath, isTemplate: true, iconSize: 22);
+      await _trayShell.setIcon(iconPath);
     }
   }
 
   Future<void> _updateContextMenu(TrayMenuPresentation presentation) async {
     final micItems = presentation.microphones
         .map(
-          (item) => MenuItem.checkbox(
+          (item) => TrayMenuCheckboxItem(
             label: item.label,
             checked: item.selected,
-            onClick: (_) => _selectMicrophone(item.id),
+            onTap: () => _selectMicrophone(item.id),
           ),
         )
         .toList();
 
-    final menu = Menu(
+    final menu = TrayMenuModel(
       items: [
-        MenuItem(
+        TrayMenuLabelItem(
           label: presentation.versionLabel,
           disabled: true,
         ),
-        MenuItem(label: presentation.statusText, disabled: true),
-        MenuItem.separator(),
-        MenuItem.checkbox(
+        TrayMenuLabelItem(label: presentation.statusText, disabled: true),
+        const TrayMenuSeparator(),
+        TrayMenuCheckboxItem(
           label: presentation.launchAtLoginLoading
               ? 'Launch at Login...'
               : 'Launch at Login',
           checked: presentation.launchAtLoginEnabled,
-          onClick: (_) =>
-              _setLaunchAtLogin(!presentation.launchAtLoginEnabled),
+          onTap: () => _setLaunchAtLogin(!presentation.launchAtLoginEnabled),
         ),
-        MenuItem.separator(),
-        MenuItem.submenu(
+        const TrayMenuSeparator(),
+        TrayMenuSubmenuItem(
           label: 'Microphone',
-          submenu: Menu(items: micItems),
+          children: micItems,
         ),
-        MenuItem.separator(),
-        MenuItem(label: 'Settings...', onClick: (_) => _showSettings()),
-        MenuItem(label: 'History', onClick: (_) => _showHistory()),
-        MenuItem.separator(),
-        MenuItem(
+        const TrayMenuSeparator(),
+        TrayMenuLabelItem(label: 'Settings...', onTap: _showSettings),
+        TrayMenuLabelItem(label: 'History', onTap: _showHistory),
+        const TrayMenuSeparator(),
+        TrayMenuLabelItem(
           label: 'Quit Wrenflow',
-          onClick: (_) => _ref.read(appLifecycleProvider.notifier).quit(),
+          onTap: () => _ref.read(appLifecycleProvider.notifier).quit(),
         ),
       ],
     );
 
-    await _trayManager.setContextMenu(menu);
+    await _trayShell.setContextMenu(menu);
   }
 
   void _selectMicrophone(String deviceId) {
@@ -176,22 +171,22 @@ class SystemTrayManager with TrayListener {
   }
 
   Future<void> _quit() async {
-    await _trayManager.destroy();
+    await _trayShell.destroy();
     exit(0);
   }
 
   Future<void> dispose() async {
-    _trayManager.removeListener(this);
-    await _trayManager.destroy();
+    _trayShell.removeListener(this);
+    await _trayShell.destroy();
   }
 
   @override
-  void onTrayIconMouseUp() {
-    _trayManager.popUpContextMenu();
+  void onPrimaryClick() {
+    _trayShell.popUpContextMenu();
   }
 
   @override
-  void onTrayIconRightMouseUp() {
-    _trayManager.popUpContextMenu();
+  void onSecondaryClick() {
+    _trayShell.popUpContextMenu();
   }
 }
