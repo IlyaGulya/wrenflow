@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tray_manager/tray_manager.dart';
-import 'package:window_manager/window_manager.dart';
 
 import '../providers/app_lifecycle_provider.dart';
 import '../providers/audio_devices_provider.dart';
@@ -215,8 +214,6 @@ class SystemTrayManager with TrayListener {
     _ref
         .read(mainWindowNavigationProvider.notifier)
         .showSettings(SettingsTab.general);
-    windowManager.show();
-    windowManager.focus();
   }
 
   void _showHistory() {
@@ -224,8 +221,6 @@ class SystemTrayManager with TrayListener {
     _ref
         .read(mainWindowNavigationProvider.notifier)
         .showSettings(SettingsTab.history);
-    windowManager.show();
-    windowManager.focus();
   }
 
   Future<void> _quit() async {
