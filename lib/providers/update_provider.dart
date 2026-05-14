@@ -51,10 +51,9 @@ class UpdateState {
   }
 }
 
-class UpdateNotifier extends Notifier<UpdateState> {
+class UpdateNotifier extends RustSnapshotNotifier<UpdateState> {
   static const _checkInterval = Duration(hours: 6);
 
-  StreamSubscription? _snapshotSub;
   Timer? _refreshTimer;
 
   @override
@@ -64,7 +63,6 @@ class UpdateNotifier extends Notifier<UpdateState> {
     final capabilities = ref.read(shellCapabilitiesProvider);
     if (!capabilities.updates) {
       _reportStatus(const sig.UpdateStatusUnsupported());
-      ref.onDispose(() => _snapshotSub?.cancel());
       return const UpdateState.unsupported();
     }
 
@@ -72,7 +70,6 @@ class UpdateNotifier extends Notifier<UpdateState> {
     Future<void>.delayed(const Duration(seconds: 5), _checkAndReport);
 
     ref.onDispose(() {
-      _snapshotSub?.cancel();
       _refreshTimer?.cancel();
     });
 
@@ -80,13 +77,11 @@ class UpdateNotifier extends Notifier<UpdateState> {
   }
 
   void _startSnapshotBridge() {
-    _snapshotSub = bindRustSnapshot<sig.UpdatesSnapshotChanged>(
+    bindRustSnapshotState<sig.UpdatesSnapshotChanged>(
       requestSnapshot: () =>
           const sig.RequestUpdatesSnapshot().sendSignalToRust(),
       signalStream: sig.UpdatesSnapshotChanged.rustSignalStream,
-      onMessage: (message) {
-        state = _fromSignalStatus(message.status);
-      },
+      map: (message) => _fromSignalStatus(message.status),
     );
   }
 

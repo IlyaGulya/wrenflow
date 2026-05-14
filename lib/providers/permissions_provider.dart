@@ -48,9 +48,8 @@ class PermissionsState {
 
 /// Polls shell permissions, reports them to Rust, and projects the Rust-owned
 /// permission snapshot back into Flutter.
-class PermissionsNotifier extends Notifier<PermissionsState> {
+class PermissionsNotifier extends RustSnapshotNotifier<PermissionsState> {
   late final PermissionService _permissionService;
-  StreamSubscription? _snapshotSub;
   Timer? _pollTimer;
 
   @override
@@ -58,25 +57,20 @@ class PermissionsNotifier extends Notifier<PermissionsState> {
     _permissionService = PermissionService();
     _startRustSnapshotBridge();
     _startPolling();
-    ref.onDispose(() {
-      _snapshotSub?.cancel();
-      _pollTimer?.cancel();
-    });
+    ref.onDispose(() => _pollTimer?.cancel());
     return const PermissionsState();
   }
 
   void _startRustSnapshotBridge() {
-    _snapshotSub = bindRustSnapshot<sig.PermissionsSnapshotChanged>(
+    bindRustSnapshotState<sig.PermissionsSnapshotChanged>(
       requestSnapshot: () =>
           const sig.RequestPermissionsSnapshot().sendSignalToRust(),
       signalStream: sig.PermissionsSnapshotChanged.rustSignalStream,
-      onMessage: (message) {
-        state = PermissionsState(
-          hasSnapshot: message.hasSnapshot,
-          microphone: _fromSignalStatus(message.microphone),
-          accessibility: _fromSignalStatus(message.accessibility),
-        );
-      },
+      map: (message) => PermissionsState(
+        hasSnapshot: message.hasSnapshot,
+        microphone: _fromSignalStatus(message.microphone),
+        accessibility: _fromSignalStatus(message.accessibility),
+      ),
     );
   }
 

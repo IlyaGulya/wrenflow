@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -25,19 +24,18 @@ class ShellCapabilities {
   final bool overlays;
 }
 
-class ShellCapabilitiesNotifier extends Notifier<ShellCapabilities> {
-  StreamSubscription? _snapshotSub;
-
+class ShellCapabilitiesNotifier
+    extends RustSnapshotNotifier<ShellCapabilities> {
   @override
   ShellCapabilities build() {
     final localSnapshot = _detectLocalCapabilities();
-    _snapshotSub = bindRustSnapshot<ShellCapabilitiesSnapshotChanged>(
+    bindRustSnapshotState<ShellCapabilitiesSnapshotChanged>(
       requestSnapshot: () =>
           const RequestShellCapabilitiesSnapshot().sendSignalToRust(),
       signalStream: ShellCapabilitiesSnapshotChanged.rustSignalStream,
-      onMessage: (message) {
+      map: (message) {
         final snapshot = message.snapshot;
-        state = ShellCapabilities(
+        return ShellCapabilities(
           launchAtLogin: snapshot.launchAtLogin,
           updates: snapshot.updates,
           localTranscription: snapshot.localTranscription,
@@ -59,7 +57,6 @@ class ShellCapabilitiesNotifier extends Notifier<ShellCapabilities> {
       ),
     ).sendSignalToRust();
 
-    ref.onDispose(() => _snapshotSub?.cancel());
     return localSnapshot;
   }
 

@@ -38,19 +38,18 @@ class LaunchAtLoginState {
   }
 }
 
-class LaunchAtLoginNotifier extends Notifier<LaunchAtLoginState> {
+class LaunchAtLoginNotifier extends RustSnapshotNotifier<LaunchAtLoginState> {
   final _service = LaunchAtLoginService();
-  StreamSubscription? _snapshotSub;
 
   @override
   LaunchAtLoginState build() {
-    _snapshotSub = bindRustSnapshot<sig.LaunchAtLoginSnapshotChanged>(
+    bindRustSnapshotState<sig.LaunchAtLoginSnapshotChanged>(
       requestSnapshot: () =>
           const sig.RequestLaunchAtLoginSnapshot().sendSignalToRust(),
       signalStream: sig.LaunchAtLoginSnapshotChanged.rustSignalStream,
-      onMessage: (message) {
+      map: (message) {
         final snapshot = message.snapshot;
-        state = LaunchAtLoginState(
+        return LaunchAtLoginState(
           enabled: snapshot.enabled,
           isLoading: snapshot.isLoading,
           errorMessage: snapshot.errorMessage,
@@ -58,7 +57,6 @@ class LaunchAtLoginNotifier extends Notifier<LaunchAtLoginState> {
       },
     );
 
-    ref.onDispose(() => _snapshotSub?.cancel());
     unawaited(refresh());
     return const LaunchAtLoginState.initial();
   }

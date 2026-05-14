@@ -13,19 +13,16 @@ const _kHasCompletedSetup = 'has_completed_setup';
 
 /// Projects the Rust-owned app session FSM into Flutter and forwards user
 /// intents back to Rust.
-class AppLifecycleNotifier extends Notifier<AppLifecycleState> {
-  StreamSubscription? _snapshotSub;
-
+class AppLifecycleNotifier extends RustSnapshotNotifier<AppLifecycleState> {
   @override
   AppLifecycleState build() {
     _startSnapshotBridge();
     _bootstrap();
-    ref.onDispose(() => _snapshotSub?.cancel());
     return const Initializing();
   }
 
   void _startSnapshotBridge() {
-    _snapshotSub = bindRustSnapshot<sig.AppSessionSnapshotChanged>(
+    bindRustSnapshotSignal<sig.AppSessionSnapshotChanged>(
       requestSnapshot: () =>
           const sig.RequestAppSessionSnapshot().sendSignalToRust(),
       signalStream: sig.AppSessionSnapshotChanged.rustSignalStream,

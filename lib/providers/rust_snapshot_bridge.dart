@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rinf/rinf.dart';
 
 Stream<TState> rustSnapshotStream<TSignal, TState>({
@@ -28,4 +30,50 @@ StreamSubscription<RustSignalPack<TSignal>> bindRustSnapshot<TSignal>({
   );
   requestSnapshot();
   return sub;
+}
+
+abstract class RustSnapshotNotifier<TState> extends Notifier<TState> {
+  final List<StreamSubscription<Object?>> _rustSnapshotSubscriptions = [];
+  bool _disposeHookRegistered = false;
+
+  @protected
+  void bindRustSnapshotSignal<TSignal>({
+    required void Function() requestSnapshot,
+    required Stream<RustSignalPack<TSignal>> signalStream,
+    required void Function(TSignal message) onMessage,
+  }) {
+    _ensureDisposeHook();
+    final sub = bindRustSnapshot<TSignal>(
+      requestSnapshot: requestSnapshot,
+      signalStream: signalStream,
+      onMessage: onMessage,
+    );
+    _rustSnapshotSubscriptions.add(sub);
+  }
+
+  @protected
+  void bindRustSnapshotState<TSignal>({
+    required void Function() requestSnapshot,
+    required Stream<RustSignalPack<TSignal>> signalStream,
+    required TState Function(TSignal message) map,
+  }) {
+    bindRustSnapshotSignal<TSignal>(
+      requestSnapshot: requestSnapshot,
+      signalStream: signalStream,
+      onMessage: (message) {
+        state = map(message);
+      },
+    );
+  }
+
+  void _ensureDisposeHook() {
+    if (_disposeHookRegistered) return;
+    _disposeHookRegistered = true;
+    ref.onDispose(() {
+      for (final sub in _rustSnapshotSubscriptions) {
+        unawaited(sub.cancel());
+      }
+      _rustSnapshotSubscriptions.clear();
+    });
+  }
 }
