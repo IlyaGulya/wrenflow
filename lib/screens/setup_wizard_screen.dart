@@ -3,14 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/app_lifecycle_provider.dart';
-import '../providers/audio_level_provider.dart';
 import '../providers/launch_at_login_provider.dart';
 import '../providers/local_models_provider.dart';
-import '../providers/local_model_status_provider.dart';
 import '../providers/model_state_provider.dart';
 import '../providers/permissions_provider.dart';
-import '../providers/pipeline_state_provider.dart';
 import '../providers/settings_provider.dart';
+import '../providers/transcription_test_presentation_provider.dart';
 import '../shell/shell_capabilities.dart';
 import '../src/bindings/signals/signals.dart';
 import '../state/app_lifecycle_state.dart';
@@ -655,7 +653,6 @@ class _TranscriptionTestWidgetState
     extends ConsumerState<_TranscriptionTestWidget>
     with SingleTickerProviderStateMixin {
   late final AnimationController _waveformController;
-  String? _lastTranscript;
 
   @override
   void initState() {
@@ -664,15 +661,6 @@ class _TranscriptionTestWidgetState
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..repeat();
-
-    // Listen for transcription results.
-    TranscriptReady.rustSignalStream.listen((signal) {
-      if (mounted) {
-        setState(() {
-          _lastTranscript = signal.message.transcript;
-        });
-      }
-    });
   }
 
   @override
@@ -683,14 +671,7 @@ class _TranscriptionTestWidgetState
 
   @override
   Widget build(BuildContext context) {
-    final pipelineAsync = ref.watch(pipelineStateProvider);
-    final pipeline = pipelineAsync.value;
-
-    // Clear old transcript when a new recording starts.
-    if (pipeline is PipelineStateStarting ||
-        pipeline is PipelineStateRecording) {
-      _lastTranscript = null;
-    }
+    final presentation = ref.watch(transcriptionTestPresentationProvider);
 
     return Container(
       width: double.infinity,
@@ -700,38 +681,23 @@ class _TranscriptionTestWidgetState
         color: WrenflowStyle.textOp05,
         borderRadius: BorderRadius.circular(7),
       ),
-      child: _buildContent(pipeline),
+      child: _buildContent(presentation),
     );
   }
 
-  Widget _buildContent(PipelineState? pipeline) {
-    // Check model state first — can't test without an active model.
-    final modelOperation = ref.watch(selectedModelStateProvider);
-    final modelState = modelOperation?.state;
-    final models = ref.watch(localModelsProvider);
-    final modelStatus = ref.watch(localModelsStatusProvider);
-    final selectedModel = ref.watch(selectedLocalModelProvider);
-    final operationModelId = modelOperation?.modelId;
-    final operationModel = operationModelId == null
-        ? null
-        : models.where((model) => model.id == operationModelId).isEmpty
-        ? null
-        : models.firstWhere((model) => model.id == operationModelId);
-    if (models.isEmpty || modelStatus == null || selectedModel == null) {
+  Widget _buildContent(TranscriptionTestPresentation presentation) {
+    switch (presentation.phase) {
+      case TranscriptionTestPhase.loadingCatalog:
       return Center(
         key: const ValueKey('model-catalog-loading'),
         child: Text(
-          'Loading available models...',
+          presentation.message!,
           style: WrenflowStyle.caption(11),
           textAlign: TextAlign.center,
         ),
       );
-    }
-    final isInstalled = modelStatus.isInstalled(selectedModel.id);
-    final isActive = modelStatus.isActive(selectedModel.id);
-
-    if (modelState is ModelStateDownloading) {
-      final pct = (modelState.progress * 100).toInt();
+      case TranscriptionTestPhase.modelDownloading:
+      final pct = ((presentation.progress ?? 0) * 100).toInt();
       return Column(
         key: const ValueKey('model-downloading'),
         mainAxisAlignment: MainAxisAlignment.center,
@@ -739,7 +705,7 @@ class _TranscriptionTestWidgetState
           ClipRRect(
             borderRadius: BorderRadius.circular(3),
             child: LinearProgressIndicator(
-              value: modelState.progress,
+              value: presentation.progress ?? 0,
               minHeight: 4,
               backgroundColor: WrenflowStyle.textOp10,
               valueColor: AlwaysStoppedAnimation(WrenflowStyle.textOp50),
@@ -747,13 +713,12 @@ class _TranscriptionTestWidgetState
           ),
           const SizedBox(height: 4),
           Text(
-            'Downloading ${operationModel?.displayName ?? selectedModel.displayName} — $pct%',
+            '${presentation.message} — $pct%',
             style: WrenflowStyle.caption(10),
           ),
         ],
       );
-    }
-    if (modelState is ModelStateLoading) {
+      case TranscriptionTestPhase.modelLoading:
       return Center(
         key: const ValueKey('model-loading'),
         child: Row(
@@ -761,15 +726,11 @@ class _TranscriptionTestWidgetState
           children: [
             const InitializingDots(),
             const SizedBox(width: 8),
-            Text(
-              'Loading ${operationModel?.displayName ?? selectedModel.displayName}...',
-              style: WrenflowStyle.caption(11),
-            ),
+            Text(presentation.message!, style: WrenflowStyle.caption(11)),
           ],
         ),
       );
-    }
-    if (modelState is ModelStateWarming) {
+      case TranscriptionTestPhase.modelWarming:
       return Center(
         key: const ValueKey('model-warming'),
         child: Row(
@@ -777,37 +738,29 @@ class _TranscriptionTestWidgetState
           children: [
             const InitializingDots(),
             const SizedBox(width: 8),
-            Text(
-              'Warming up ${operationModel?.displayName ?? selectedModel.displayName}...',
-              style: WrenflowStyle.caption(11),
-            ),
+            Text(presentation.message!, style: WrenflowStyle.caption(11)),
           ],
         ),
       );
-    }
-    if (modelState is ModelStateError) {
+      case TranscriptionTestPhase.modelError:
       return Center(
         key: const ValueKey('model-error'),
         child: GestureDetector(
           onTap: () => const InitializeLocalModel().sendSignalToRust(),
           child: Text(
-            '${operationModel?.displayName ?? selectedModel.displayName} failed. Tap to retry.',
+            presentation.message!,
             style: WrenflowStyle.caption(11).copyWith(color: WrenflowStyle.red),
           ),
         ),
       );
-    }
-
-    if (!isActive) {
+      case TranscriptionTestPhase.modelManual:
       return Center(
         key: const ValueKey('model-manual'),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
-              isInstalled
-                  ? '${selectedModel.displayName} is selected but not active yet.'
-                  : '${selectedModel.displayName} is selected but not installed yet.',
+              presentation.message!,
               style: WrenflowStyle.caption(11),
               textAlign: TextAlign.center,
             ),
@@ -815,9 +768,7 @@ class _TranscriptionTestWidgetState
             GestureDetector(
               onTap: () => const InitializeLocalModel().sendSignalToRust(),
               child: Text(
-                isInstalled
-                    ? 'Activate ${selectedModel.displayName}'
-                    : 'Download & activate ${selectedModel.displayName}',
+                'Activate selected model',
                 style: WrenflowStyle.body(
                   11,
                 ).copyWith(color: WrenflowStyle.textOp50),
@@ -827,34 +778,27 @@ class _TranscriptionTestWidgetState
           ],
         ),
       );
-    }
-
-    if (modelState is! ModelStateReady) {
+      case TranscriptionTestPhase.modelPending:
       return Center(
         key: const ValueKey('model-pending'),
         child: Text(
-          'Activate ${selectedModel.displayName} to run a live test.',
+          presentation.message!,
           style: WrenflowStyle.caption(11),
           textAlign: TextAlign.center,
         ),
       );
-    }
-
-    if (_lastTranscript != null) {
+      case TranscriptionTestPhase.transcript:
       return Center(
         key: const ValueKey('result'),
         child: SingleChildScrollView(
           child: Text(
-            _lastTranscript!,
+            presentation.message!,
             style: WrenflowStyle.body(12),
             textAlign: TextAlign.center,
           ),
         ),
       );
-    }
-
-    if (pipeline is PipelineStateRecording) {
-      final audioLevel = ref.watch(audioLevelProvider).value ?? 0.0;
+      case TranscriptionTestPhase.recording:
       return Center(
         key: const ValueKey('recording'),
         child: AnimatedBuilder(
@@ -863,17 +807,14 @@ class _TranscriptionTestWidgetState
             return CustomPaint(
               size: const Size(200, 20),
               painter: WaveformPainter(
-                audioLevel: audioLevel,
+                audioLevel: presentation.audioLevel ?? 0.0,
                 animationValue: _waveformController.value,
               ),
             );
           },
         ),
       );
-    }
-
-    if (pipeline is PipelineStateStarting ||
-        pipeline is PipelineStateInitializing) {
+      case TranscriptionTestPhase.starting:
       return Center(
         key: const ValueKey('starting'),
         child: Row(
@@ -881,13 +822,11 @@ class _TranscriptionTestWidgetState
           children: [
             const InitializingDots(),
             const SizedBox(width: 8),
-            Text('Starting...', style: WrenflowStyle.caption(11)),
+            Text(presentation.message!, style: WrenflowStyle.caption(11)),
           ],
         ),
       );
-    }
-
-    if (pipeline is PipelineStateTranscribing) {
+      case TranscriptionTestPhase.transcribing:
       return Center(
         key: const ValueKey('transcribing'),
         child: Row(
@@ -895,33 +834,31 @@ class _TranscriptionTestWidgetState
           children: [
             const InitializingDots(),
             const SizedBox(width: 8),
-            Text('Transcribing...', style: WrenflowStyle.caption(11)),
+            Text(presentation.message!, style: WrenflowStyle.caption(11)),
           ],
         ),
       );
-    }
-
-    if (pipeline is PipelineStateError) {
+      case TranscriptionTestPhase.pipelineError:
       return Center(
         key: const ValueKey('error'),
         child: Text(
-          pipeline.message,
+          presentation.message!,
           style: WrenflowStyle.caption(11).copyWith(color: WrenflowStyle.red),
           textAlign: TextAlign.center,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
       );
+      case TranscriptionTestPhase.idle:
+      return Center(
+        key: const ValueKey('idle'),
+        child: Text(
+          presentation.message!,
+          style: WrenflowStyle.caption(11),
+          textAlign: TextAlign.center,
+        ),
+      );
     }
-
-    return Center(
-      key: const ValueKey('idle'),
-      child: Text(
-        'Press and hold your hotkey now to test.',
-        style: WrenflowStyle.caption(11),
-        textAlign: TextAlign.center,
-      ),
-    );
   }
 }
 

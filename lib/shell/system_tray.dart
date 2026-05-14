@@ -6,14 +6,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tray_manager/tray_manager.dart';
 
 import '../providers/app_lifecycle_provider.dart';
-import '../providers/audio_devices_provider.dart';
 import '../providers/launch_at_login_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/app_version.dart';
-import '../src/bindings/signals/signals.dart';
 import '../state/app_lifecycle_state.dart';
 import 'main_window_presentation.dart';
 import 'shell_pipeline_presentation.dart';
+import 'tray_menu_presentation.dart';
 
 /// Manages the macOS system tray (menu bar) icon and context menu.
 class SystemTrayManager with TrayListener {
@@ -25,9 +24,6 @@ class SystemTrayManager with TrayListener {
   String? _idleIconPath;
   String? _recordingIconPath;
   String? _transcribingIconPath;
-
-  List<AudioDeviceInfo> _audioDevices = [];
-  String _defaultDeviceName = '';
 
   Future<void> init() async {
     _idleIconPath = await _extractAsset('assets/tray_icons/tray_idle@2x.png');
@@ -48,24 +44,20 @@ class SystemTrayManager with TrayListener {
 
     _trayManager.addListener(this);
 
-    _ref.listen<AsyncValue<AudioDevicesSnapshotView>>(
-      audioDevicesSnapshotProvider,
-      (previous, next) {
-        final snapshot = next.value;
-        if (snapshot == null) return;
-        _audioDevices = snapshot.devices;
-        _defaultDeviceName = snapshot.defaultDeviceName;
-        _updateContextMenu(_ref.read(shellPipelinePresentationProvider));
-      },
-    );
-
-    await _updateContextMenu(_ref.read(shellPipelinePresentationProvider));
+    await _updateContextMenu(_ref.read(trayMenuPresentationProvider));
 
     _ref.listen<ShellPipelinePresentation>(shellPipelinePresentationProvider, (
       previous,
       next,
     ) {
-      _onPipelinePresentationChanged(next);
+      _updateIcon(next);
+    });
+
+    _ref.listen<TrayMenuPresentation>(trayMenuPresentationProvider, (
+      previous,
+      next,
+    ) {
+      _updateContextMenu(next);
     });
 
     // React to lifecycle changes.
@@ -73,10 +65,6 @@ class SystemTrayManager with TrayListener {
       appLifecycleProvider,
       (previous, next) => _onLifecycleChanged(next),
     );
-
-    _ref.listen<LaunchAtLoginState>(launchAtLoginProvider, (previous, next) {
-      _updateContextMenu(_ref.read(shellPipelinePresentationProvider));
-    });
   }
 
   void _onLifecycleChanged(AppLifecycleState next) {
@@ -102,11 +90,6 @@ class SystemTrayManager with TrayListener {
     }
   }
 
-  void _onPipelinePresentationChanged(ShellPipelinePresentation presentation) {
-    _updateIcon(presentation);
-    _updateContextMenu(presentation);
-  }
-
   Future<void> _updateIcon(ShellPipelinePresentation presentation) async {
     final String? iconPath;
     switch (presentation.trayIcon) {
@@ -123,30 +106,16 @@ class SystemTrayManager with TrayListener {
     }
   }
 
-  Future<void> _updateContextMenu(ShellPipelinePresentation presentation) async {
-    final audioSnapshot = _ref.read(audioDevicesSnapshotProvider).value;
-    final selectedMicId =
-        audioSnapshot?.effectiveSelectedDeviceId ??
-        _ref.read(settingsProvider).selectedMicrophoneId;
-    final launchAtLogin = _ref.read(launchAtLoginProvider);
-
-    final defaultLabel = _defaultDeviceName.isNotEmpty
-        ? 'System Default ($_defaultDeviceName)'
-        : 'System Default';
-
-    final micItems = <MenuItem>[
-      MenuItem.checkbox(
-        label: defaultLabel,
-        checked: selectedMicId == 'default',
-        onClick: (_) => _selectMicrophone('default'),
-      ),
-      for (final device in _audioDevices)
-        MenuItem.checkbox(
-          label: device.name,
-          checked: selectedMicId == device.id,
-          onClick: (_) => _selectMicrophone(device.id),
-        ),
-    ];
+  Future<void> _updateContextMenu(TrayMenuPresentation presentation) async {
+    final micItems = presentation.microphones
+        .map(
+          (item) => MenuItem.checkbox(
+            label: item.label,
+            checked: item.selected,
+            onClick: (_) => _selectMicrophone(item.id),
+          ),
+        )
+        .toList();
 
     final menu = Menu(
       items: [
@@ -157,11 +126,12 @@ class SystemTrayManager with TrayListener {
         MenuItem(label: presentation.statusText, disabled: true),
         MenuItem.separator(),
         MenuItem.checkbox(
-          label: launchAtLogin.isLoading
+          label: presentation.launchAtLoginLoading
               ? 'Launch at Login...'
               : 'Launch at Login',
-          checked: launchAtLogin.enabled,
-          onClick: (_) => _setLaunchAtLogin(!launchAtLogin.enabled),
+          checked: presentation.launchAtLoginEnabled,
+          onClick: (_) =>
+              _setLaunchAtLogin(!presentation.launchAtLoginEnabled),
         ),
         MenuItem.separator(),
         MenuItem.submenu(
@@ -184,12 +154,12 @@ class SystemTrayManager with TrayListener {
 
   void _selectMicrophone(String deviceId) {
     _ref.read(settingsProvider.notifier).setSelectedMicrophoneId(deviceId);
-    _updateContextMenu(_ref.read(shellPipelinePresentationProvider));
+    _updateContextMenu(_ref.read(trayMenuPresentationProvider));
   }
 
   void _setLaunchAtLogin(bool enabled) {
     _ref.read(launchAtLoginProvider.notifier).setEnabled(enabled);
-    _updateContextMenu(_ref.read(shellPipelinePresentationProvider));
+    _updateContextMenu(_ref.read(trayMenuPresentationProvider));
   }
 
   void _showSettings() {
