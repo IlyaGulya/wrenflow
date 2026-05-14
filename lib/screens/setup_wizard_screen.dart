@@ -8,6 +8,7 @@ import '../providers/local_models_provider.dart';
 import '../providers/model_state_provider.dart';
 import '../providers/permissions_provider.dart';
 import '../providers/settings_provider.dart';
+import '../providers/wizard_draft_provider.dart';
 import '../providers/transcription_test_presentation_provider.dart';
 import '../providers/wizard_presentation_provider.dart';
 import '../src/bindings/signals/signals.dart';
@@ -34,14 +35,24 @@ class SetupWizardScreen extends ConsumerStatefulWidget {
 }
 
 class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
-  String _selectedHotkey = '61';
   final _vocabularyController = TextEditingController();
-  final _autoRequested = <OnboardingStep>{};
-  String? _lastSyncedHotkey;
-  String? _lastSyncedVocabulary;
+  ProviderSubscription<AppSettings>? _settingsSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _settingsSubscription = ref.listenManual<AppSettings>(settingsProvider, (
+      previous,
+      next,
+    ) {
+      ref.read(wizardDraftProvider.notifier).hydrateFromSettings(next);
+      _hydrateVocabularyController(ref.read(wizardDraftProvider).vocabularyDraft);
+    }, fireImmediately: true);
+  }
 
   @override
   void dispose() {
+    _settingsSubscription?.close();
     _vocabularyController.dispose();
     super.dispose();
   }
@@ -52,31 +63,21 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   PermissionsNotifier get _permissions =>
       ref.read(permissionsProvider.notifier);
 
-  void _hydrateSettings(AppSettings settings) {
-    final hotkeyWasEdited =
-        _lastSyncedHotkey != null && _selectedHotkey != _lastSyncedHotkey;
-    if (!hotkeyWasEdited) {
-      _selectedHotkey = settings.selectedHotkey;
-      _lastSyncedHotkey = settings.selectedHotkey;
+  void _hydrateVocabularyController(String text) {
+    if (_vocabularyController.text == text) {
+      return;
     }
-
-    final vocabularyWasEdited =
-        _lastSyncedVocabulary != null &&
-        _vocabularyController.text != _lastSyncedVocabulary;
-    if (!vocabularyWasEdited) {
-      final text = settings.customVocabulary;
-      _vocabularyController.value = TextEditingValue(
-        text: text,
-        selection: TextSelection.collapsed(offset: text.length),
-      );
-      _lastSyncedVocabulary = text;
-    }
+    _vocabularyController.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
   }
 
   Future<void> _finish() async {
+    final draft = ref.read(wizardDraftProvider);
     final notifier = ref.read(settingsProvider.notifier);
-    await notifier.setSelectedHotkey(_selectedHotkey);
-    final vocab = _vocabularyController.text.trim();
+    await notifier.setSelectedHotkey(draft.selectedHotkey);
+    final vocab = draft.vocabularyDraft.trim();
     if (vocab.isNotEmpty) {
       await notifier.setCustomVocabulary(vocab);
     }
@@ -86,7 +87,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   @override
   Widget build(BuildContext context) {
     final presentation = ref.watch(wizardPresentationProvider(widget.mode));
-    final settings = ref.watch(settingsProvider);
+    final draft = ref.watch(wizardDraftProvider);
 
     // Recovery mode — auto-returns via provider, just show permission steps.
     if (widget.mode == WizardMode.recovery &&
@@ -97,9 +98,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       );
     }
 
-    _hydrateSettings(settings);
     _handleAutoAdvance(presentation.permissions, presentation.currentStep);
-    _syncSettingsIfNeeded(presentation.currentStep);
+    _syncSettingsIfNeeded(presentation.currentStep, draft);
 
     return Scaffold(
       backgroundColor: WrenflowStyle.surface,
@@ -136,24 +136,17 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
 
   // ── Sync settings to Rust when reaching complete step ──────
 
-  bool _settingsSynced = false;
-
-  void _syncSettingsIfNeeded(OnboardingStep step) {
-    // Sync settings when reaching complete step.
-    if (step == OnboardingStep.complete && !_settingsSynced) {
-      _settingsSynced = true;
+  void _syncSettingsIfNeeded(OnboardingStep step, WizardDraftState draft) {
+    if (ref.read(wizardDraftProvider.notifier).shouldSyncCompleteStep(step)) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
         final notifier = ref.read(settingsProvider.notifier);
-        await notifier.setSelectedHotkey(_selectedHotkey);
-        final vocab = _vocabularyController.text.trim();
+        await notifier.setSelectedHotkey(draft.selectedHotkey);
+        final vocab = draft.vocabularyDraft.trim();
         if (vocab.isNotEmpty) {
           await notifier.setCustomVocabulary(vocab);
         }
       });
-    }
-    if (step != OnboardingStep.complete) {
-      _settingsSynced = false;
     }
   }
 
@@ -164,8 +157,9 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     // Only triggers the system dialog — does NOT open Settings on denial.
     if (step == OnboardingStep.microphone &&
         permissions.microphone == PermissionUiStatus.unknown &&
-        !_autoRequested.contains(OnboardingStep.microphone)) {
-      _autoRequested.add(OnboardingStep.microphone);
+        ref.read(wizardDraftProvider.notifier).consumeAutoRequest(
+          OnboardingStep.microphone,
+        )) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
         debugPrint('[wizard] auto-requesting microphone permission');
@@ -394,17 +388,16 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   }
 
   Widget _buildHotkeyStep({Key? key}) {
+    final draft = ref.watch(wizardDraftProvider);
     return _StepContent(
       key: key,
       icon: CupertinoIcons.keyboard,
       title: 'Hotkey',
       subtitle: 'Hold to record, release to transcribe and paste.',
       child: HotkeyCapture(
-        currentValue: _selectedHotkey,
-        onKeySelected: (value) => setState(() {
-          _selectedHotkey = value;
-          _lastSyncedHotkey = value;
-        }),
+        currentValue: draft.selectedHotkey,
+        onKeySelected: (value) =>
+            ref.read(wizardDraftProvider.notifier).setSelectedHotkey(value),
       ),
     );
   }
@@ -442,6 +435,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         ),
         child: TextField(
           controller: _vocabularyController,
+          onChanged: (value) =>
+              ref.read(wizardDraftProvider.notifier).setVocabularyDraft(value),
           maxLines: null,
           expands: true,
           style: WrenflowStyle.mono(11),
