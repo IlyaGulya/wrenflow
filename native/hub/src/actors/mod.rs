@@ -10,6 +10,7 @@ pub mod model_actor;
 pub mod paste_actor;
 pub mod permissions_actor;
 mod pipeline_actor;
+pub mod runtime_capabilities_actor;
 pub mod settings_actor;
 pub mod shell_capabilities_actor;
 mod snapshot_mirror;
@@ -61,6 +62,7 @@ pub async fn create_actors() {
     spawn_settings_actor(runtime.settings_runtime.clone());
     spawn_model_actor(&runtime);
     spawn_permissions_actor();
+    spawn_runtime_capabilities_actor();
     spawn_app_session_actor(&runtime);
     spawn_audio_devices_actor(&runtime);
     spawn_updates_actor();
@@ -103,6 +105,12 @@ fn spawn_model_actor(runtime: &RuntimeGraph) {
 fn spawn_permissions_actor() {
     spawn(async {
         permissions_actor::run().await;
+    });
+}
+
+fn spawn_runtime_capabilities_actor() {
+    spawn(async {
+        runtime_capabilities_actor::run().await;
     });
 }
 

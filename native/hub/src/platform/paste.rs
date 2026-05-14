@@ -1,3 +1,7 @@
+pub const fn is_supported() -> bool {
+    cfg!(target_os = "macos") || cfg!(target_os = "windows") || cfg!(target_os = "linux")
+}
+
 pub fn simulate_paste_shortcut() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {

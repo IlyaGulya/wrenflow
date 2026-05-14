@@ -7,6 +7,7 @@ import 'app_lifecycle_provider.dart';
 import 'launch_at_login_provider.dart';
 import 'local_models_snapshot_provider.dart';
 import 'permissions_provider.dart';
+import 'runtime_capabilities_provider.dart';
 
 class WizardPresentation {
   const WizardPresentation({
@@ -18,6 +19,7 @@ class WizardPresentation {
     required this.showLaunchAtLogin,
     required this.launchAtLoginEnabled,
     required this.launchAtLoginLoading,
+    this.hotkeyStepMessage,
     this.modelStepMessage,
     this.recoveryMissing,
   });
@@ -30,6 +32,7 @@ class WizardPresentation {
   final bool showLaunchAtLogin;
   final bool launchAtLoginEnabled;
   final bool launchAtLoginLoading;
+  final String? hotkeyStepMessage;
   final String? modelStepMessage;
   final MissingPermissions? recoveryMissing;
 }
@@ -40,6 +43,7 @@ final wizardPresentationProvider =
       final permissions = ref.watch(permissionsProvider);
       final shellCapabilities = ref.watch(shellCapabilitiesProvider);
       final launchAtLogin = ref.watch(launchAtLoginProvider);
+      final runtimeCapabilities = ref.watch(runtimeCapabilitiesProvider).value;
       final localModelsSnapshot = ref.watch(localModelsSnapshotProvider).value;
 
       final currentStep = lifecycle is Onboarding
@@ -60,11 +64,29 @@ final wizardPresentationProvider =
           permissions.microphone == PermissionUiStatus.granted,
         OnboardingStep.accessibility =>
           permissions.accessibility == PermissionUiStatus.granted,
-        OnboardingStep.model => selectedModelReady,
+        OnboardingStep.hotkey => true,
+        OnboardingStep.model =>
+          runtimeCapabilities != null &&
+                  (!runtimeCapabilities.localTranscription ||
+                      !runtimeCapabilities.modelActivation)
+              ? false
+              : selectedModelReady,
         _ => true,
       };
 
+      final hotkeyStepMessage = switch (runtimeCapabilities) {
+        null => 'Loading runtime support...',
+        RuntimeCapabilities(globalHotkey: false) =>
+          'Global hotkeys are not available in the current runtime yet.',
+        _ => null,
+      };
+
       final modelStepMessage = switch (selectedModelState) {
+        _ when runtimeCapabilities == null => 'Loading runtime support...',
+        _ when runtimeCapabilities.localTranscription == false =>
+          'Local transcription is not available in the current runtime yet.',
+        _ when runtimeCapabilities.modelActivation == false =>
+          'Model activation is not available in the current runtime yet.',
         null => 'Loading model catalog...',
         ModelStateDownloading() => 'Wait for ${selectedModel?.displayName ?? 'the selected model'} to finish downloading.',
         ModelStateLoading() => 'Wait for ${selectedModel?.displayName ?? 'the selected model'} to finish loading.',
@@ -85,6 +107,9 @@ final wizardPresentationProvider =
             currentStep == OnboardingStep.complete,
         launchAtLoginEnabled: launchAtLogin.enabled,
         launchAtLoginLoading: launchAtLogin.isLoading,
+        hotkeyStepMessage: currentStep == OnboardingStep.hotkey
+            ? hotkeyStepMessage
+            : null,
         modelStepMessage: currentStep == OnboardingStep.model
             ? modelStepMessage
             : null,

@@ -398,17 +398,31 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   Widget _buildHotkeyStep({Key? key}) {
     final draft = ref.watch(wizardDraftProvider);
     final settings = ref.watch(settingsProvider);
+    final presentation = ref.watch(wizardPresentationProvider(widget.mode));
     return _StepContent(
       key: key,
       icon: CupertinoIcons.keyboard,
       title: 'Hotkey',
       subtitle: 'Hold to record, release to transcribe and paste.',
-      child: HotkeyCapture(
-        policy: platformHotkeyPolicy,
-        currentValue: draft.selectedHotkey,
-        enabled: settings.hasSnapshot,
-        onKeySelected: (value) =>
-            ref.read(wizardDraftProvider.notifier).setSelectedHotkey(value),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          HotkeyCapture(
+            policy: platformHotkeyPolicy,
+            currentValue: draft.selectedHotkey,
+            enabled: settings.hasSnapshot,
+            onKeySelected: (value) =>
+                ref.read(wizardDraftProvider.notifier).setSelectedHotkey(value),
+          ),
+          if (presentation.hotkeyStepMessage != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              presentation.hotkeyStepMessage!,
+              textAlign: TextAlign.center,
+              style: WrenflowStyle.caption(11),
+            ),
+          ],
+        ],
       ),
     );
   }

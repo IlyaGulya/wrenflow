@@ -74,6 +74,17 @@ pub struct ShellCapabilitiesSnapshot {
 }
 
 #[derive(Serialize, Deserialize, SignalPiece, Clone, Debug)]
+pub struct RuntimeCapabilitiesSnapshot {
+    pub global_hotkey: bool,
+    pub paste_injection: bool,
+    pub local_transcription: bool,
+    pub audio_capture: bool,
+    pub model_download: bool,
+    pub model_activation: bool,
+    pub history_persistence: bool,
+}
+
+#[derive(Serialize, Deserialize, SignalPiece, Clone, Debug)]
 pub struct LaunchAtLoginSnapshot {
     pub enabled: bool,
     pub is_loading: bool,
@@ -329,6 +340,18 @@ pub struct RequestLocalModelsSnapshot;
 /// Dart → Rust: cancel model download
 #[derive(Deserialize, DartSignal)]
 pub struct CancelModelDownload;
+
+// ============================================================================
+// Runtime capabilities signals (Rust → Dart / request)
+// ============================================================================
+
+#[derive(Serialize, RustSignal)]
+pub struct RuntimeCapabilitiesSnapshotChanged {
+    pub snapshot: RuntimeCapabilitiesSnapshot,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct RequestRuntimeCapabilitiesSnapshot;
 
 // ============================================================================
 // Permissions signals (bidirectional)

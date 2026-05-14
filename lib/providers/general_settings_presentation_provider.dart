@@ -5,6 +5,7 @@ import '../shell/shell_capabilities.dart';
 import '../src/bindings/signals/signals.dart';
 import 'audio_devices_provider.dart';
 import 'launch_at_login_provider.dart';
+import 'runtime_capabilities_provider.dart';
 import 'settings_provider.dart';
 
 class MicrophoneOptionPresentation {
@@ -26,6 +27,8 @@ class GeneralSettingsPresentation {
     required this.soundEnabled,
     required this.minimumRecordingDurationMs,
     required this.customVocabulary,
+    required this.hotkeyHint,
+    required this.showMicrophoneSelection,
     required this.showLaunchAtLogin,
     required this.launchAtLoginEnabled,
     required this.launchAtLoginLoading,
@@ -37,6 +40,8 @@ class GeneralSettingsPresentation {
   final bool soundEnabled;
   final double minimumRecordingDurationMs;
   final String customVocabulary;
+  final String? hotkeyHint;
+  final bool showMicrophoneSelection;
   final bool showLaunchAtLogin;
   final bool launchAtLoginEnabled;
   final bool launchAtLoginLoading;
@@ -48,6 +53,7 @@ final generalSettingsPresentationProvider =
       final settings = ref.watch(settingsProvider);
       final shellCapabilities = ref.watch(shellCapabilitiesProvider);
       final launchAtLogin = ref.watch(launchAtLoginProvider);
+      final runtimeCapabilities = ref.watch(runtimeCapabilitiesProvider).value;
       final audioSnapshot = ref.watch(audioDevicesSnapshotProvider).value;
 
       final selectedMicId =
@@ -78,6 +84,14 @@ final generalSettingsPresentationProvider =
         soundEnabled: settings.soundEnabled,
         minimumRecordingDurationMs: settings.minimumRecordingDurationMs,
         customVocabulary: settings.customVocabulary,
+        hotkeyHint: runtimeCapabilities == null
+            ? 'Loading runtime support...'
+            : runtimeCapabilities.globalHotkey
+            ? null
+            : 'Global hotkeys are not available in the current runtime yet.',
+        showMicrophoneSelection:
+            shellCapabilities.microphoneSelection &&
+            (runtimeCapabilities?.audioCapture ?? true),
         showLaunchAtLogin: shellCapabilities.launchAtLogin,
         launchAtLoginEnabled: launchAtLogin.enabled,
         launchAtLoginLoading: launchAtLogin.isLoading,

@@ -7,6 +7,10 @@ use wrenflow_domain::config::default_selected_hotkey_keycode;
 
 use crate::actors::hotkey_actor::HotkeyEvent;
 
+pub const fn is_supported() -> bool {
+    cfg!(target_os = "macos")
+}
+
 pub fn start_listener(
     target_keycode: Arc<AtomicU32>,
     event_tx: mpsc::UnboundedSender<HotkeyEvent>,

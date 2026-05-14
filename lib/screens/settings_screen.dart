@@ -267,11 +267,13 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
           const SizedBox(height: 16),
 
           // Microphone card
-          SettingsCard(
-            title: 'Microphone',
-            child: _buildMicrophoneDropdown(presentation),
-          ),
-          const SizedBox(height: 16),
+          if (presentation.showMicrophoneSelection) ...[
+            SettingsCard(
+              title: 'Microphone',
+              child: _buildMicrophoneDropdown(presentation),
+            ),
+            const SizedBox(height: 16),
+          ],
 
           if (presentation.showLaunchAtLogin) ...[
             SettingsCard(
@@ -316,12 +318,24 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
   }
 
   Widget _buildHotkeyOptions(GeneralSettingsPresentation presentation) {
-    return HotkeyCapture(
-      policy: platformHotkeyPolicy,
-      currentValue: presentation.selectedHotkey,
-      enabled: presentation.hasSettingsSnapshot,
-      onKeySelected: (value) =>
-          ref.read(settingsProvider.notifier).setSelectedHotkey(value),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        HotkeyCapture(
+          policy: platformHotkeyPolicy,
+          currentValue: presentation.selectedHotkey,
+          enabled: presentation.hasSettingsSnapshot,
+          onKeySelected: (value) =>
+              ref.read(settingsProvider.notifier).setSelectedHotkey(value),
+        ),
+        if (presentation.hotkeyHint != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            presentation.hotkeyHint!,
+            style: WrenflowStyle.caption(11),
+          ),
+        ],
+      ],
     );
   }
 
@@ -526,6 +540,13 @@ class _ModelsSummaryCard extends ConsumerWidget {
           _summaryRow('Active', presentation.activeModelLabel),
           const SizedBox(height: 8),
           _summaryRow('Installed', presentation.installedCountLabel),
+          if (presentation.runtimeHint != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              presentation.runtimeHint!,
+              style: WrenflowStyle.caption(11),
+            ),
+          ],
           const SizedBox(height: 10),
           Text(
             'Changing the selection only updates your preferred model. Downloading and activating stay fully manual.',
