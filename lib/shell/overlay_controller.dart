@@ -5,8 +5,8 @@ import 'package:rinf/rinf.dart';
 
 import '../providers/audio_level_provider.dart';
 import '../src/bindings/signals/signals.dart';
+import 'overlay_shell.dart';
 import 'shell_pipeline_presentation.dart';
-import 'services/overlay_service.dart';
 
 /// Bridges pipeline state + audio levels to the native overlay panel.
 ///
@@ -15,7 +15,7 @@ class OverlayController {
   OverlayController(this._container);
 
   final ProviderContainer _container;
-  final _overlay = OverlayService();
+  final _overlay = platformOverlayShell;
   OverlayPhase _currentPhase = OverlayPhase.hidden;
   StreamSubscription<RustSignalPack<PipelineError>>? _errorSub;
 

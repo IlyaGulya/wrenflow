@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../shell/services/launch_at_login_service.dart';
+import '../shell/launch_at_login_shell.dart';
 import '../src/bindings/signals/signals.dart' as sig;
 import 'rust_snapshot_bridge.dart';
 
@@ -39,7 +39,7 @@ class LaunchAtLoginState {
 }
 
 class LaunchAtLoginNotifier extends RustSnapshotNotifier<LaunchAtLoginState> {
-  final _service = LaunchAtLoginService();
+  final _shell = platformLaunchAtLoginShell;
 
   @override
   LaunchAtLoginState build() {
@@ -74,7 +74,7 @@ class LaunchAtLoginNotifier extends RustSnapshotNotifier<LaunchAtLoginState> {
     state = loadingState;
     _reportSnapshot(loadingState);
     try {
-      final enabled = await _service.isEnabled();
+      final enabled = await _shell.isEnabled();
       if (!ref.mounted) return;
       final nextState = LaunchAtLoginState(enabled: enabled, isLoading: false);
       state = nextState;
@@ -103,8 +103,8 @@ class LaunchAtLoginNotifier extends RustSnapshotNotifier<LaunchAtLoginState> {
     _reportSnapshot(loadingState);
 
     try {
-      await _service.setEnabled(enabled);
-      final actual = await _service.isEnabled();
+      await _shell.setEnabled(enabled);
+      final actual = await _shell.isEnabled();
       if (!ref.mounted) return;
       final nextState = LaunchAtLoginState(enabled: actual, isLoading: false);
       state = nextState;

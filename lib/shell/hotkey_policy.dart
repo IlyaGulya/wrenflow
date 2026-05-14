@@ -1,7 +1,6 @@
 // ignore_for_file: deprecated_member_use
 
-import 'dart:io';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class HotkeyPreset {
@@ -13,14 +12,18 @@ class HotkeyPreset {
 
 class HotkeyPolicy {
   const HotkeyPolicy({
+    required this.supported,
     required this.presets,
     required this.displayName,
     required this.captureValue,
+    this.unsupportedMessage,
   });
 
+  final bool supported;
   final List<HotkeyPreset> presets;
   final String Function(String value) displayName;
   final String? Function(RawKeyEvent event) captureValue;
+  final String? unsupportedMessage;
 }
 
 const _macPresets = [
@@ -114,7 +117,8 @@ String _macDisplayName(String value) {
 }
 
 String? _captureMacValue(RawKeyEvent event) {
-  if (Platform.isMacOS && event.data is RawKeyEventDataMacOs) {
+  if (defaultTargetPlatform == TargetPlatform.macOS &&
+      event.data is RawKeyEventDataMacOs) {
     return (event.data as RawKeyEventDataMacOs).keyCode.toString();
   }
 
@@ -122,12 +126,27 @@ String? _captureMacValue(RawKeyEvent event) {
 }
 
 const _macHotkeyPolicy = HotkeyPolicy(
+  supported: true,
   presets: _macPresets,
   displayName: _macDisplayName,
   captureValue: _captureMacValue,
 );
 
+const _unsupportedHotkeyPolicy = HotkeyPolicy(
+  supported: false,
+  presets: [],
+  displayName: _macDisplayName,
+  captureValue: _captureUnsupportedValue,
+  unsupportedMessage:
+      'Global hotkey remapping is not available on this platform yet.',
+);
+
+String? _captureUnsupportedValue(RawKeyEvent event) => null;
+
 HotkeyPolicy get platformHotkeyPolicy {
-  if (Platform.isMacOS) return _macHotkeyPolicy;
-  return _macHotkeyPolicy;
+  if (kIsWeb) return _unsupportedHotkeyPolicy;
+  if (defaultTargetPlatform == TargetPlatform.macOS) {
+    return _macHotkeyPolicy;
+  }
+  return _unsupportedHotkeyPolicy;
 }

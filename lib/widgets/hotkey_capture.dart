@@ -56,6 +56,10 @@ class _HotkeyCaptureState extends State<HotkeyCapture> {
 
   @override
   Widget build(BuildContext context) {
+    if (!widget.policy.supported) {
+      return _buildUnsupportedState();
+    }
+
     return Column(
       children: [
         for (final preset in widget.policy.presets) _buildPresetRow(preset),
@@ -160,6 +164,24 @@ class _HotkeyCaptureState extends State<HotkeyCapture> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildUnsupportedState() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+      decoration: BoxDecoration(
+        color: CupertinoColors.extraLightBackgroundGray.withAlpha(0),
+        borderRadius: BorderRadius.circular(7),
+      ),
+      child: Text(
+        widget.policy.unsupportedMessage ??
+            'Global hotkey remapping is unavailable on this platform.',
+        style: WrenflowStyle.body(
+          12,
+        ).copyWith(color: WrenflowStyle.textTertiary),
       ),
     );
   }

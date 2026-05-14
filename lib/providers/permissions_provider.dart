@@ -1,9 +1,8 @@
 import 'dart:async';
 
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../shell/services/permission_service.dart';
+import '../shell/permissions_shell.dart';
 import '../src/bindings/signals/signals.dart' as sig;
 import 'rust_snapshot_bridge.dart';
 
@@ -49,13 +48,13 @@ class PermissionsState {
 /// Polls shell permissions, reports them to Rust, and projects the Rust-owned
 /// permission snapshot back into Flutter.
 class PermissionsNotifier extends RustSnapshotNotifier<PermissionsState> {
-  late final PermissionService _permissionService;
+  late final PermissionsShell _permissionsShell;
   Timer? _pollTimer;
   bool _monitoringStarted = false;
 
   @override
   PermissionsState build() {
-    _permissionService = PermissionService();
+    _permissionsShell = platformPermissionsShell;
     _startRustSnapshotBridge();
     ref.onDispose(() => _pollTimer?.cancel());
     return const PermissionsState();
@@ -85,22 +84,17 @@ class PermissionsNotifier extends RustSnapshotNotifier<PermissionsState> {
   }
 
   Future<void> _pollAndReport() async {
-    try {
-      final results = await (
-        _permissionService.checkMicrophone(),
-        _permissionService.checkAccessibility(),
-      ).wait;
+    final results = await (
+      _permissionsShell.checkMicrophone(),
+      _permissionsShell.checkAccessibility(),
+    ).wait;
 
-      _reportSnapshot(
-        microphone: _fromMicrophonePermission(results.$1),
-        accessibility: results.$2
-            ? PermissionUiStatus.granted
-            : PermissionUiStatus.denied,
-      );
-    } on MissingPluginException {
-      _pollTimer?.cancel();
-      _pollTimer = null;
-    }
+    _reportSnapshot(
+      microphone: _fromMicrophonePermission(results.$1),
+      accessibility: results.$2
+          ? PermissionUiStatus.granted
+          : PermissionUiStatus.denied,
+    );
   }
 
   void _reportSnapshot({
@@ -147,22 +141,22 @@ class PermissionsNotifier extends RustSnapshotNotifier<PermissionsState> {
 
   Future<bool> requestMicrophone({bool openSettingsOnDeny = false}) async {
     _reportSnapshot(microphone: PermissionUiStatus.requesting);
-    await _permissionService.requestMicrophone();
+    await _permissionsShell.requestMicrophone();
     await refreshPermissions();
     final granted = state.microphone == PermissionUiStatus.granted;
     if (!granted && openSettingsOnDeny) {
-      await _permissionService.openMicrophoneSettings();
+      await _permissionsShell.openMicrophoneSettings();
     }
     return granted;
   }
 
   Future<bool> requestAccessibility({bool openSettingsOnDeny = false}) async {
     _reportSnapshot(accessibility: PermissionUiStatus.requesting);
-    await _permissionService.requestAccessibility();
+    await _permissionsShell.requestAccessibility();
     await refreshPermissions();
     final granted = state.accessibility == PermissionUiStatus.granted;
     if (!granted && openSettingsOnDeny) {
-      await _permissionService.openAccessibilitySettings();
+      await _permissionsShell.openAccessibilitySettings();
     }
     return granted;
   }
