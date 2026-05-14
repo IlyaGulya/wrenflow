@@ -8,12 +8,12 @@ import 'package:tray_manager/tray_manager.dart';
 import '../providers/app_lifecycle_provider.dart';
 import '../providers/audio_devices_provider.dart';
 import '../providers/launch_at_login_provider.dart';
-import '../providers/pipeline_state_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/app_version.dart';
 import '../src/bindings/signals/signals.dart';
 import '../state/app_lifecycle_state.dart';
 import 'main_window_presentation.dart';
+import 'shell_pipeline_presentation.dart';
 
 /// Manages the macOS system tray (menu bar) icon and context menu.
 class SystemTrayManager with TrayListener {
@@ -55,20 +55,17 @@ class SystemTrayManager with TrayListener {
         if (snapshot == null) return;
         _audioDevices = snapshot.devices;
         _defaultDeviceName = snapshot.defaultDeviceName;
-        final lastState = _ref.read(pipelineStateProvider).value;
-        _updateContextMenu(lastState ?? const PipelineStateIdle());
+        _updateContextMenu(_ref.read(shellPipelinePresentationProvider));
       },
     );
 
-    await _updateContextMenu(const PipelineStateIdle());
+    await _updateContextMenu(_ref.read(shellPipelinePresentationProvider));
 
-    // React to pipeline state changes (icon + menu).
-    _ref.listen<AsyncValue<PipelineState>>(pipelineStateProvider, (
+    _ref.listen<ShellPipelinePresentation>(shellPipelinePresentationProvider, (
       previous,
       next,
     ) {
-      final state = next.value;
-      if (state != null) _onPipelineStateChanged(state);
+      _onPipelinePresentationChanged(next);
     });
 
     // React to lifecycle changes.
@@ -78,8 +75,7 @@ class SystemTrayManager with TrayListener {
     );
 
     _ref.listen<LaunchAtLoginState>(launchAtLoginProvider, (previous, next) {
-      final lastState = _ref.read(pipelineStateProvider).value;
-      _updateContextMenu(lastState ?? const PipelineStateIdle());
+      _updateContextMenu(_ref.read(shellPipelinePresentationProvider));
     });
   }
 
@@ -106,19 +102,20 @@ class SystemTrayManager with TrayListener {
     }
   }
 
-  void _onPipelineStateChanged(PipelineState state) {
-    _updateIcon(state);
-    _updateContextMenu(state);
+  void _onPipelinePresentationChanged(ShellPipelinePresentation presentation) {
+    _updateIcon(presentation);
+    _updateContextMenu(presentation);
   }
 
-  Future<void> _updateIcon(PipelineState state) async {
+  Future<void> _updateIcon(ShellPipelinePresentation presentation) async {
     final String? iconPath;
-    if (state is PipelineStateRecording) {
-      iconPath = _recordingIconPath;
-    } else if (state is PipelineStateTranscribing) {
-      iconPath = _transcribingIconPath;
-    } else {
-      iconPath = _idleIconPath;
+    switch (presentation.trayIcon) {
+      case TrayIconVariant.idle:
+        iconPath = _idleIconPath;
+      case TrayIconVariant.recording:
+        iconPath = _recordingIconPath;
+      case TrayIconVariant.transcribing:
+        iconPath = _transcribingIconPath;
     }
 
     if (iconPath != null) {
@@ -126,8 +123,7 @@ class SystemTrayManager with TrayListener {
     }
   }
 
-  Future<void> _updateContextMenu(PipelineState state) async {
-    final statusText = _statusText(state);
+  Future<void> _updateContextMenu(ShellPipelinePresentation presentation) async {
     final audioSnapshot = _ref.read(audioDevicesSnapshotProvider).value;
     final selectedMicId =
         audioSnapshot?.effectiveSelectedDeviceId ??
@@ -158,7 +154,7 @@ class SystemTrayManager with TrayListener {
           label: 'Wrenflow v${AppVersion.displayVersion}',
           disabled: true,
         ),
-        MenuItem(label: statusText, disabled: true),
+        MenuItem(label: presentation.statusText, disabled: true),
         MenuItem.separator(),
         MenuItem.checkbox(
           label: launchAtLogin.isLoading
@@ -186,27 +182,14 @@ class SystemTrayManager with TrayListener {
     await _trayManager.setContextMenu(menu);
   }
 
-  String _statusText(PipelineState state) {
-    if (state is PipelineStateIdle) return 'Ready';
-    if (state is PipelineStateStarting) return 'Starting...';
-    if (state is PipelineStateInitializing) return 'Initializing...';
-    if (state is PipelineStateRecording) return 'Recording...';
-    if (state is PipelineStateTranscribing) return 'Transcribing...';
-    if (state is PipelineStatePasting) return 'Pasting...';
-    if (state is PipelineStateError) return 'Error';
-    return 'Ready';
-  }
-
   void _selectMicrophone(String deviceId) {
     _ref.read(settingsProvider.notifier).setSelectedMicrophoneId(deviceId);
-    final lastState = _ref.read(pipelineStateProvider).value;
-    _updateContextMenu(lastState ?? const PipelineStateIdle());
+    _updateContextMenu(_ref.read(shellPipelinePresentationProvider));
   }
 
   void _setLaunchAtLogin(bool enabled) {
     _ref.read(launchAtLoginProvider.notifier).setEnabled(enabled);
-    final lastState = _ref.read(pipelineStateProvider).value;
-    _updateContextMenu(lastState ?? const PipelineStateIdle());
+    _updateContextMenu(_ref.read(shellPipelinePresentationProvider));
   }
 
   void _showSettings() {

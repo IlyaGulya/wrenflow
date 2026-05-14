@@ -4,8 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rinf/rinf.dart';
 
 import '../providers/audio_level_provider.dart';
-import '../providers/pipeline_state_provider.dart';
 import '../src/bindings/signals/signals.dart';
+import 'shell_pipeline_presentation.dart';
 import 'services/overlay_service.dart';
 
 /// Bridges pipeline state + audio levels to the native overlay panel.
@@ -16,21 +16,20 @@ class OverlayController {
 
   final ProviderContainer _container;
   final _overlay = OverlayService();
-  String? _currentPhase;
+  OverlayPhase _currentPhase = OverlayPhase.hidden;
   StreamSubscription<RustSignalPack<PipelineError>>? _errorSub;
 
   void init() {
-    _container.listen<AsyncValue<PipelineState>>(pipelineStateProvider, (
+    _container.listen<ShellPipelinePresentation>(shellPipelinePresentationProvider, (
       previous,
       next,
     ) {
-      final state = next.value;
-      if (state != null) _onPipelineState(state);
+      _onPipelinePresentation(next);
     });
 
     _container.listen<AsyncValue<double>>(audioLevelProvider, (previous, next) {
       final level = next.value;
-      if (level != null && _currentPhase == 'recording') {
+      if (level != null && _currentPhase == OverlayPhase.recording) {
         _overlay.updateAudioLevel(level);
       }
     });
@@ -45,33 +44,17 @@ class OverlayController {
     await _errorSub?.cancel();
   }
 
-  void _onPipelineState(PipelineState state) {
-    switch (state) {
-      case PipelineStateStarting() || PipelineStateInitializing():
-        _currentPhase = 'initializing';
+  void _onPipelinePresentation(ShellPipelinePresentation presentation) {
+    _currentPhase = presentation.overlayPhase;
+    switch (presentation.overlayPhase) {
+      case OverlayPhase.hidden:
+        _overlay.hide();
+      case OverlayPhase.initializing:
         _overlay.show('initializing');
-
-      case PipelineStateRecording():
-        _currentPhase = 'recording';
+      case OverlayPhase.recording:
         _overlay.show('recording');
-
-      case PipelineStateTranscribing(showingIndicator: true):
-        _currentPhase = 'transcribing';
+      case OverlayPhase.transcribing:
         _overlay.show('transcribing');
-
-      case PipelineStateTranscribing(showingIndicator: false):
-        _currentPhase = null;
-        _overlay.hide();
-
-      case PipelineStatePasting() ||
-          PipelineStateIdle() ||
-          PipelineStateError():
-        _currentPhase = null;
-        _overlay.hide();
-
-      default:
-        _currentPhase = null;
-        _overlay.hide();
     }
   }
 }
