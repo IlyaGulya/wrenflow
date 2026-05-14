@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
 
+import 'rust_snapshot_bridge.dart';
+
 class LocalModelDescriptor {
   const LocalModelDescriptor({
     required this.id,
@@ -58,35 +60,35 @@ class LocalModelsSnapshot {
   }
 }
 
-final localModelsSnapshotProvider = StreamProvider<LocalModelsSnapshot>((
-  ref,
-) async* {
-  const RequestLocalModelsSnapshot().sendSignalToRust();
-
-  yield* LocalModelsSnapshotChanged.rustSignalStream.map((signalPack) {
-    final message = signalPack.message;
-    return LocalModelsSnapshot(
-      models: message.models
-          .map(
-            (model) => LocalModelDescriptor(
-              id: model.id,
-              displayName: model.displayName,
-              subtitle: model.subtitle,
-              downloadLabel: model.downloadLabel,
-              family: model.family,
-              runtimeLabel: model.runtimeLabel,
-              isRecommended: model.isRecommended,
-              isAvailable: model.isAvailable,
-              supportsCurrentRuntime: model.supportsCurrentRuntime,
-            ),
-          )
-          .toList(growable: false),
-      selectedModelId: message.selectedModelId,
-      activeModelId: message.activeModelId,
-      installedModelIds: message.installedModelIds.toSet(),
-      modelStates: {
-        for (final entry in message.modelStates) entry.modelId: entry.state,
-      },
-    );
-  });
-});
+final localModelsSnapshotProvider = StreamProvider<LocalModelsSnapshot>(
+  (ref) => rustSnapshotStream(
+    requestSnapshot: () =>
+        const RequestLocalModelsSnapshot().sendSignalToRust(),
+    signalStream: LocalModelsSnapshotChanged.rustSignalStream,
+    map: (message) {
+      return LocalModelsSnapshot(
+        models: message.models
+            .map(
+              (model) => LocalModelDescriptor(
+                id: model.id,
+                displayName: model.displayName,
+                subtitle: model.subtitle,
+                downloadLabel: model.downloadLabel,
+                family: model.family,
+                runtimeLabel: model.runtimeLabel,
+                isRecommended: model.isRecommended,
+                isAvailable: model.isAvailable,
+                supportsCurrentRuntime: model.supportsCurrentRuntime,
+              ),
+            )
+            .toList(growable: false),
+        selectedModelId: message.selectedModelId,
+        activeModelId: message.activeModelId,
+        installedModelIds: message.installedModelIds.toSet(),
+        modelStates: {
+          for (final entry in message.modelStates) entry.modelId: entry.state,
+        },
+      );
+    },
+  ),
+);

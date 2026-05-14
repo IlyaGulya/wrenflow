@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../src/bindings/signals/signals.dart';
+import '../providers/rust_snapshot_bridge.dart';
 
 class ShellCapabilities {
   const ShellCapabilities({
@@ -30,21 +31,23 @@ class ShellCapabilitiesNotifier extends Notifier<ShellCapabilities> {
   @override
   ShellCapabilities build() {
     final localSnapshot = _detectLocalCapabilities();
-    _snapshotSub = ShellCapabilitiesSnapshotChanged.rustSignalStream.listen((
-      signalPack,
-    ) {
-      final snapshot = signalPack.message.snapshot;
-      state = ShellCapabilities(
-        launchAtLogin: snapshot.launchAtLogin,
-        updates: snapshot.updates,
-        localTranscription: snapshot.localTranscription,
-        microphoneSelection: snapshot.microphoneSelection,
-        tray: snapshot.tray,
-        overlays: snapshot.overlays,
-      );
-    });
+    _snapshotSub = bindRustSnapshot<ShellCapabilitiesSnapshotChanged>(
+      requestSnapshot: () =>
+          const RequestShellCapabilitiesSnapshot().sendSignalToRust(),
+      signalStream: ShellCapabilitiesSnapshotChanged.rustSignalStream,
+      onMessage: (message) {
+        final snapshot = message.snapshot;
+        state = ShellCapabilities(
+          launchAtLogin: snapshot.launchAtLogin,
+          updates: snapshot.updates,
+          localTranscription: snapshot.localTranscription,
+          microphoneSelection: snapshot.microphoneSelection,
+          tray: snapshot.tray,
+          overlays: snapshot.overlays,
+        );
+      },
+    );
 
-    const RequestShellCapabilitiesSnapshot().sendSignalToRust();
     ReportShellCapabilitiesSnapshot(
       snapshot: ShellCapabilitiesSnapshot(
         launchAtLogin: localSnapshot.launchAtLogin,

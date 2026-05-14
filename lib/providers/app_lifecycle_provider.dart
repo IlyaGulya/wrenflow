@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../screens/settings_screen.dart';
 import '../src/bindings/signals/signals.dart' as sig;
 import '../state/app_lifecycle_state.dart';
+import 'rust_snapshot_bridge.dart';
 
 const _kHasCompletedSetup = 'has_completed_setup';
 
@@ -24,13 +25,14 @@ class AppLifecycleNotifier extends Notifier<AppLifecycleState> {
   }
 
   void _startSnapshotBridge() {
-    _snapshotSub = sig.AppSessionSnapshotChanged.rustSignalStream.listen((
-      signalPack,
-    ) {
-      _transitionTo(_mapSignalState(signalPack.message.state));
-    });
-
-    const sig.RequestAppSessionSnapshot().sendSignalToRust();
+    _snapshotSub = bindRustSnapshot<sig.AppSessionSnapshotChanged>(
+      requestSnapshot: () =>
+          const sig.RequestAppSessionSnapshot().sendSignalToRust(),
+      signalStream: sig.AppSessionSnapshotChanged.rustSignalStream,
+      onMessage: (message) {
+        _transitionTo(_mapSignalState(message.state));
+      },
+    );
   }
 
   Future<void> _bootstrap() async {

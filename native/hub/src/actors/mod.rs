@@ -11,6 +11,7 @@ pub mod paste_actor;
 pub mod permissions_actor;
 mod pipeline_actor;
 pub mod shell_capabilities_actor;
+mod snapshot_mirror;
 pub mod updates_actor;
 
 use audio_actor::{AudioActor, AudioEvent};

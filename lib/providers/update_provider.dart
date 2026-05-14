@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/update_service.dart';
 import '../shell/shell_capabilities.dart';
 import '../src/bindings/signals/signals.dart' as sig;
+import 'rust_snapshot_bridge.dart';
 
 enum UpdatePhase { unsupported, idle, checking, upToDate, available, error }
 
@@ -79,13 +80,14 @@ class UpdateNotifier extends Notifier<UpdateState> {
   }
 
   void _startSnapshotBridge() {
-    _snapshotSub = sig.UpdatesSnapshotChanged.rustSignalStream.listen((
-      signalPack,
-    ) {
-      state = _fromSignalStatus(signalPack.message.status);
-    });
-
-    const sig.RequestUpdatesSnapshot().sendSignalToRust();
+    _snapshotSub = bindRustSnapshot<sig.UpdatesSnapshotChanged>(
+      requestSnapshot: () =>
+          const sig.RequestUpdatesSnapshot().sendSignalToRust(),
+      signalStream: sig.UpdatesSnapshotChanged.rustSignalStream,
+      onMessage: (message) {
+        state = _fromSignalStatus(message.status);
+      },
+    );
   }
 
   void _reportStatus(sig.UpdateStatus status) {

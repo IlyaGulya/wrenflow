@@ -5,31 +5,22 @@ use rinf::{DartSignal, RustSignal};
 use crate::signals;
 
 pub async fn run() {
-    let mut status = signals::UpdateStatus::Idle;
     let request_recv = signals::RequestUpdatesSnapshot::get_dart_signal_receiver();
     let report_recv = signals::ReportUpdatesStatus::get_dart_signal_receiver();
 
-    signals::UpdatesSnapshotChanged {
-        status: status.clone(),
-    }
-    .send_signal_to_dart();
-
-    loop {
-        tokio::select! {
-            Some(_) = request_recv.recv() => {
-                signals::UpdatesSnapshotChanged {
-                    status: status.clone(),
-                }
-                .send_signal_to_dart();
+    super::snapshot_mirror::run_snapshot_mirror(
+        signals::UpdateStatus::Idle,
+        request_recv,
+        report_recv,
+        |status| {
+            signals::UpdatesSnapshotChanged {
+                status: status.clone(),
             }
-            Some(pack) = report_recv.recv() => {
-                status = pack.message.status;
-                signals::UpdatesSnapshotChanged {
-                    status: status.clone(),
-                }
-                .send_signal_to_dart();
-            }
-            else => break,
-        }
-    }
+            .send_signal_to_dart();
+        },
+        |status, pack: rinf::DartSignalPack<signals::ReportUpdatesStatus>| {
+            *status = pack.message.status;
+        },
+    )
+    .await;
 }

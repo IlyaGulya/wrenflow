@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../shell/services/launch_at_login_service.dart';
 import '../src/bindings/signals/signals.dart' as sig;
+import 'rust_snapshot_bridge.dart';
 
 @immutable
 class LaunchAtLoginState {
@@ -43,18 +44,20 @@ class LaunchAtLoginNotifier extends Notifier<LaunchAtLoginState> {
 
   @override
   LaunchAtLoginState build() {
-    _snapshotSub = sig.LaunchAtLoginSnapshotChanged.rustSignalStream.listen((
-      signalPack,
-    ) {
-      final snapshot = signalPack.message.snapshot;
-      state = LaunchAtLoginState(
-        enabled: snapshot.enabled,
-        isLoading: snapshot.isLoading,
-        errorMessage: snapshot.errorMessage,
-      );
-    });
+    _snapshotSub = bindRustSnapshot<sig.LaunchAtLoginSnapshotChanged>(
+      requestSnapshot: () =>
+          const sig.RequestLaunchAtLoginSnapshot().sendSignalToRust(),
+      signalStream: sig.LaunchAtLoginSnapshotChanged.rustSignalStream,
+      onMessage: (message) {
+        final snapshot = message.snapshot;
+        state = LaunchAtLoginState(
+          enabled: snapshot.enabled,
+          isLoading: snapshot.isLoading,
+          errorMessage: snapshot.errorMessage,
+        );
+      },
+    );
 
-    const sig.RequestLaunchAtLoginSnapshot().sendSignalToRust();
     ref.onDispose(() => _snapshotSub?.cancel());
     unawaited(refresh());
     return const LaunchAtLoginState.initial();

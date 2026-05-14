@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
 
+import 'rust_snapshot_bridge.dart';
+
 class AudioDevicesSnapshotView {
   const AudioDevicesSnapshotView({
     required this.hasSnapshot,
@@ -17,19 +19,20 @@ class AudioDevicesSnapshotView {
   final String effectiveSelectedDeviceId;
 }
 
-final audioDevicesSnapshotProvider = StreamProvider<AudioDevicesSnapshotView>((
-  ref,
-) async* {
-  const RequestAudioDevicesSnapshot().sendSignalToRust();
-
-  yield* AudioDevicesSnapshotChanged.rustSignalStream.map((signalPack) {
-    final snapshot = signalPack.message.snapshot;
-    return AudioDevicesSnapshotView(
-      hasSnapshot: snapshot.hasSnapshot,
-      devices: snapshot.devices,
-      defaultDeviceName: snapshot.defaultDeviceName,
-      selectedDeviceId: snapshot.selectedDeviceId,
-      effectiveSelectedDeviceId: snapshot.effectiveSelectedDeviceId,
-    );
-  });
-});
+final audioDevicesSnapshotProvider = StreamProvider<AudioDevicesSnapshotView>(
+  (ref) => rustSnapshotStream(
+    requestSnapshot: () =>
+        const RequestAudioDevicesSnapshot().sendSignalToRust(),
+    signalStream: AudioDevicesSnapshotChanged.rustSignalStream,
+    map: (message) {
+      final snapshot = message.snapshot;
+      return AudioDevicesSnapshotView(
+        hasSnapshot: snapshot.hasSnapshot,
+        devices: snapshot.devices,
+        defaultDeviceName: snapshot.defaultDeviceName,
+        selectedDeviceId: snapshot.selectedDeviceId,
+        effectiveSelectedDeviceId: snapshot.effectiveSelectedDeviceId,
+      );
+    },
+  ),
+);

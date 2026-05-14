@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../shell/services/permission_service.dart';
 import '../src/bindings/signals/signals.dart' as sig;
+import 'rust_snapshot_bridge.dart';
 
 /// Presentation-facing permission state.
 enum PermissionUiStatus {
@@ -65,18 +66,18 @@ class PermissionsNotifier extends Notifier<PermissionsState> {
   }
 
   void _startRustSnapshotBridge() {
-    _snapshotSub = sig.PermissionsSnapshotChanged.rustSignalStream.listen((
-      signalPack,
-    ) {
-      final message = signalPack.message;
-      state = PermissionsState(
-        hasSnapshot: message.hasSnapshot,
-        microphone: _fromSignalStatus(message.microphone),
-        accessibility: _fromSignalStatus(message.accessibility),
-      );
-    });
-
-    const sig.RequestPermissionsSnapshot().sendSignalToRust();
+    _snapshotSub = bindRustSnapshot<sig.PermissionsSnapshotChanged>(
+      requestSnapshot: () =>
+          const sig.RequestPermissionsSnapshot().sendSignalToRust(),
+      signalStream: sig.PermissionsSnapshotChanged.rustSignalStream,
+      onMessage: (message) {
+        state = PermissionsState(
+          hasSnapshot: message.hasSnapshot,
+          microphone: _fromSignalStatus(message.microphone),
+          accessibility: _fromSignalStatus(message.accessibility),
+        );
+      },
+    );
   }
 
   void _startPolling() {

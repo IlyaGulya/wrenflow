@@ -5,36 +5,26 @@ use rinf::{DartSignal, RustSignal};
 use crate::signals;
 
 pub async fn run() {
-    let mut snapshot = signals::LaunchAtLoginSnapshot {
-        enabled: false,
-        is_loading: true,
-        error_message: None,
-    };
-
     let request_recv = signals::RequestLaunchAtLoginSnapshot::get_dart_signal_receiver();
     let report_recv = signals::ReportLaunchAtLoginSnapshot::get_dart_signal_receiver();
 
-    signals::LaunchAtLoginSnapshotChanged {
-        snapshot: snapshot.clone(),
-    }
-    .send_signal_to_dart();
-
-    loop {
-        tokio::select! {
-            Some(_) = request_recv.recv() => {
-                signals::LaunchAtLoginSnapshotChanged {
-                    snapshot: snapshot.clone(),
-                }
-                .send_signal_to_dart();
+    super::snapshot_mirror::run_snapshot_mirror(
+        signals::LaunchAtLoginSnapshot {
+            enabled: false,
+            is_loading: true,
+            error_message: None,
+        },
+        request_recv,
+        report_recv,
+        |snapshot| {
+            signals::LaunchAtLoginSnapshotChanged {
+                snapshot: snapshot.clone(),
             }
-            Some(pack) = report_recv.recv() => {
-                snapshot = pack.message.snapshot;
-                signals::LaunchAtLoginSnapshotChanged {
-                    snapshot: snapshot.clone(),
-                }
-                .send_signal_to_dart();
-            }
-            else => break,
-        }
-    }
+            .send_signal_to_dart();
+        },
+        |snapshot, pack: rinf::DartSignalPack<signals::ReportLaunchAtLoginSnapshot>| {
+            *snapshot = pack.message.snapshot;
+        },
+    )
+    .await;
 }
