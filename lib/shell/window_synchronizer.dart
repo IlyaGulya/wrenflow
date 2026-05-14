@@ -1,13 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:macos_window_utils/macos_window_utils.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../providers/app_lifecycle_provider.dart';
 import 'main_window_presentation.dart';
-
-const _appPolicyChannel = MethodChannel('dev.gulya.wrenflow/app_policy');
+import 'window_shell.dart';
 
 /// Sits at the root of the widget tree. Watches lifecycle state and
 /// applies window configuration changes as reactive side effects.
@@ -31,7 +28,7 @@ class _WindowSynchronizerState extends ConsumerState<WindowSynchronizer>
   @override
   void initState() {
     super.initState();
-    windowManager.addListener(this);
+    platformWindowShell.addListener(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _hasRenderedFirstFrame = true;
       _syncWindow();
@@ -40,7 +37,7 @@ class _WindowSynchronizerState extends ConsumerState<WindowSynchronizer>
 
   @override
   void dispose() {
-    windowManager.removeListener(this);
+    platformWindowShell.removeListener(this);
     super.dispose();
   }
 
@@ -60,39 +57,15 @@ class _WindowSynchronizerState extends ConsumerState<WindowSynchronizer>
     final presentation = ref.read(mainWindowPresentationProvider);
 
     if (presentation.visible && !_isWindowVisible && _hasRenderedFirstFrame) {
-      await _setShowInDock(true);
-      await windowManager.setSize(
-        Size(presentation.width, presentation.height),
-      );
-      await windowManager.setMinimumSize(const Size(300, 340));
-      await windowManager.setSkipTaskbar(false);
-      await windowManager.center();
-      await windowManager.show();
-      await windowManager.focus();
-      WindowManipulator.setWindowAlphaValue(1.0);
+      await platformWindowShell.show(presentation);
       _isWindowVisible = true;
     } else if (presentation.visible && _isWindowVisible) {
-      await windowManager.setSize(
-        Size(presentation.width, presentation.height),
-      );
-      await windowManager.center();
-      await windowManager.focus();
+      await platformWindowShell.refresh(presentation);
     } else if (!presentation.visible && _isWindowVisible) {
-      WindowManipulator.setWindowAlphaValue(0.0);
-      await windowManager.hide();
-      await windowManager.setSkipTaskbar(true);
-      await _setShowInDock(false);
+      await platformWindowShell.hide(presentation);
       _isWindowVisible = false;
     } else if (!presentation.visible && !_isWindowVisible) {
-      await windowManager.setSkipTaskbar(presentation.skipTaskbar);
-    }
-  }
-
-  Future<void> _setShowInDock(bool show) async {
-    try {
-      await _appPolicyChannel.invokeMethod('setShowInDock', {'show': show});
-    } on MissingPluginException {
-      // Platform channel not available (non-macOS).
+      await platformWindowShell.syncHidden(presentation);
     }
   }
 
