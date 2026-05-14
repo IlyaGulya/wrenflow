@@ -63,6 +63,16 @@ pub struct AudioDevicesSnapshot {
     pub effective_selected_device_id: String,
 }
 
+#[derive(Serialize, Deserialize, SignalPiece, Clone, Debug)]
+pub struct ShellCapabilitiesSnapshot {
+    pub launch_at_login: bool,
+    pub updates: bool,
+    pub local_transcription: bool,
+    pub microphone_selection: bool,
+    pub tray: bool,
+    pub overlays: bool,
+}
+
 #[derive(Serialize, Deserialize, SignalPiece, Clone, Debug, PartialEq, Eq)]
 pub enum PermissionStatus {
     Unknown,
@@ -338,6 +348,26 @@ pub struct RequestUpdatesSnapshot;
 #[derive(Deserialize, DartSignal)]
 pub struct ReportUpdatesStatus {
     pub status: UpdateStatus,
+}
+
+// ============================================================================
+// Shell capabilities signals (bidirectional)
+// ============================================================================
+
+/// Rust → Dart: current shell/platform capability snapshot
+#[derive(Serialize, RustSignal)]
+pub struct ShellCapabilitiesSnapshotChanged {
+    pub snapshot: ShellCapabilitiesSnapshot,
+}
+
+/// Dart → Rust: request current shell capability snapshot
+#[derive(Deserialize, DartSignal)]
+pub struct RequestShellCapabilitiesSnapshot;
+
+/// Dart → Rust: report shell/platform capabilities observed locally
+#[derive(Deserialize, DartSignal)]
+pub struct ReportShellCapabilitiesSnapshot {
+    pub snapshot: ShellCapabilitiesSnapshot,
 }
 
 // ============================================================================

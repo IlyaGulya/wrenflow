@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-@immutable
+import '../src/bindings/signals/signals.dart';
+
 class ShellCapabilities {
   const ShellCapabilities({
     required this.launchAtLogin,
@@ -22,25 +24,67 @@ class ShellCapabilities {
   final bool overlays;
 }
 
-final shellCapabilitiesProvider = Provider<ShellCapabilities>((ref) {
-  if (kIsWeb) {
-    return const ShellCapabilities(
-      launchAtLogin: false,
-      updates: false,
-      localTranscription: false,
-      microphoneSelection: false,
-      tray: false,
-      overlays: false,
-    );
+class ShellCapabilitiesNotifier extends Notifier<ShellCapabilities> {
+  StreamSubscription? _snapshotSub;
+
+  @override
+  ShellCapabilities build() {
+    final localSnapshot = _detectLocalCapabilities();
+    _snapshotSub = ShellCapabilitiesSnapshotChanged.rustSignalStream.listen((
+      signalPack,
+    ) {
+      final snapshot = signalPack.message.snapshot;
+      state = ShellCapabilities(
+        launchAtLogin: snapshot.launchAtLogin,
+        updates: snapshot.updates,
+        localTranscription: snapshot.localTranscription,
+        microphoneSelection: snapshot.microphoneSelection,
+        tray: snapshot.tray,
+        overlays: snapshot.overlays,
+      );
+    });
+
+    const RequestShellCapabilitiesSnapshot().sendSignalToRust();
+    ReportShellCapabilitiesSnapshot(
+      snapshot: ShellCapabilitiesSnapshot(
+        launchAtLogin: localSnapshot.launchAtLogin,
+        updates: localSnapshot.updates,
+        localTranscription: localSnapshot.localTranscription,
+        microphoneSelection: localSnapshot.microphoneSelection,
+        tray: localSnapshot.tray,
+        overlays: localSnapshot.overlays,
+      ),
+    ).sendSignalToRust();
+
+    ref.onDispose(() => _snapshotSub?.cancel());
+    return localSnapshot;
   }
 
-  return ShellCapabilities(
-    launchAtLogin: Platform.isMacOS,
-    updates: !Platform.isIOS && !Platform.isAndroid,
-    localTranscription: !Platform.isIOS && !Platform.isAndroid,
-    microphoneSelection:
-        Platform.isMacOS || Platform.isWindows || Platform.isLinux,
-    tray: Platform.isMacOS || Platform.isWindows || Platform.isLinux,
-    overlays: Platform.isMacOS,
-  );
-});
+  ShellCapabilities _detectLocalCapabilities() {
+    if (kIsWeb) {
+      return const ShellCapabilities(
+        launchAtLogin: false,
+        updates: false,
+        localTranscription: false,
+        microphoneSelection: false,
+        tray: false,
+        overlays: false,
+      );
+    }
+
+    return ShellCapabilities(
+      launchAtLogin: Platform.isMacOS,
+      updates: !Platform.isIOS && !Platform.isAndroid,
+      localTranscription: !Platform.isIOS && !Platform.isAndroid,
+      microphoneSelection:
+          Platform.isMacOS || Platform.isWindows || Platform.isLinux,
+      tray: Platform.isMacOS || Platform.isWindows || Platform.isLinux,
+      overlays: Platform.isMacOS,
+    );
+  }
+}
+
+final shellCapabilitiesProvider =
+    NotifierProvider<ShellCapabilitiesNotifier, ShellCapabilities>(
+      ShellCapabilitiesNotifier.new,
+    );

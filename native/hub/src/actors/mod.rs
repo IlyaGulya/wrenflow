@@ -9,6 +9,7 @@ pub mod model_actor;
 pub mod paste_actor;
 pub mod permissions_actor;
 mod pipeline_actor;
+pub mod shell_capabilities_actor;
 pub mod updates_actor;
 
 use audio_actor::{AudioActor, AudioEvent};
@@ -76,6 +77,11 @@ pub async fn create_actors() {
     // Updates actor
     spawn(async {
         updates_actor::run().await;
+    });
+
+    // Shell capabilities actor
+    spawn(async {
+        shell_capabilities_actor::run().await;
     });
 
     // TranscriptAction listener
