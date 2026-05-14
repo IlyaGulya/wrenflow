@@ -3,6 +3,7 @@
 
 mod actors;
 mod logging;
+mod platform;
 pub mod signals;
 
 use actors::create_actors;
