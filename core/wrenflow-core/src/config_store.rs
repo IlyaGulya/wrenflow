@@ -81,6 +81,10 @@ pub fn default_config_path(app_name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wrenflow_domain::config::{
+        DEFAULT_MINIMUM_RECORDING_DURATION_MS, DEFAULT_SELECTED_HOTKEY,
+        DEFAULT_SELECTED_LOCAL_MODEL_ID,
+    };
 
     #[test]
     fn default_config_roundtrip() {
@@ -90,14 +94,17 @@ mod tests {
         store.save(&config).unwrap();
         let loaded = store.load().unwrap();
         assert!(loaded.sound_enabled);
-        assert_eq!(loaded.selected_hotkey, "61");
-        assert_eq!(loaded.selected_local_model_id, "parakeet-tdt-0.6b-v3-onnx");
+        assert_eq!(loaded.selected_hotkey, DEFAULT_SELECTED_HOTKEY);
+        assert_eq!(loaded.selected_local_model_id, DEFAULT_SELECTED_LOCAL_MODEL_ID);
     }
 
     #[test]
     fn load_or_default_missing_file() {
         let store = ConfigStore::new(PathBuf::from("/nonexistent/config.json"));
         let config = store.load_or_default();
-        assert_eq!(config.minimum_recording_duration_ms, 300.0);
+        assert_eq!(
+            config.minimum_recording_duration_ms,
+            DEFAULT_MINIMUM_RECORDING_DURATION_MS
+        );
     }
 }

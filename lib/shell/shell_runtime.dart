@@ -12,8 +12,17 @@ class ShellRuntimeCoordinator {
   final ProviderContainer _container;
 
   Future<void> init() async {
-    _container.read(shellCapabilitiesProvider.notifier).reportLocalCapabilities();
-    await _container.read(permissionsProvider.notifier).startMonitoring();
-    await _container.read(launchAtLoginProvider.notifier).refresh();
+    final capabilitiesNotifier = _container.read(
+      shellCapabilitiesProvider.notifier,
+    );
+    capabilitiesNotifier.reportLocalCapabilities();
+    final capabilities = _container.read(shellCapabilitiesProvider);
+
+    if (capabilities.localTranscription) {
+      await _container.read(permissionsProvider.notifier).startMonitoring();
+    }
+    if (capabilities.launchAtLogin) {
+      await _container.read(launchAtLoginProvider.notifier).refresh();
+    }
   }
 }

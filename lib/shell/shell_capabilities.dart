@@ -74,14 +74,27 @@ class ShellCapabilitiesNotifier
       );
     }
 
-    return ShellCapabilities(
-      launchAtLogin: Platform.isMacOS,
-      updates: !Platform.isIOS && !Platform.isAndroid,
-      localTranscription: !Platform.isIOS && !Platform.isAndroid,
-      microphoneSelection:
-          Platform.isMacOS || Platform.isWindows || Platform.isLinux,
-      tray: Platform.isMacOS || Platform.isWindows || Platform.isLinux,
-      overlays: Platform.isMacOS,
+    // Current shell/runtime integration is only implemented and packaged for
+    // macOS. Keep this honest until real adapters and packaging exist for
+    // other platforms.
+    if (!Platform.isMacOS) {
+      return const ShellCapabilities(
+        launchAtLogin: false,
+        updates: false,
+        localTranscription: false,
+        microphoneSelection: false,
+        tray: false,
+        overlays: false,
+      );
+    }
+
+    return const ShellCapabilities(
+      launchAtLogin: true,
+      updates: true,
+      localTranscription: true,
+      microphoneSelection: true,
+      tray: true,
+      overlays: true,
     );
   }
 }

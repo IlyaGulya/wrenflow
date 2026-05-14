@@ -337,7 +337,10 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
             _permissions.requestAccessibility(openSettingsOnDeny: true),
       ),
       OnboardingStep.hotkey => _buildHotkeyStep(key: key),
-      OnboardingStep.model => _buildModelStep(key: key),
+      OnboardingStep.model => _buildModelStep(
+        presentation: presentation,
+        key: key,
+      ),
       OnboardingStep.vocabulary => _buildVocabularyStep(key: key),
       OnboardingStep.complete => _buildCompleteStep(presentation, key: key),
     };
@@ -410,19 +413,30 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     );
   }
 
-  Widget _buildModelStep({Key? key}) {
+  Widget _buildModelStep({
+    required WizardPresentation presentation,
+    Key? key,
+  }) {
     return _StepContent(
       key: key,
       icon: CupertinoIcons.waveform_path_ecg,
       title: 'Transcription Model',
       subtitle:
           'Choose your preferred local model first. Nothing downloads or activates until you do it explicitly.',
-      child: const Column(
+      child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          LocalModelPicker(compact: true),
-          SizedBox(height: 12),
-          ModelDownloadWidget(),
+          const LocalModelPicker(compact: true),
+          const SizedBox(height: 12),
+          const ModelDownloadWidget(),
+          if (presentation.modelStepMessage != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              presentation.modelStepMessage!,
+              textAlign: TextAlign.center,
+              style: WrenflowStyle.caption(11),
+            ),
+          ],
         ],
       ),
     );

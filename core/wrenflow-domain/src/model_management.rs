@@ -35,6 +35,8 @@ pub struct LocalModelCatalogEntry {
     pub supports_current_runtime: bool,
 }
 
+pub const MODEL_INSTALL_MARKER_FILE: &str = ".wrenflow-model-ready";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelRuntime {
     ParakeetOnnx,
@@ -114,7 +116,7 @@ pub fn default_parakeet_model() -> ModelInfo {
             "vocab.txt".to_string(),
             "config.json".to_string(),
         ],
-        generated_files: vec![],
+        generated_files: vec![MODEL_INSTALL_MARKER_FILE.to_string()],
         runtime: ModelRuntime::ParakeetOnnx,
     }
 }
@@ -140,7 +142,7 @@ pub fn whisper_large_v3_turbo_model() -> ModelInfo {
             "onnx/decoder_model_int8.onnx".to_string(),
             "onnx/decoder_with_past_model_int8.onnx".to_string(),
         ],
-        generated_files: vec![],
+        generated_files: vec![MODEL_INSTALL_MARKER_FILE.to_string()],
         runtime: ModelRuntime::WhisperOnnx,
     }
 }

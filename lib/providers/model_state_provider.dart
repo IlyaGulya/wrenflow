@@ -8,15 +8,24 @@ class ModelOperationState {
 
   final ModelState state;
   final String modelId;
+
+  bool get isBusy => switch (state) {
+    ModelStateDownloading() || ModelStateLoading() || ModelStateWarming() => true,
+    _ => false,
+  };
+
+  bool get isError => state is ModelStateError;
 }
 
-final selectedModelStateProvider = Provider<ModelOperationState?>((ref) {
+final selectedModelRuntimeStateProvider = Provider<ModelOperationState?>((ref) {
   final snapshot = ref.watch(localModelsSnapshotProvider).value;
   if (snapshot == null) return null;
   final state = snapshot.stateFor(snapshot.selectedModelId);
   if (state == null) return null;
   return ModelOperationState(state: state, modelId: snapshot.selectedModelId);
 });
+
+final selectedModelStateProvider = selectedModelRuntimeStateProvider;
 
 final globalModelOperationProvider = Provider<ModelOperationState?>((ref) {
   final snapshot = ref.watch(localModelsSnapshotProvider).value;

@@ -12,8 +12,10 @@ final appVersionProvider = FutureProvider<AppVersionInfo>((ref) async {
 final appVersionLabelProvider = Provider<String>((ref) {
   final versionAsync = ref.watch(appVersionProvider);
   return versionAsync.when(
-    data: (version) => 'v${version.displayVersion}',
-    error: (error, stackTrace) => 'vVersion unavailable',
-    loading: () => 'vLoading...',
+    data: (version) => version.isAvailable
+        ? 'v${version.displayVersion}'
+        : 'Version unavailable',
+    error: (error, stackTrace) => 'Version unavailable',
+    loading: () => 'Loading...',
   );
 });

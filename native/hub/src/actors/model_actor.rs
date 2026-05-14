@@ -48,15 +48,22 @@ impl LocalModelsRuntimeState {
 struct SignalDownloadListener {
     model_id: String,
     snapshot: SharedLocalModelsSnapshot,
+    started_at: Instant,
     last_signal: Mutex<Instant>,
+    last_progress_bytes: Mutex<u64>,
+    smoothed_speed_bps: Mutex<f64>,
 }
 
 impl SignalDownloadListener {
     fn new(model_id: String, snapshot: SharedLocalModelsSnapshot) -> Self {
+        let now = Instant::now();
         Self {
             model_id,
             snapshot,
-            last_signal: Mutex::new(Instant::now()),
+            started_at: now,
+            last_signal: Mutex::new(now),
+            last_progress_bytes: Mutex::new(0),
+            smoothed_speed_bps: Mutex::new(0.0),
         }
     }
 }
@@ -64,20 +71,71 @@ impl SignalDownloadListener {
 impl ModelDownloadListener for SignalDownloadListener {
     fn on_progress(&self, progress: DownloadProgress) {
         let now = Instant::now();
-        let should_send = {
-            let Ok(mut last) = self.last_signal.lock() else {
+        let (should_send, elapsed_since_last) = {
+            let Ok(mut last_signal) = self.last_signal.lock() else {
                 return;
             };
-            if now.duration_since(*last).as_millis() >= 50 {
-                *last = now;
-                true
+            let elapsed = now.duration_since(*last_signal);
+            if elapsed.as_millis() >= 50 {
+                *last_signal = now;
+                (true, elapsed)
             } else {
-                false
+                (false, elapsed)
             }
         };
         if !should_send {
             return;
         }
+
+        let speed_bps = {
+            let Ok(mut last_progress_bytes) = self.last_progress_bytes.lock() else {
+                return;
+            };
+            let Ok(mut smoothed_speed_bps) = self.smoothed_speed_bps.lock() else {
+                return;
+            };
+
+            let delta_bytes = progress
+                .bytes_downloaded
+                .saturating_sub(*last_progress_bytes) as f64;
+            *last_progress_bytes = progress.bytes_downloaded;
+
+            let instant_speed_bps = if elapsed_since_last.as_secs_f64() > 0.0 {
+                delta_bytes / elapsed_since_last.as_secs_f64()
+            } else {
+                0.0
+            };
+
+            *smoothed_speed_bps = if *smoothed_speed_bps <= 0.0 {
+                instant_speed_bps
+            } else {
+                (*smoothed_speed_bps * 0.8) + (instant_speed_bps * 0.2)
+            };
+
+            let elapsed_total = now.duration_since(self.started_at).as_secs_f64();
+            if elapsed_total >= 1.0 && progress.bytes_downloaded > 0 {
+                let average_speed = progress.bytes_downloaded as f64 / elapsed_total;
+                if *smoothed_speed_bps <= 0.0 {
+                    average_speed
+                } else {
+                    (*smoothed_speed_bps + average_speed) / 2.0
+                }
+            } else {
+                *smoothed_speed_bps
+            }
+        };
+
+        let eta_secs = progress
+            .total_bytes
+            .filter(|total| *total > progress.bytes_downloaded)
+            .map(|total| {
+                if speed_bps > 1.0 {
+                    (total - progress.bytes_downloaded) as f64 / speed_bps
+                } else {
+                    0.0
+                }
+            })
+            .unwrap_or(0.0);
 
         let fraction = progress.fraction().unwrap_or(0.0);
         set_model_state(
@@ -85,8 +143,8 @@ impl ModelDownloadListener for SignalDownloadListener {
             &self.model_id,
             signals::ModelState::Downloading {
                 progress: fraction,
-                speed_bps: 0.0,
-                eta_secs: 0.0,
+                speed_bps,
+                eta_secs,
             },
         );
     }
@@ -222,7 +280,10 @@ pub async fn run(
                 let selected_model_id = snapshot
                     .lock()
                     .map(|guard| guard.selected_model_id.clone())
-                    .unwrap_or_else(|_| String::from("parakeet-tdt-0.6b-v3-onnx"));
+                    .unwrap_or_else(|_| {
+                        log::error!("Failed to read selected model from runtime snapshot");
+                        config_rx.borrow().selected_local_model_id.clone()
+                    });
                 handle_initialize(
                     selected_model_id,
                     cancel_flag.clone(),
@@ -281,6 +342,13 @@ async fn handle_initialize(
         model_downloader::is_model_present(&model, &dir)
     );
 
+    if cancel_flag.load(Ordering::Relaxed) {
+        update_models_snapshot(&snapshot, |runtime| {
+            runtime.model_states.remove(&selected_model_id);
+        });
+        return;
+    }
+
     // 1. Download if needed
     if !model_downloader::is_model_present(&model, &dir) {
         set_model_state(
@@ -297,7 +365,7 @@ async fn handle_initialize(
             selected_model_id.clone(),
             snapshot.clone(),
         ));
-        match model_downloader::download_model(&model, &dir, listener, cancel_flag).await {
+        match model_downloader::download_model(&model, &dir, listener, cancel_flag.clone()).await {
             Ok(_) => log::info!("Model download complete"),
             Err(e) if e == "Cancelled" => {
                 update_models_snapshot(&snapshot, |runtime| {
@@ -324,8 +392,13 @@ async fn handle_initialize(
     let model_for_engine = model.clone();
     let selected_model_id_for_task = selected_model_id.clone();
     let snapshot_for_task = snapshot.clone();
+    let cancel_flag_for_task = cancel_flag.clone();
     log::info!("Starting model load (spawn_blocking)...");
     let load_result = tokio::task::spawn_blocking(move || {
+        if cancel_flag_for_task.load(Ordering::Relaxed) {
+            return Ok::<bool, wrenflow_core::transcription_local::LocalTranscriptionError>(false);
+        }
+
         log::info!("spawn_blocking: creating LocalTranscriptionEngine");
         let mut engine = LocalTranscriptionEngine::new(&model_for_engine);
         log::info!("spawn_blocking: calling engine.initialize()");
@@ -356,6 +429,10 @@ async fn handle_initialize(
                 );
             }),
         )?;
+        if cancel_flag_for_task.load(Ordering::Relaxed) {
+            log::info!("Model activation cancelled after initialize()");
+            return Ok(false);
+        }
         log::info!("spawn_blocking: engine.initialize() done, warming up...");
 
         // Prewarm: run dummy inference to compile ONNX graph ahead of first real use
@@ -364,24 +441,37 @@ async fn handle_initialize(
             &selected_model_id_for_task,
             signals::ModelState::Warming,
         );
+        if cancel_flag_for_task.load(Ordering::Relaxed) {
+            log::info!("Model activation cancelled before prewarm()");
+            return Ok(false);
+        }
         engine.prewarm().ok();
+        if cancel_flag_for_task.load(Ordering::Relaxed) {
+            log::info!("Model activation cancelled after prewarm()");
+            return Ok(false);
+        }
 
         // Store in shared handle
         if let Ok(mut guard) = handle.lock() {
             *guard = Some(engine);
         }
-        Ok::<(), wrenflow_core::transcription_local::LocalTranscriptionError>(())
+        Ok::<bool, wrenflow_core::transcription_local::LocalTranscriptionError>(true)
     })
     .await;
 
     match load_result {
-        Ok(Ok(())) => {
+        Ok(Ok(true)) => {
             log::info!("Local transcription model ready");
             update_models_snapshot(&snapshot, |runtime| {
                 runtime.active_model_id = Some(selected_model_id.clone());
                 runtime
                     .model_states
                     .insert(selected_model_id.clone(), signals::ModelState::Ready);
+            });
+        }
+        Ok(Ok(false)) => {
+            update_models_snapshot(&snapshot, |runtime| {
+                runtime.model_states.remove(&selected_model_id);
             });
         }
         Ok(Err(e)) => {

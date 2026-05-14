@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use wrenflow_core::audio_capture::{AudioCapture, AudioCaptureListener};
 use wrenflow_domain::audio::RecordingResult;
+use wrenflow_domain::config::DEFAULT_SELECTED_MICROPHONE_ID;
 
 use crate::signals;
 
@@ -64,7 +65,7 @@ impl AudioActor {
             first_audio_sent: std::sync::atomic::AtomicBool::new(false),
         });
 
-        let dev = if device_id.is_empty() || device_id == "default" {
+        let dev = if device_id.is_empty() || device_id == DEFAULT_SELECTED_MICROPHONE_ID {
             None
         } else {
             Some(device_id)

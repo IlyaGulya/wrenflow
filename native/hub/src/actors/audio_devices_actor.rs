@@ -3,7 +3,7 @@
 use rinf::{DartSignal, RustSignal};
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
-use wrenflow_domain::config::AppConfig;
+use wrenflow_domain::config::{AppConfig, DEFAULT_SELECTED_MICROPHONE_ID};
 
 use crate::signals;
 
@@ -23,13 +23,13 @@ impl AudioDevicesRuntimeState {
             has_snapshot: false,
             devices: vec![],
             default_device_name: String::new(),
-            selected_device_id: "default".to_string(),
+            selected_device_id: DEFAULT_SELECTED_MICROPHONE_ID.to_string(),
         }
     }
 
     fn effective_device_id_for(&self, preferred_device_id: &str) -> String {
-        if preferred_device_id == "default" {
-            return "default".to_string();
+        if preferred_device_id == DEFAULT_SELECTED_MICROPHONE_ID {
+            return DEFAULT_SELECTED_MICROPHONE_ID.to_string();
         }
 
         if self
@@ -39,7 +39,7 @@ impl AudioDevicesRuntimeState {
         {
             preferred_device_id.to_string()
         } else {
-            "default".to_string()
+            DEFAULT_SELECTED_MICROPHONE_ID.to_string()
         }
     }
 
@@ -88,7 +88,7 @@ pub fn effective_device_id_for(
     state
         .lock()
         .map(|guard| guard.effective_device_id_for(preferred_device_id))
-        .unwrap_or_else(|_| "default".to_string())
+        .unwrap_or_else(|_| DEFAULT_SELECTED_MICROPHONE_ID.to_string())
 }
 
 pub fn set_selected_device_id(state: &SharedAudioDevicesState, device_id: String) {

@@ -7,20 +7,54 @@ use wrenflow_domain::model_management::{
     DownloadProgress, LocalModelState, ModelDownloadListener, ModelInfo,
 };
 
-/// Check if a model is already fully downloaded.
-pub fn is_model_present(model: &ModelInfo, model_dir: &Path) -> bool {
+fn is_nonempty_file(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|meta| meta.is_file() && meta.len() > 0)
+        .unwrap_or(false)
+}
+
+fn expected_files_present(model: &ModelInfo, model_dir: &Path) -> bool {
     model
         .expected_files
         .iter()
-        .all(|f| model_dir.join(f).exists())
-        && model
-            .generated_files
-            .iter()
-            .all(|f| model_dir.join(f).exists())
+        .all(|file| is_nonempty_file(&model_dir.join(file)))
+}
+
+fn generated_files_present(model: &ModelInfo, model_dir: &Path) -> bool {
+    model
+        .generated_files
+        .iter()
+        .all(|file| is_nonempty_file(&model_dir.join(file)))
+}
+
+/// Check if a model is already fully downloaded.
+pub fn is_model_present(model: &ModelInfo, model_dir: &Path) -> bool {
+    if !expected_files_present(model, model_dir) {
+        return false;
+    }
+
+    if generated_files_present(model, model_dir) {
+        return true;
+    }
+
+    ensure_runtime_files(model, model_dir).is_ok() && generated_files_present(model, model_dir)
 }
 
 fn ensure_runtime_files(model: &ModelInfo, model_dir: &Path) -> Result<(), String> {
-    let _ = (model, model_dir);
+    for generated_file in &model.generated_files {
+        let path = model_dir.join(generated_file);
+        if path.exists() {
+            continue;
+        }
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Create runtime dir for {generated_file}: {e}"))?;
+        }
+
+        std::fs::write(&path, format!("model_id={}\nrepo_id={}\n", model.id, model.repo_id))
+            .map_err(|e| format!("Write runtime file {generated_file}: {e}"))?;
+    }
     Ok(())
 }
 
@@ -72,8 +106,8 @@ pub async fn download_model(
 
         let dest = model_dir.join(filename);
 
-        // Skip if already exists
-        if dest.exists() {
+        // Skip only if the existing file looks complete.
+        if is_nonempty_file(&dest) {
             listener.on_progress(DownloadProgress {
                 bytes_downloaded: bytes_so_far,
                 total_bytes: if total_known { Some(total_bytes) } else { None },

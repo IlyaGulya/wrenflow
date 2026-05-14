@@ -18,7 +18,8 @@ class ModelDownloadWidget extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final snapshot = ref.watch(localModelsSnapshotProvider).value;
-    final modelOperation = ref.watch(selectedModelStateProvider);
+    final selectedModelOperation = ref.watch(selectedModelRuntimeStateProvider);
+    final globalOperation = ref.watch(globalModelOperationProvider);
     final modelsStatus = ref.watch(localModelsStatusProvider);
     final localModels = ref.watch(localModelsProvider);
     final selectedModel = ref.watch(selectedLocalModelProvider);
@@ -33,13 +34,19 @@ class ModelDownloadWidget extends ConsumerWidget {
     final isActive = modelsStatus.isActive(selectedModel.id);
     final activeModelId = modelsStatus.activeModelId;
     final activeModel = snapshot.findModel(activeModelId);
-    final operationModel = snapshot.findModel(modelOperation?.modelId);
+    final effectiveOperation =
+        selectedModelOperation?.isBusy == true || selectedModelOperation?.isError == true
+        ? selectedModelOperation
+        : globalOperation?.isBusy == true
+        ? globalOperation
+        : selectedModelOperation;
+    final operationModel = snapshot.findModel(effectiveOperation?.modelId);
 
     if (!selectedModel.isAvailable) {
       return _buildUnavailable(selectedModel);
     }
 
-    final state = modelOperation?.state;
+    final state = effectiveOperation?.state;
 
     if (state == null || state is ModelStateNotDownloaded) {
       return _buildIdle(
@@ -271,21 +278,45 @@ class ModelDownloadWidget extends ConsumerWidget {
 
   Widget _buildLoading(String modelName) {
     return _CardContainer(
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          const SizedBox(
-            width: 20,
-            height: 20,
-            child: CupertinoActivityIndicator(),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CupertinoActivityIndicator(),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Loading $modelName...',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF8E8E93),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 12),
-          Text(
-            'Loading $modelName...',
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: Color(0xFF8E8E93),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: CupertinoButton(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              color: const Color(0xFFF5F5F7),
+              onPressed: () {
+                const CancelModelDownload().sendSignalToRust();
+              },
+              child: const Text(
+                'Cancel activation',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: CupertinoColors.destructiveRed,
+                ),
+              ),
             ),
           ),
         ],
@@ -295,21 +326,51 @@ class ModelDownloadWidget extends ConsumerWidget {
 
   Widget _buildWarming(String modelName) {
     return _CardContainer(
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          const SizedBox(
-            width: 20,
-            height: 20,
-            child: CupertinoActivityIndicator(),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CupertinoActivityIndicator(),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Warming up $modelName...',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF8E8E93),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 12),
-          Text(
-            'Warming up $modelName...',
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: Color(0xFF8E8E93),
+          const SizedBox(height: 8),
+          const Text(
+            'Cancelling now stops before the model becomes active.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12, color: Color(0xFF8E8E93)),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: CupertinoButton(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              color: const Color(0xFFF5F5F7),
+              onPressed: () {
+                const CancelModelDownload().sendSignalToRust();
+              },
+              child: const Text(
+                'Cancel activation',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: CupertinoColors.destructiveRed,
+                ),
+              ),
             ),
           ),
         ],

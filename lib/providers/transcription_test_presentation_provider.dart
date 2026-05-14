@@ -42,12 +42,16 @@ final transcriptionTestPresentationProvider =
     Provider<TranscriptionTestPresentation>((ref) {
       final pipeline = ref.watch(pipelineStateProvider).value;
       final latestTranscript = ref.watch(latestTranscriptProvider).value;
-      final modelOperation = ref.watch(selectedModelStateProvider);
-      final modelState = modelOperation?.state;
+      final selectedModelOperation = ref.watch(selectedModelRuntimeStateProvider);
+      final globalModelOperation = ref.watch(globalModelOperationProvider);
+      final modelState = selectedModelOperation?.state;
       final models = ref.watch(localModelsProvider);
       final modelStatus = ref.watch(localModelsStatusProvider);
       final selectedModel = ref.watch(selectedLocalModelProvider);
-      final operationModelId = modelOperation?.modelId;
+      final busyOperation = globalModelOperation?.isBusy == true
+          ? globalModelOperation
+          : selectedModelOperation;
+      final operationModelId = busyOperation?.modelId;
       final operationModel = operationModelId == null
           ? null
           : models.where((model) => model.id == operationModelId).isEmpty
@@ -65,20 +69,20 @@ final transcriptionTestPresentationProvider =
       final isInstalled = modelStatus.isInstalled(selectedModel.id);
       final isActive = modelStatus.isActive(selectedModel.id);
 
-      if (modelState is ModelStateDownloading) {
+      if (busyOperation?.state case final ModelStateDownloading downloading) {
         return TranscriptionTestPresentation(
           phase: TranscriptionTestPhase.modelDownloading,
           message: 'Downloading $modelName',
-          progress: modelState.progress,
+          progress: downloading.progress,
         );
       }
-      if (modelState is ModelStateLoading) {
+      if (busyOperation?.state is ModelStateLoading) {
         return TranscriptionTestPresentation(
           phase: TranscriptionTestPhase.modelLoading,
           message: 'Loading $modelName...',
         );
       }
-      if (modelState is ModelStateWarming) {
+      if (busyOperation?.state is ModelStateWarming) {
         return TranscriptionTestPresentation(
           phase: TranscriptionTestPhase.modelWarming,
           message: 'Warming up $modelName...',
