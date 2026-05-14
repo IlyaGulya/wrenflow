@@ -11,7 +11,7 @@ import '../providers/model_state_provider.dart';
 import '../providers/permissions_provider.dart';
 import '../providers/pipeline_state_provider.dart';
 import '../providers/settings_provider.dart';
-import '../services/permission_service.dart';
+import '../shell/shell_capabilities.dart';
 import '../src/bindings/signals/signals.dart';
 import '../state/app_lifecycle_state.dart';
 import '../theme/wrenflow_theme.dart';
@@ -36,10 +36,8 @@ class SetupWizardScreen extends ConsumerStatefulWidget {
 }
 
 class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
-  final _permissionService = PermissionService();
   String _selectedHotkey = '61';
   final _vocabularyController = TextEditingController();
-  final _autoAdvanced = <OnboardingStep>{};
   final _autoRequested = <OnboardingStep>{};
 
   @override
@@ -51,14 +49,17 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   AppLifecycleNotifier get _lifecycle =>
       ref.read(appLifecycleProvider.notifier);
 
+  PermissionsNotifier get _permissions =>
+      ref.read(permissionsProvider.notifier);
+
   /// Whether the user can advance past the given step.
   /// Permission steps block until permission is granted.
   bool _canAdvance(OnboardingStep step, PermissionsState permissions) {
     return switch (step) {
       OnboardingStep.microphone =>
-        permissions.microphone == PermissionStatus.granted,
+        permissions.microphone == PermissionUiStatus.granted,
       OnboardingStep.accessibility =>
-        permissions.accessibility == PermissionStatus.granted,
+        permissions.accessibility == PermissionUiStatus.granted,
       _ => true,
     };
   }
@@ -157,32 +158,13 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     // Auto-request microphone permission when the step first appears.
     // Only triggers the system dialog — does NOT open Settings on denial.
     if (step == OnboardingStep.microphone &&
-        permissions.microphone == PermissionStatus.unknown &&
+        permissions.microphone == PermissionUiStatus.unknown &&
         !_autoRequested.contains(OnboardingStep.microphone)) {
       _autoRequested.add(OnboardingStep.microphone);
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
         debugPrint('[wizard] auto-requesting microphone permission');
-        await _permissionService.requestMicrophone();
-      });
-    }
-
-    // Auto-advance when permission is granted.
-    if (step == OnboardingStep.microphone &&
-        permissions.microphone == PermissionStatus.granted &&
-        !_autoAdvanced.contains(OnboardingStep.microphone)) {
-      _autoAdvanced.add(OnboardingStep.microphone);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _lifecycle.onboardingNext();
-      });
-    }
-
-    if (step == OnboardingStep.accessibility &&
-        permissions.accessibility == PermissionStatus.granted &&
-        !_autoAdvanced.contains(OnboardingStep.accessibility)) {
-      _autoAdvanced.add(OnboardingStep.accessibility);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _lifecycle.onboardingNext();
+        await _permissions.requestMicrophone();
       });
     }
   }
@@ -208,24 +190,28 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                   if (missing.microphone)
                     _permissionRow(
                       'Microphone',
-                      permissions.microphone == PermissionStatus.granted,
+                      permissions.microphone == PermissionUiStatus.granted,
                       () async {
-                        final granted = await _permissionService
-                            .requestMicrophone();
+                        await _permissions.requestMicrophone();
+                        final granted =
+                            ref.read(permissionsProvider).microphone ==
+                            PermissionUiStatus.granted;
                         if (!granted && mounted) {
-                          await _permissionService.openMicrophoneSettings();
+                          await _permissions.openMicrophoneSettings();
                         }
                       },
                     ),
                   if (missing.accessibility)
                     _permissionRow(
                       'Accessibility',
-                      permissions.accessibility == PermissionStatus.granted,
+                      permissions.accessibility == PermissionUiStatus.granted,
                       () async {
-                        final granted = await _permissionService
-                            .requestAccessibility();
+                        await _permissions.requestAccessibility();
+                        final granted =
+                            ref.read(permissionsProvider).accessibility ==
+                            PermissionUiStatus.granted;
                         if (!granted && mounted) {
-                          await _permissionService.openAccessibilitySettings();
+                          await _permissions.openAccessibilitySettings();
                         }
                       },
                     ),
@@ -346,11 +332,14 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         icon: CupertinoIcons.mic_fill,
         title: 'Microphone',
         subtitle: 'Wrenflow needs microphone access to record your voice.',
-        isGranted: permissions.microphone == PermissionStatus.granted,
+        isGranted: permissions.microphone == PermissionUiStatus.granted,
         onGrant: () async {
-          final granted = await _permissionService.requestMicrophone();
+          await _permissions.requestMicrophone();
+          final granted =
+              ref.read(permissionsProvider).microphone ==
+              PermissionUiStatus.granted;
           if (!granted && mounted) {
-            await _permissionService.openMicrophoneSettings();
+            await _permissions.openMicrophoneSettings();
           }
         },
       ),
@@ -359,11 +348,14 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         icon: CupertinoIcons.hand_raised_fill,
         title: 'Accessibility',
         subtitle: 'Required for global hotkey and pasting text.',
-        isGranted: permissions.accessibility == PermissionStatus.granted,
+        isGranted: permissions.accessibility == PermissionUiStatus.granted,
         onGrant: () async {
-          final granted = await _permissionService.requestAccessibility();
+          await _permissions.requestAccessibility();
+          final granted =
+              ref.read(permissionsProvider).accessibility ==
+              PermissionUiStatus.granted;
           if (!granted && mounted) {
-            await _permissionService.openAccessibilitySettings();
+            await _permissions.openAccessibilitySettings();
           }
         },
       ),
@@ -490,6 +482,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
 
   Widget _buildCompleteStep({Key? key}) {
     final launchAtLogin = ref.watch(launchAtLoginProvider);
+    final shellCapabilities = ref.watch(shellCapabilitiesProvider);
     return _StepContent(
       key: key,
       icon: CupertinoIcons.checkmark_seal_fill,
@@ -500,24 +493,27 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         children: [
           // Live pipeline state + transcription result
           const _TranscriptionTestWidget(),
-          const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('Launch at login', style: WrenflowStyle.body(12)),
-              Opacity(
-                opacity: launchAtLogin.isLoading ? 0.55 : 1,
-                child: IgnorePointer(
-                  ignoring: launchAtLogin.isLoading,
-                  child: GreenToggle(
-                    value: launchAtLogin.enabled,
-                    onChanged: (v) =>
-                        ref.read(launchAtLoginProvider.notifier).setEnabled(v),
+          if (shellCapabilities.launchAtLogin) ...[
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Launch at login', style: WrenflowStyle.body(12)),
+                Opacity(
+                  opacity: launchAtLogin.isLoading ? 0.55 : 1,
+                  child: IgnorePointer(
+                    ignoring: launchAtLogin.isLoading,
+                    child: GreenToggle(
+                      value: launchAtLogin.enabled,
+                      onChanged: (v) => ref
+                          .read(launchAtLoginProvider.notifier)
+                          .setEnabled(v),
+                    ),
                   ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -531,7 +527,7 @@ class _GlobalModelIndicator extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final modelOperation = ref.watch(modelStateProvider).value;
+    final modelOperation = ref.watch(globalModelOperationProvider);
     final modelState = modelOperation?.state;
     final models = ref.watch(localModelsProvider);
     final selectedModel = ref.watch(selectedLocalModelProvider);
@@ -552,7 +548,9 @@ class _GlobalModelIndicator extends ConsumerWidget {
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
       child: _buildContent(
         modelState,
-        operationModel?.displayName ?? selectedModel.displayName,
+        operationModel?.displayName ??
+            selectedModel?.displayName ??
+            'selected model',
       ),
     );
   }
@@ -706,25 +704,29 @@ class _TranscriptionTestWidgetState
 
   Widget _buildContent(PipelineState? pipeline) {
     // Check model state first — can't test without an active model.
-    final modelOperation = ref.watch(modelStateProvider).value;
+    final modelOperation = ref.watch(selectedModelStateProvider);
     final modelState = modelOperation?.state;
     final models = ref.watch(localModelsProvider);
-    final modelStatus = ref.watch(localModelsStatusProvider).value;
-    final fallbackSelectedModel = ref.watch(selectedLocalModelProvider);
-    final selectedModelId =
-        modelStatus?.selectedModelId ?? fallbackSelectedModel.id;
-    final selectedModel = models.firstWhere(
-      (model) => model.id == selectedModelId,
-      orElse: () => fallbackSelectedModel,
-    );
+    final modelStatus = ref.watch(localModelsStatusProvider);
+    final selectedModel = ref.watch(selectedLocalModelProvider);
     final operationModelId = modelOperation?.modelId;
     final operationModel = operationModelId == null
         ? null
         : models.where((model) => model.id == operationModelId).isEmpty
         ? null
         : models.firstWhere((model) => model.id == operationModelId);
-    final isInstalled = modelStatus?.isInstalled(selectedModel.id) ?? false;
-    final isActive = modelStatus?.isActive(selectedModel.id) ?? false;
+    if (models.isEmpty || modelStatus == null || selectedModel == null) {
+      return Center(
+        key: const ValueKey('model-catalog-loading'),
+        child: Text(
+          'Loading available models...',
+          style: WrenflowStyle.caption(11),
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+    final isInstalled = modelStatus.isInstalled(selectedModel.id);
+    final isActive = modelStatus.isActive(selectedModel.id);
 
     if (modelState is ModelStateDownloading) {
       final pct = (modelState.progress * 100).toInt();

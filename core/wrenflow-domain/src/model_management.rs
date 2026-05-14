@@ -21,6 +21,20 @@ pub struct ModelInfo {
     pub runtime: ModelRuntime,
 }
 
+/// Product-facing catalog metadata for a local model option.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalModelCatalogEntry {
+    pub id: String,
+    pub display_name: String,
+    pub subtitle: String,
+    pub download_label: String,
+    pub family: String,
+    pub runtime_label: String,
+    pub is_recommended: bool,
+    pub is_available: bool,
+    pub supports_current_runtime: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelRuntime {
     ParakeetOnnx,
@@ -133,6 +147,44 @@ pub fn whisper_large_v3_turbo_model() -> ModelInfo {
 
 pub fn all_local_models() -> Vec<ModelInfo> {
     vec![default_parakeet_model(), whisper_large_v3_turbo_model()]
+}
+
+pub fn all_local_model_catalog_entries() -> Vec<LocalModelCatalogEntry> {
+    vec![
+        LocalModelCatalogEntry {
+            id: "parakeet-tdt-0.6b-v3-onnx".to_string(),
+            display_name: "Parakeet Realtime".to_string(),
+            subtitle: "Fastest local dictation for the current ONNX runtime.".to_string(),
+            download_label: "~400 MB".to_string(),
+            family: "Parakeet".to_string(),
+            runtime_label: "ONNX".to_string(),
+            is_recommended: true,
+            is_available: true,
+            supports_current_runtime: true,
+        },
+        LocalModelCatalogEntry {
+            id: "whisper-large-v3-turbo-onnx".to_string(),
+            display_name: "Whisper Turbo".to_string(),
+            subtitle: "Fast high-quality Whisper with the new local ONNX runtime.".to_string(),
+            download_label: "~1.2 GB".to_string(),
+            family: "Whisper".to_string(),
+            runtime_label: "ONNX".to_string(),
+            is_recommended: false,
+            is_available: true,
+            supports_current_runtime: true,
+        },
+        LocalModelCatalogEntry {
+            id: "whisper-large-v3-onnx".to_string(),
+            display_name: "Whisper Large".to_string(),
+            subtitle: "Highest Whisper accuracy target once the ONNX path lands.".to_string(),
+            download_label: "Whisper runtime pending".to_string(),
+            family: "Whisper".to_string(),
+            runtime_label: "Planned ONNX".to_string(),
+            is_recommended: false,
+            is_available: false,
+            supports_current_runtime: false,
+        },
+    ]
 }
 
 pub fn local_model_by_id(model_id: &str) -> Option<ModelInfo> {

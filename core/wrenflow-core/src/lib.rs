@@ -5,7 +5,6 @@ pub use wrenflow_domain::history;
 pub use wrenflow_domain::metrics;
 pub use wrenflow_domain::model_management;
 pub use wrenflow_domain::pipeline;
-pub use wrenflow_domain::platform;
 pub use wrenflow_domain::transcription;
 
 // Audio capture (cpal-based) — internal Mutex locks are safe to unwrap

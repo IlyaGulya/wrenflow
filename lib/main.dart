@@ -8,16 +8,16 @@ import 'package:window_manager/window_manager.dart';
 
 import 'providers/app_lifecycle_provider.dart';
 import 'providers/launch_at_login_provider.dart';
-import 'providers/overlay_controller.dart';
 import 'providers/settings_provider.dart';
 import 'screens/settings_screen.dart';
+import 'shell/overlay_controller.dart';
+import 'shell/system_tray.dart';
+import 'shell/window_synchronizer.dart';
 import 'services/app_version.dart';
 import 'screens/setup_wizard_screen.dart';
 import 'src/bindings/bindings.dart';
 import 'state/app_lifecycle_state.dart';
 import 'theme/wrenflow_theme.dart';
-import 'widgets/system_tray.dart';
-import 'widgets/window_synchronizer.dart';
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();

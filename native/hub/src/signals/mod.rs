@@ -54,6 +54,68 @@ pub struct AudioDeviceInfo {
     pub name: String,
 }
 
+#[derive(Serialize, Deserialize, SignalPiece, Clone, Debug)]
+pub struct AudioDevicesSnapshot {
+    pub has_snapshot: bool,
+    pub devices: Vec<AudioDeviceInfo>,
+    pub default_device_name: String,
+    pub selected_device_id: String,
+    pub effective_selected_device_id: String,
+}
+
+#[derive(Serialize, Deserialize, SignalPiece, Clone, Debug, PartialEq, Eq)]
+pub enum PermissionStatus {
+    Unknown,
+    Requesting,
+    Granted,
+    Denied,
+    Restricted,
+    NotApplicable,
+}
+
+#[derive(Serialize, Deserialize, SignalPiece, Clone, Debug, PartialEq, Eq)]
+pub enum AppSessionOnboardingStep {
+    Microphone,
+    Accessibility,
+    Hotkey,
+    Model,
+    Vocabulary,
+    Complete,
+}
+
+#[derive(Serialize, Deserialize, SignalPiece, Clone, Debug, PartialEq, Eq)]
+pub enum AppSessionState {
+    Initializing,
+    Onboarding {
+        step: AppSessionOnboardingStep,
+    },
+    PermissionRecovery {
+        microphone_missing: bool,
+        accessibility_missing: bool,
+    },
+    Ready,
+    ShuttingDown,
+}
+
+#[derive(Serialize, Deserialize, SignalPiece, Clone, Debug)]
+pub struct LocalModelCatalogItem {
+    pub id: String,
+    pub display_name: String,
+    pub subtitle: String,
+    pub download_label: String,
+    pub family: String,
+    pub runtime_label: String,
+    pub is_recommended: bool,
+    pub is_available: bool,
+    pub supports_current_runtime: bool,
+}
+
+#[derive(Serialize, Deserialize, SignalPiece, Clone, Debug)]
+pub struct LocalModelRuntimeState {
+    pub model_id: String,
+    pub state: ModelState,
+}
+
 // ============================================================================
 // Pipeline state signals (Rust → Dart)
 // ============================================================================
@@ -154,28 +216,23 @@ pub struct ClearHistory;
 // Model management signals (bidirectional)
 // ============================================================================
 
-/// Rust → Dart: model state changed
+/// Rust → Dart: full local model snapshot owned by the Rust runtime
 #[derive(Serialize, RustSignal)]
-pub struct ModelStateChanged {
-    pub state: ModelState,
-    pub model_id: Option<String>,
-}
-
-/// Rust → Dart: current selected / active / installed local model snapshot
-#[derive(Serialize, RustSignal)]
-pub struct LocalModelsStatusChanged {
+pub struct LocalModelsSnapshotChanged {
+    pub models: Vec<LocalModelCatalogItem>,
     pub selected_model_id: String,
     pub active_model_id: Option<String>,
     pub installed_model_ids: Vec<String>,
+    pub model_states: Vec<LocalModelRuntimeState>,
 }
 
 /// Dart → Rust: start downloading/loading local model
 #[derive(Deserialize, DartSignal)]
 pub struct InitializeLocalModel;
 
-/// Dart → Rust: request the latest local model inventory snapshot
+/// Dart → Rust: request the latest local model snapshot
 #[derive(Deserialize, DartSignal)]
-pub struct RequestLocalModelsStatus;
+pub struct RequestLocalModelsSnapshot;
 
 /// Dart → Rust: select which local model should be active
 #[derive(Deserialize, DartSignal)]
@@ -188,14 +245,72 @@ pub struct SelectLocalModel {
 pub struct CancelModelDownload;
 
 // ============================================================================
+// Permissions signals (bidirectional)
+// ============================================================================
+
+/// Rust → Dart: latest permission snapshot owned by the Rust runtime
+#[derive(Serialize, RustSignal)]
+pub struct PermissionsSnapshotChanged {
+    pub has_snapshot: bool,
+    pub microphone: PermissionStatus,
+    pub accessibility: PermissionStatus,
+}
+
+/// Dart → Rust: request latest permission snapshot
+#[derive(Deserialize, DartSignal)]
+pub struct RequestPermissionsSnapshot;
+
+/// Dart → Rust: report the latest shell-observed permission snapshot
+#[derive(Deserialize, DartSignal)]
+pub struct ReportPermissionsSnapshot {
+    pub microphone: PermissionStatus,
+    pub accessibility: PermissionStatus,
+}
+
+// ============================================================================
+// App session signals (bidirectional)
+// ============================================================================
+
+/// Rust → Dart: current app session snapshot
+#[derive(Serialize, RustSignal)]
+pub struct AppSessionSnapshotChanged {
+    pub state: AppSessionState,
+}
+
+/// Dart → Rust: request current app session snapshot
+#[derive(Deserialize, DartSignal)]
+pub struct RequestAppSessionSnapshot;
+
+/// Dart → Rust: provide persisted bootstrap facts needed by the FSM
+#[derive(Deserialize, DartSignal)]
+pub struct BootstrapAppSession {
+    pub has_completed_setup: bool,
+}
+
+/// Dart → Rust: advance onboarding flow
+#[derive(Deserialize, DartSignal)]
+pub struct AdvanceOnboarding;
+
+/// Dart → Rust: move onboarding back
+#[derive(Deserialize, DartSignal)]
+pub struct RetreatOnboarding;
+
+/// Dart → Rust: mark onboarding complete
+#[derive(Deserialize, DartSignal)]
+pub struct CompleteOnboarding;
+
+/// Dart → Rust: request application shutdown
+#[derive(Deserialize, DartSignal)]
+pub struct RequestQuit;
+
+// ============================================================================
 // Device signals (Rust → Dart)
 // ============================================================================
 
 #[derive(Serialize, RustSignal)]
-pub struct AudioDevicesListed {
-    pub devices: Vec<AudioDeviceInfo>,
-    pub default_device_name: String,
+pub struct AudioDevicesSnapshotChanged {
+    pub snapshot: AudioDevicesSnapshot,
 }
 
 #[derive(Deserialize, DartSignal)]
-pub struct ListAudioDevices;
+pub struct RequestAudioDevicesSnapshot;

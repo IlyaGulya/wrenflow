@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../services/launch_at_login_service.dart';
+import '../shell/services/launch_at_login_service.dart';
 
 @immutable
 class LaunchAtLoginState {

@@ -3,135 +3,173 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../services/permission_service.dart';
+import '../shell/services/permission_service.dart';
+import '../src/bindings/signals/signals.dart' as sig;
 
-/// Represents the state of a single macOS permission.
-enum PermissionStatus {
+/// Presentation-facing permission state.
+enum PermissionUiStatus {
   unknown,
+  requesting,
   granted,
   denied,
   restricted,
+  notApplicable,
 }
 
 /// Holds all permission states required by Wrenflow.
 class PermissionsState {
   const PermissionsState({
-    this.microphone = PermissionStatus.unknown,
-    this.accessibility = PermissionStatus.unknown,
+    this.hasSnapshot = false,
+    this.microphone = PermissionUiStatus.unknown,
+    this.accessibility = PermissionUiStatus.unknown,
   });
 
-  final PermissionStatus microphone;
-  final PermissionStatus accessibility;
+  final bool hasSnapshot;
+  final PermissionUiStatus microphone;
+  final PermissionUiStatus accessibility;
 
   PermissionsState copyWith({
-    PermissionStatus? microphone,
-    PermissionStatus? accessibility,
+    bool? hasSnapshot,
+    PermissionUiStatus? microphone,
+    PermissionUiStatus? accessibility,
   }) {
     return PermissionsState(
+      hasSnapshot: hasSnapshot ?? this.hasSnapshot,
       microphone: microphone ?? this.microphone,
       accessibility: accessibility ?? this.accessibility,
     );
   }
 
-  /// Whether all required permissions are granted.
   bool get allGranted =>
-      microphone == PermissionStatus.granted &&
-      accessibility == PermissionStatus.granted;
+      microphone == PermissionUiStatus.granted &&
+      accessibility == PermissionUiStatus.granted;
 }
 
-/// Manages permission states by polling the platform at 1 Hz.
+/// Polls shell permissions, reports them to Rust, and projects the Rust-owned
+/// permission snapshot back into Flutter.
 class PermissionsNotifier extends Notifier<PermissionsState> {
   late final PermissionService _permissionService;
+  StreamSubscription? _snapshotSub;
   Timer? _pollTimer;
 
   @override
   PermissionsState build() {
     _permissionService = PermissionService();
-
-    // Start polling immediately.
+    _startRustSnapshotBridge();
     _startPolling();
-
-    // Cancel the timer when this notifier is disposed.
-    ref.onDispose(_stopPolling);
-
+    ref.onDispose(() {
+      _snapshotSub?.cancel();
+      _pollTimer?.cancel();
+    });
     return const PermissionsState();
   }
 
+  void _startRustSnapshotBridge() {
+    _snapshotSub = sig.PermissionsSnapshotChanged.rustSignalStream.listen((
+      signalPack,
+    ) {
+      final message = signalPack.message;
+      state = PermissionsState(
+        hasSnapshot: message.hasSnapshot,
+        microphone: _fromSignalStatus(message.microphone),
+        accessibility: _fromSignalStatus(message.accessibility),
+      );
+    });
+
+    const sig.RequestPermissionsSnapshot().sendSignalToRust();
+  }
+
   void _startPolling() {
-    // Fire one poll immediately so the UI doesn't wait a full second.
-    _poll();
-
-    _pollTimer = Timer.periodic(const Duration(seconds: 1), (_) => _poll());
+    _pollAndReport();
+    _pollTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _pollAndReport(),
+    );
   }
 
-  void _stopPolling() {
-    _pollTimer?.cancel();
-    _pollTimer = null;
-  }
-
-  Future<void> _poll() async {
+  Future<void> _pollAndReport() async {
     try {
       final results = await (
         _permissionService.checkMicrophone(),
         _permissionService.checkAccessibility(),
       ).wait;
 
-      final micStatus = _mapMicrophonePermission(results.$1);
-      final accStatus =
-          results.$2 ? PermissionStatus.granted : PermissionStatus.denied;
-
-      // Only update state if something actually changed.
-      if (state.microphone != micStatus || state.accessibility != accStatus) {
-        state = state.copyWith(
-          microphone: micStatus,
-          accessibility: accStatus,
-        );
-      }
+      _reportSnapshot(
+        microphone: _fromMicrophonePermission(results.$1),
+        accessibility: results.$2
+            ? PermissionUiStatus.granted
+            : PermissionUiStatus.denied,
+      );
     } on MissingPluginException {
-      // Platform channel not available (e.g. running on a non-macOS host or
-      // in tests without a mock). Stop polling to avoid log spam.
-      _stopPolling();
+      _pollTimer?.cancel();
+      _pollTimer = null;
     }
   }
 
-  /// Map the service-level enum to the provider-level enum.
-  static PermissionStatus _mapMicrophonePermission(MicrophonePermission perm) {
-    switch (perm) {
-      case MicrophonePermission.granted:
-        return PermissionStatus.granted;
-      case MicrophonePermission.denied:
-        return PermissionStatus.denied;
-      case MicrophonePermission.notDetermined:
-        return PermissionStatus.unknown;
-    }
+  void _reportSnapshot({
+    PermissionUiStatus? microphone,
+    PermissionUiStatus? accessibility,
+  }) {
+    sig.ReportPermissionsSnapshot(
+      microphone: _toSignalStatus(microphone ?? state.microphone),
+      accessibility: _toSignalStatus(accessibility ?? state.accessibility),
+    ).sendSignalToRust();
   }
 
-  /// Convenience: expose microphone status as a string label.
-  String get microphoneStatus => state.microphone.name;
-
-  /// Convenience: expose accessibility status as a bool.
-  bool get accessibilityStatus => state.accessibility == PermissionStatus.granted;
-
-  /// Convenience: whether every required permission is granted.
-  bool get allRequiredGranted => state.allGranted;
-
-  /// Update microphone permission status.
-  void setMicrophonePermission(PermissionStatus status) {
-    state = state.copyWith(microphone: status);
+  static PermissionUiStatus _fromMicrophonePermission(
+    MicrophonePermission permission,
+  ) {
+    return switch (permission) {
+      MicrophonePermission.granted => PermissionUiStatus.granted,
+      MicrophonePermission.denied => PermissionUiStatus.denied,
+      MicrophonePermission.notDetermined => PermissionUiStatus.unknown,
+    };
   }
 
-  /// Update accessibility permission status.
-  void setAccessibilityPermission(PermissionStatus status) {
-    state = state.copyWith(accessibility: status);
+  static PermissionUiStatus _fromSignalStatus(sig.PermissionStatus status) {
+    return switch (status) {
+      sig.PermissionStatus.unknown => PermissionUiStatus.unknown,
+      sig.PermissionStatus.requesting => PermissionUiStatus.requesting,
+      sig.PermissionStatus.granted => PermissionUiStatus.granted,
+      sig.PermissionStatus.denied => PermissionUiStatus.denied,
+      sig.PermissionStatus.restricted => PermissionUiStatus.restricted,
+      sig.PermissionStatus.notApplicable => PermissionUiStatus.notApplicable,
+    };
   }
 
-  /// Refresh all permissions from the platform (on-demand).
-  Future<void> refreshPermissions() async {
-    await _poll();
+  static sig.PermissionStatus _toSignalStatus(PermissionUiStatus status) {
+    return switch (status) {
+      PermissionUiStatus.unknown => sig.PermissionStatus.unknown,
+      PermissionUiStatus.requesting => sig.PermissionStatus.requesting,
+      PermissionUiStatus.granted => sig.PermissionStatus.granted,
+      PermissionUiStatus.denied => sig.PermissionStatus.denied,
+      PermissionUiStatus.restricted => sig.PermissionStatus.restricted,
+      PermissionUiStatus.notApplicable => sig.PermissionStatus.notApplicable,
+    };
   }
+
+  Future<void> requestMicrophone() async {
+    _reportSnapshot(microphone: PermissionUiStatus.requesting);
+    await _permissionService.requestMicrophone();
+    await refreshPermissions();
+  }
+
+  Future<void> requestAccessibility() async {
+    _reportSnapshot(accessibility: PermissionUiStatus.requesting);
+    await _permissionService.requestAccessibility();
+    await refreshPermissions();
+  }
+
+  Future<void> openAccessibilitySettings() =>
+      _permissionService.openAccessibilitySettings();
+
+  Future<void> openMicrophoneSettings() =>
+      _permissionService.openMicrophoneSettings();
+
+  Future<void> refreshPermissions() => _pollAndReport();
 }
 
 final permissionsProvider =
     NotifierProvider<PermissionsNotifier, PermissionsState>(
-  PermissionsNotifier.new,
-);
+      PermissionsNotifier.new,
+    );

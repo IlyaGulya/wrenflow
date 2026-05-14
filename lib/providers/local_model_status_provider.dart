@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:wrenflow/src/bindings/signals/signals.dart';
+
+import 'local_models_snapshot_provider.dart';
 
 class LocalModelsStatus {
   const LocalModelsStatus({
@@ -17,17 +18,12 @@ class LocalModelsStatus {
   bool isSelected(String modelId) => selectedModelId == modelId;
 }
 
-final localModelsStatusProvider = StreamProvider<LocalModelsStatus>((
-  ref,
-) async* {
-  const RequestLocalModelsStatus().sendSignalToRust();
-
-  yield* LocalModelsStatusChanged.rustSignalStream.map((signalPack) {
-    final message = signalPack.message;
-    return LocalModelsStatus(
-      selectedModelId: message.selectedModelId,
-      activeModelId: message.activeModelId,
-      installedModelIds: message.installedModelIds.toSet(),
-    );
-  });
+final localModelsStatusProvider = Provider<LocalModelsStatus?>((ref) {
+  final snapshot = ref.watch(localModelsSnapshotProvider).value;
+  if (snapshot == null) return null;
+  return LocalModelsStatus(
+    selectedModelId: snapshot.selectedModelId,
+    activeModelId: snapshot.activeModelId,
+    installedModelIds: snapshot.installedModelIds,
+  );
 });

@@ -19,8 +19,7 @@ class WindowSynchronizer extends ConsumerStatefulWidget {
   final Widget child;
 
   @override
-  ConsumerState<WindowSynchronizer> createState() =>
-      _WindowSynchronizerState();
+  ConsumerState<WindowSynchronizer> createState() => _WindowSynchronizerState();
 }
 
 class _WindowSynchronizerState extends ConsumerState<WindowSynchronizer>
@@ -89,16 +88,12 @@ class _WindowSynchronizerState extends ConsumerState<WindowSynchronizer>
     }
   }
 
-  // ── WindowListener: handle native close button ──────────────
-
   @override
   void onWindowClose() {
     final screen = ref.read(activeScreenProvider);
     if (screen != ActiveScreen.none) {
-      // Close settings/history → hide window, stay running in tray.
       ref.read(activeScreenProvider.notifier).close();
     } else {
-      // During onboarding/recovery, close button quits.
       ref.read(appLifecycleProvider.notifier).quit();
     }
   }

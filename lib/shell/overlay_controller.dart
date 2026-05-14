@@ -3,10 +3,10 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rinf/rinf.dart';
 
-import '../services/overlay_service.dart';
+import '../providers/audio_level_provider.dart';
+import '../providers/pipeline_state_provider.dart';
 import '../src/bindings/signals/signals.dart';
-import 'audio_level_provider.dart';
-import 'pipeline_state_provider.dart';
+import 'services/overlay_service.dart';
 
 /// Bridges pipeline state + audio levels to the native overlay panel.
 ///

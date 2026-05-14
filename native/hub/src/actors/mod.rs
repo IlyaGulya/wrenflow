@@ -1,10 +1,13 @@
 //! Actor system for Wrenflow hub.
 
+pub mod app_session_actor;
 pub mod audio_actor;
+pub mod audio_devices_actor;
 pub mod history_actor;
 pub mod hotkey_actor;
 pub mod model_actor;
 pub mod paste_actor;
+pub mod permissions_actor;
 mod pipeline_actor;
 
 use audio_actor::{AudioActor, AudioEvent};
@@ -25,6 +28,7 @@ static SHOULD_PASTE: AtomicBool = AtomicBool::new(false);
 
 pub async fn create_actors() {
     let engine_handle = model_actor::shared_engine();
+    let audio_devices_state = audio_devices_actor::shared_state();
 
     let mut audio = AudioActor::new();
     let mut hotkey = HotkeyActor::new(hotkey_actor::keycode_from_name("rightOption"));
@@ -52,18 +56,20 @@ pub async fn create_actors() {
         model_actor::run(model_engine).await;
     });
 
-    // Device listing (on-demand from Dart — tray click, settings open).
+    // Permissions actor
     spawn(async {
-        let recv = signals::ListAudioDevices::get_dart_signal_receiver();
-        while recv.recv().await.is_some() {
-            let devices = AudioActor::list_devices();
-            let default_name = AudioActor::default_device_name();
-            signals::AudioDevicesListed {
-                devices,
-                default_device_name: default_name,
-            }
-            .send_signal_to_dart();
-        }
+        permissions_actor::run().await;
+    });
+
+    // App session actor
+    spawn(async {
+        app_session_actor::run().await;
+    });
+
+    // Audio devices snapshot actor
+    let audio_devices_for_actor = audio_devices_state.clone();
+    spawn(async move {
+        audio_devices_actor::run(audio_devices_for_actor).await;
     });
 
     // TranscriptAction listener
@@ -78,6 +84,7 @@ pub async fn create_actors() {
 
     // Main loop: hotkey + audio events drive the pipeline
     let transcription_engine = engine_handle.clone();
+    let audio_devices_for_loop = audio_devices_state.clone();
     spawn(async move {
         let config_recv = signals::UpdateConfig::get_dart_signal_receiver();
 
@@ -88,7 +95,8 @@ pub async fn create_actors() {
                         hotkey_actor::HotkeyEvent::KeyDown => {
                             log::info!("Hotkey DOWN");
                             pipeline.handle_hotkey_down();
-                            if let Err(e) = audio.start("default") {
+                            let device_id = audio_devices_actor::current_selected_device_id(&audio_devices_for_loop);
+                            if let Err(e) = audio.start(&device_id) {
                                 log::error!("Failed to start audio: {e}");
                             }
                         }
@@ -209,6 +217,10 @@ pub async fn create_actors() {
                 Some(pack) = config_recv.recv() => {
                     let kc = hotkey_actor::keycode_from_name(&pack.message.selected_hotkey);
                     hotkey.set_keycode(kc);
+                    audio_devices_actor::set_selected_device_id(
+                        &audio_devices_for_loop,
+                        pack.message.selected_microphone_id.clone(),
+                    );
                     pipeline.handle_config_update(pack.message);
                 }
                 // Wake up to check init/indicator timers during active recording.

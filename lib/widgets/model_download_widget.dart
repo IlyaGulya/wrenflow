@@ -2,8 +2,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:wrenflow/providers/local_models_provider.dart';
 import 'package:wrenflow/providers/local_model_status_provider.dart';
+import 'package:wrenflow/providers/local_models_provider.dart';
 import 'package:wrenflow/providers/model_state_provider.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
 
@@ -17,83 +17,89 @@ class ModelDownloadWidget extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final modelStateAsync = ref.watch(modelStateProvider);
-    final modelsStatus = ref.watch(localModelsStatusProvider).value;
+    final snapshot = ref.watch(localModelsSnapshotProvider).value;
+    final modelOperation = ref.watch(selectedModelStateProvider);
+    final modelsStatus = ref.watch(localModelsStatusProvider);
     final localModels = ref.watch(localModelsProvider);
-    final fallbackSelectedModel = ref.watch(selectedLocalModelProvider);
-    final selectedModelId =
-        modelsStatus?.selectedModelId ?? fallbackSelectedModel.id;
-    final selectedModel = localModels.firstWhere(
-      (model) => model.id == selectedModelId,
-      orElse: () => fallbackSelectedModel,
-    );
-    final isInstalled = modelsStatus?.isInstalled(selectedModel.id) ?? false;
-    final isActive = modelsStatus?.isActive(selectedModel.id) ?? false;
-    final activeModelId = modelsStatus?.activeModelId;
-    final activeModel = activeModelId == null
-        ? null
-        : localModels.where((model) => model.id == activeModelId).isEmpty
-        ? null
-        : localModels.firstWhere((model) => model.id == activeModelId);
-    final operation = modelStateAsync.value;
-    final operationModelId = operation?.modelId;
-    final operationModel = operationModelId == null
-        ? null
-        : localModels.where((model) => model.id == operationModelId).isEmpty
-        ? null
-        : localModels.firstWhere((model) => model.id == operationModelId);
+    final selectedModel = ref.watch(selectedLocalModelProvider);
+    if (snapshot == null ||
+        localModels.isEmpty ||
+        modelsStatus == null ||
+        selectedModel == null) {
+      return _buildCatalogLoading();
+    }
+
+    final isInstalled = modelsStatus.isInstalled(selectedModel.id);
+    final isActive = modelsStatus.isActive(selectedModel.id);
+    final activeModelId = modelsStatus.activeModelId;
+    final activeModel = snapshot.findModel(activeModelId);
+    final operationModel = snapshot.findModel(modelOperation?.modelId);
 
     if (!selectedModel.isAvailable) {
       return _buildUnavailable(selectedModel);
     }
 
-    return modelStateAsync.when(
-      loading: () => _buildIdle(
+    final state = modelOperation?.state;
+
+    if (state == null || state is ModelStateNotDownloaded) {
+      return _buildIdle(
         selectedModel,
         isInstalled: isInstalled,
         isActive: isActive,
+        activeModelName: activeModel?.displayName,
+      );
+    }
+
+    return switch (state) {
+      ModelStateDownloading() => _buildDownloading(
+        state,
+        operationModel?.displayName ?? selectedModel.displayName,
       ),
-      error: (error, _) =>
-          _buildError(error.toString(), selectedModel.displayName),
-      data: (operationState) => switch (operationState.state) {
-        ModelStateNotDownloaded() => _buildIdle(
-          selectedModel,
-          isInstalled: isInstalled,
-          isActive: isActive,
-          activeModelName: activeModel?.displayName,
-        ),
-        ModelStateDownloading() => _buildDownloading(
-          operationState.state as ModelStateDownloading,
-          operationModel?.displayName ?? selectedModel.displayName,
-        ),
-        ModelStateLoading() => _buildLoading(
-          operationModel?.displayName ?? selectedModel.displayName,
-        ),
-        ModelStateWarming() => _buildWarming(
-          operationModel?.displayName ?? selectedModel.displayName,
-        ),
-        ModelStateReady() =>
-          isActive
-              ? _buildReady(
-                  activeModel?.displayName ?? selectedModel.displayName,
-                )
-              : _buildIdle(
-                  selectedModel,
-                  isInstalled: isInstalled,
-                  isActive: isActive,
-                  activeModelName: activeModel?.displayName,
-                ),
-        ModelStateError() => _buildError(
-          (operationState.state as ModelStateError).message,
-          operationModel?.displayName ?? selectedModel.displayName,
-        ),
-        _ => _buildIdle(
-          selectedModel,
-          isInstalled: isInstalled,
-          isActive: isActive,
-          activeModelName: activeModel?.displayName,
-        ),
-      },
+      ModelStateLoading() => _buildLoading(
+        operationModel?.displayName ?? selectedModel.displayName,
+      ),
+      ModelStateWarming() => _buildWarming(
+        operationModel?.displayName ?? selectedModel.displayName,
+      ),
+      ModelStateReady() =>
+        isActive
+            ? _buildReady(activeModel?.displayName ?? selectedModel.displayName)
+            : _buildIdle(
+                selectedModel,
+                isInstalled: isInstalled,
+                isActive: isActive,
+                activeModelName: activeModel?.displayName,
+              ),
+      ModelStateError() => _buildError(
+        state.message,
+        operationModel?.displayName ?? selectedModel.displayName,
+      ),
+      _ => _buildIdle(
+        selectedModel,
+        isInstalled: isInstalled,
+        isActive: isActive,
+        activeModelName: activeModel?.displayName,
+      ),
+    };
+  }
+
+  Widget _buildCatalogLoading() {
+    return const _CardContainer(
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(width: 20, height: 20, child: CupertinoActivityIndicator()),
+          SizedBox(width: 12),
+          Text(
+            'Loading model catalog...',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: Color(0xFF8E8E93),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

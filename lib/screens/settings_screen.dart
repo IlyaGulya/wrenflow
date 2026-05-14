@@ -4,14 +4,15 @@ import 'dart:convert';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:rinf/rinf.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:wrenflow/providers/audio_devices_provider.dart';
 import 'package:wrenflow/providers/history_provider.dart';
 import 'package:wrenflow/providers/launch_at_login_provider.dart';
 import 'package:wrenflow/providers/local_models_provider.dart';
 import 'package:wrenflow/providers/local_model_status_provider.dart';
 import 'package:wrenflow/providers/settings_provider.dart';
 import 'package:wrenflow/providers/update_provider.dart';
+import 'package:wrenflow/shell/shell_capabilities.dart';
 import 'package:wrenflow/services/app_version.dart';
 import 'package:wrenflow/services/update_service.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
@@ -190,9 +191,6 @@ class _GeneralContent extends ConsumerStatefulWidget {
 class _GeneralContentState extends ConsumerState<_GeneralContent> {
   late TextEditingController _vocabularyController;
   Timer? _vocabularyDebounce;
-  List<AudioDeviceInfo> _audioDevices = [];
-  String _defaultDeviceName = '';
-  StreamSubscription<RustSignalPack<AudioDevicesListed>>? _deviceSubscription;
 
   @override
   void initState() {
@@ -201,24 +199,12 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
     _vocabularyController = TextEditingController(
       text: settings.customVocabulary,
     );
-
-    _deviceSubscription = AudioDevicesListed.rustSignalStream.listen((signal) {
-      if (mounted) {
-        setState(() {
-          _audioDevices = signal.message.devices;
-          _defaultDeviceName = signal.message.defaultDeviceName;
-        });
-      }
-    });
-
-    const ListAudioDevices().sendSignalToRust();
   }
 
   @override
   void dispose() {
     _vocabularyController.dispose();
     _vocabularyDebounce?.cancel();
-    _deviceSubscription?.cancel();
     super.dispose();
   }
 
@@ -233,6 +219,7 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
     final launchAtLogin = ref.watch(launchAtLoginProvider);
+    final shellCapabilities = ref.watch(shellCapabilitiesProvider);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
@@ -253,11 +240,13 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
           ),
           const SizedBox(height: 16),
 
-          SettingsCard(
-            title: 'Launch at login',
-            child: _buildLaunchAtLoginToggle(launchAtLogin),
-          ),
-          const SizedBox(height: 16),
+          if (shellCapabilities.launchAtLogin) ...[
+            SettingsCard(
+              title: 'Launch at login',
+              child: _buildLaunchAtLoginToggle(launchAtLogin),
+            ),
+            const SizedBox(height: 16),
+          ],
 
           // Sound effects card
           SettingsCard(
@@ -302,17 +291,22 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
   }
 
   Widget _buildMicrophoneDropdown(AppSettings settings) {
-    final defaultLabel = _defaultDeviceName.isNotEmpty
-        ? 'System Default ($_defaultDeviceName)'
+    final audioSnapshot = ref.watch(audioDevicesSnapshotProvider).value;
+    final defaultDeviceName = audioSnapshot?.defaultDeviceName ?? '';
+    final devices = audioSnapshot?.devices ?? const <AudioDeviceInfo>[];
+    final effectiveSelectedId =
+        audioSnapshot?.effectiveSelectedDeviceId ??
+        settings.selectedMicrophoneId;
+    final defaultLabel = defaultDeviceName.isNotEmpty
+        ? 'System Default ($defaultDeviceName)'
         : 'System Default';
     final items = <_DropdownItem>[
       _DropdownItem('default', defaultLabel),
-      for (final device in _audioDevices) _DropdownItem(device.id, device.name),
+      for (final device in devices) _DropdownItem(device.id, device.name),
     ];
 
-    final effectiveId =
-        items.any((i) => i.value == settings.selectedMicrophoneId)
-        ? settings.selectedMicrophoneId
+    final effectiveId = items.any((i) => i.value == effectiveSelectedId)
+        ? effectiveSelectedId
         : 'default';
 
     return Column(
@@ -502,15 +496,9 @@ class _ModelsSummaryCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final modelStatus = ref.watch(localModelsStatusProvider).value;
+    final modelStatus = ref.watch(localModelsStatusProvider);
     final models = ref.watch(localModelsProvider);
-    final fallbackSelectedModel = ref.watch(selectedLocalModelProvider);
-    final selectedModelId =
-        modelStatus?.selectedModelId ?? fallbackSelectedModel.id;
-    final selectedModel = models.firstWhere(
-      (model) => model.id == selectedModelId,
-      orElse: () => fallbackSelectedModel,
-    );
+    final selectedModel = ref.watch(selectedLocalModelProvider);
     final activeModelId = modelStatus?.activeModelId;
     final activeModel = activeModelId == null
         ? null
@@ -518,13 +506,14 @@ class _ModelsSummaryCard extends ConsumerWidget {
         ? null
         : models.firstWhere((model) => model.id == activeModelId);
     final installedCount = modelStatus?.installedModelIds.length ?? 0;
+    final preferredLabel = selectedModel?.displayName ?? 'Loading...';
 
     return SettingsCard(
       title: 'Model status',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _summaryRow('Preferred', selectedModel.displayName),
+          _summaryRow('Preferred', preferredLabel),
           const SizedBox(height: 8),
           _summaryRow('Active', activeModel?.displayName ?? 'None'),
           const SizedBox(height: 8),
@@ -887,6 +876,7 @@ class _AboutContent extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final updateAsync = ref.watch(updateProvider);
+    final shellCapabilities = ref.watch(shellCapabilitiesProvider);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
@@ -922,43 +912,44 @@ class _AboutContent extends ConsumerWidget {
           ),
           const SizedBox(height: 20),
 
-          // Update section
-          SettingsCard(
-            title: 'Updates',
-            child: updateAsync.when(
-              loading: () => Row(
-                children: [
-                  SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 1.5,
-                      color: WrenflowStyle.textTertiary,
+          if (shellCapabilities.updates) ...[
+            SettingsCard(
+              title: 'Updates',
+              child: updateAsync.when(
+                loading: () => Row(
+                  children: [
+                    SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.5,
+                        color: WrenflowStyle.textTertiary,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Checking for updates...',
-                    style: WrenflowStyle.body(12),
-                  ),
-                ],
-              ),
-              error: (error, stackTrace) => _updateRow(
-                'Could not check for updates',
-                actionLabel: 'Retry',
-                onAction: () => ref.read(updateProvider.notifier).checkNow(),
-              ),
-              data: (info) => info.isAvailable
-                  ? _updateAvailable(context, ref, info)
-                  : _updateRow(
-                      'You\'re up to date',
-                      actionLabel: 'Check now',
-                      onAction: () =>
-                          ref.read(updateProvider.notifier).checkNow(),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Checking for updates...',
+                      style: WrenflowStyle.body(12),
                     ),
+                  ],
+                ),
+                error: (error, stackTrace) => _updateRow(
+                  'Could not check for updates',
+                  actionLabel: 'Retry',
+                  onAction: () => ref.read(updateProvider.notifier).checkNow(),
+                ),
+                data: (info) => info.isAvailable
+                    ? _updateAvailable(context, ref, info)
+                    : _updateRow(
+                        'You\'re up to date',
+                        actionLabel: 'Check now',
+                        onAction: () =>
+                            ref.read(updateProvider.notifier).checkNow(),
+                      ),
+              ),
             ),
-          ),
-          const SizedBox(height: 16),
+            const SizedBox(height: 16),
+          ],
 
           GestureDetector(
             onTap: () async {

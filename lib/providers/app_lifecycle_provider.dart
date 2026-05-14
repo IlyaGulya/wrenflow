@@ -1,117 +1,100 @@
-import 'dart:io';
+import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../providers/permissions_provider.dart';
 import '../screens/settings_screen.dart';
-import '../src/bindings/signals/signals.dart';
+import '../src/bindings/signals/signals.dart' as sig;
 import '../state/app_lifecycle_state.dart';
 
 const _kHasCompletedSetup = 'has_completed_setup';
 
-/// Manages the app lifecycle state machine.
+/// Projects the Rust-owned app session FSM into Flutter and forwards user
+/// intents back to Rust.
 class AppLifecycleNotifier extends Notifier<AppLifecycleState> {
-  /// Consecutive polls with missing permissions before triggering recovery.
-  static const _permissionLostThreshold = 3;
-  int _permissionLostCount = 0;
+  StreamSubscription? _snapshotSub;
 
   @override
   AppLifecycleState build() {
-    ref.listen<PermissionsState>(permissionsProvider, _onPermissionsChanged);
-    _initialize();
+    _startSnapshotBridge();
+    _bootstrap();
+    ref.onDispose(() => _snapshotSub?.cancel());
     return const Initializing();
+  }
+
+  void _startSnapshotBridge() {
+    _snapshotSub = sig.AppSessionSnapshotChanged.rustSignalStream.listen((
+      signalPack,
+    ) {
+      _transitionTo(_mapSignalState(signalPack.message.state));
+    });
+
+    const sig.RequestAppSessionSnapshot().sendSignalToRust();
+  }
+
+  Future<void> _bootstrap() async {
+    final prefs = await SharedPreferences.getInstance();
+    final hasCompleted = prefs.getBool(_kHasCompletedSetup) ?? false;
+    sig.BootstrapAppSession(hasCompletedSetup: hasCompleted).sendSignalToRust();
+  }
+
+  AppLifecycleState _mapSignalState(sig.AppSessionState state) {
+    return switch (state) {
+      sig.AppSessionStateInitializing() => const Initializing(),
+      sig.AppSessionStateOnboarding() => Onboarding(
+        currentStep: _mapOnboardingStep(state.step),
+      ),
+      sig.AppSessionStatePermissionRecovery() => PermissionRecovery(
+        missing: MissingPermissions(
+          microphone: state.microphoneMissing,
+          accessibility: state.accessibilityMissing,
+        ),
+      ),
+      sig.AppSessionStateReady() => const Running(),
+      sig.AppSessionStateShuttingDown() => const ShuttingDown(),
+      _ => const Initializing(),
+    };
+  }
+
+  OnboardingStep _mapOnboardingStep(sig.AppSessionOnboardingStep step) {
+    return switch (step) {
+      sig.AppSessionOnboardingStep.microphone => OnboardingStep.microphone,
+      sig.AppSessionOnboardingStep.accessibility =>
+        OnboardingStep.accessibility,
+      sig.AppSessionOnboardingStep.hotkey => OnboardingStep.hotkey,
+      sig.AppSessionOnboardingStep.model => OnboardingStep.model,
+      sig.AppSessionOnboardingStep.vocabulary => OnboardingStep.vocabulary,
+      sig.AppSessionOnboardingStep.complete => OnboardingStep.complete,
+    };
   }
 
   void _transitionTo(AppLifecycleState newState) {
     state = newState;
-    // Sync transcript action with Rust based on lifecycle.
     final action = newState is Running ? 'paste' : 'display_only';
-    SetTranscriptAction(action: action).sendSignalToRust();
-  }
-
-  Future<void> _initialize() async {
-    final prefs = await SharedPreferences.getInstance();
-    final hasCompleted = prefs.getBool(_kHasCompletedSetup) ?? false;
-
-    if (!hasCompleted) {
-      _transitionTo(const Onboarding(currentStep: OnboardingStep.microphone));
-      return;
-    }
-
-    final permissions = ref.read(permissionsProvider);
-    if (permissions.allGranted) {
-      _transitionTo(const Running());
-    } else {
-      _transitionTo(PermissionRecovery(missing: _buildMissing(permissions)));
-    }
-  }
-
-  // ── Permission monitoring ─────────────────────────────────
-
-  void _onPermissionsChanged(PermissionsState? prev, PermissionsState next) {
-    final current = state;
-
-    // Running → PermissionRecovery (debounced)
-    if (current is Running && !next.allGranted) {
-      _permissionLostCount++;
-      if (_permissionLostCount >= _permissionLostThreshold) {
-        _transitionTo(PermissionRecovery(missing: _buildMissing(next)));
-        _permissionLostCount = 0;
-      }
-    } else if (current is Running) {
-      _permissionLostCount = 0;
-    }
-
-    // PermissionRecovery → Running (auto)
-    if (current is PermissionRecovery && next.allGranted) {
-      _transitionTo(const Running());
-      _permissionLostCount = 0;
-    }
-  }
-
-  MissingPermissions _buildMissing(PermissionsState p) {
-    return MissingPermissions(
-      microphone: p.microphone != PermissionStatus.granted,
-      accessibility: p.accessibility != PermissionStatus.granted,
-    );
+    sig.SetTranscriptAction(action: action).sendSignalToRust();
   }
 
   // ── Onboarding actions ────────────────────────────────────
 
   void onboardingNext() {
-    final current = state;
-    if (current is! Onboarding) return;
-    final nextIndex = current.currentStep.index + 1;
-    if (nextIndex < OnboardingStep.values.length) {
-      state = current.copyWith(currentStep: OnboardingStep.values[nextIndex]);
-    }
+    const sig.AdvanceOnboarding().sendSignalToRust();
   }
 
   void onboardingBack() {
-    final current = state;
-    if (current is! Onboarding) return;
-    if (current.currentStep.index > 0) {
-      state = current.copyWith(
-        currentStep: OnboardingStep.values[current.currentStep.index - 1],
-      );
-    }
+    const sig.RetreatOnboarding().sendSignalToRust();
   }
 
   Future<void> completeOnboarding() async {
-    if (state is! Onboarding) return;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kHasCompletedSetup, true);
-    _transitionTo(const Running());
+    const sig.CompleteOnboarding().sendSignalToRust();
   }
 
   // ── Global actions ────────────────────────────────────────
 
   void quit() {
-    _transitionTo(const ShuttingDown());
-    // Give a frame for cleanup, then exit.
-    WidgetsBinding.instance.addPostFrameCallback((_) => exit(0));
+    const sig.RequestQuit().sendSignalToRust();
   }
 }
 

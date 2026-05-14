@@ -14,11 +14,24 @@ class LocalModelPicker extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final models = ref.watch(localModelsProvider);
-    final modelStatus = ref.watch(localModelsStatusProvider).value;
-    final fallbackSelectedId = ref.watch(
-      settingsProvider.select((settings) => settings.selectedLocalModelId),
-    );
-    final selectedId = modelStatus?.selectedModelId ?? fallbackSelectedId;
+    final modelStatus = ref.watch(localModelsStatusProvider);
+    final selectedId = modelStatus?.selectedModelId;
+
+    if (models.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(compact ? 10 : 12),
+        decoration: BoxDecoration(
+          color: WrenflowStyle.bg,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: WrenflowStyle.border, width: 1),
+        ),
+        child: Text(
+          'Loading available models...',
+          style: WrenflowStyle.caption(11),
+        ),
+      );
+    }
 
     return Column(
       children: models.map((model) {

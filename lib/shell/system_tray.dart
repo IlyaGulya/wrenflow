@@ -3,18 +3,18 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:rinf/rinf.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
-import 'package:wrenflow/providers/app_lifecycle_provider.dart';
-import 'package:wrenflow/providers/launch_at_login_provider.dart';
-import 'package:wrenflow/providers/pipeline_state_provider.dart';
-import 'package:wrenflow/providers/settings_provider.dart';
-import 'package:wrenflow/screens/settings_screen.dart';
-import 'package:wrenflow/services/app_version.dart';
-import 'package:wrenflow/src/bindings/signals/signals.dart';
-import 'package:wrenflow/state/app_lifecycle_state.dart';
+import '../providers/app_lifecycle_provider.dart';
+import '../providers/audio_devices_provider.dart';
+import '../providers/launch_at_login_provider.dart';
+import '../providers/pipeline_state_provider.dart';
+import '../providers/settings_provider.dart';
+import '../screens/settings_screen.dart';
+import '../services/app_version.dart';
+import '../src/bindings/signals/signals.dart';
+import '../state/app_lifecycle_state.dart';
 
 /// Manages the macOS system tray (menu bar) icon and context menu.
 class SystemTrayManager with TrayListener {
@@ -29,7 +29,6 @@ class SystemTrayManager with TrayListener {
 
   List<AudioDeviceInfo> _audioDevices = [];
   String _defaultDeviceName = '';
-  StreamSubscription<RustSignalPack<AudioDevicesListed>>? _deviceSub;
 
   Future<void> init() async {
     _idleIconPath = await _extractAsset('assets/tray_icons/tray_idle@2x.png');
@@ -50,14 +49,17 @@ class SystemTrayManager with TrayListener {
 
     _trayManager.addListener(this);
 
-    // Listen for audio device list updates (cache only, don't rebuild menu).
-    _deviceSub = AudioDevicesListed.rustSignalStream.listen((signal) {
-      _audioDevices = signal.message.devices;
-      _defaultDeviceName = signal.message.defaultDeviceName;
-    });
-
-    // Request initial device list.
-    const ListAudioDevices().sendSignalToRust();
+    _ref.listen<AsyncValue<AudioDevicesSnapshotView>>(
+      audioDevicesSnapshotProvider,
+      (previous, next) {
+        final snapshot = next.value;
+        if (snapshot == null) return;
+        _audioDevices = snapshot.devices;
+        _defaultDeviceName = snapshot.defaultDeviceName;
+        final lastState = _ref.read(pipelineStateProvider).value;
+        _updateContextMenu(lastState ?? const PipelineStateIdle());
+      },
+    );
 
     await _updateContextMenu(const PipelineStateIdle());
 
@@ -82,8 +84,6 @@ class SystemTrayManager with TrayListener {
     });
   }
 
-  // ── Lifecycle reactions ───────────────────────────────────
-
   void _onLifecycleChanged(AppLifecycleState next) {
     if (next is! Running) {
       _ref.read(activeScreenProvider.notifier).close();
@@ -92,8 +92,6 @@ class SystemTrayManager with TrayListener {
       _quit();
     }
   }
-
-  // ── Pipeline reactions ────────────────────────────────────
 
   Future<String?> _extractAsset(String assetPath) async {
     try {
@@ -131,11 +129,12 @@ class SystemTrayManager with TrayListener {
 
   Future<void> _updateContextMenu(PipelineState state) async {
     final statusText = _statusText(state);
-    final settings = _ref.read(settingsProvider);
-    final selectedMicId = settings.selectedMicrophoneId;
+    final audioSnapshot = _ref.read(audioDevicesSnapshotProvider).value;
+    final selectedMicId =
+        audioSnapshot?.effectiveSelectedDeviceId ??
+        _ref.read(settingsProvider).selectedMicrophoneId;
     final launchAtLogin = _ref.read(launchAtLoginProvider);
 
-    // Build microphone submenu.
     final defaultLabel = _defaultDeviceName.isNotEmpty
         ? 'System Default ($_defaultDeviceName)'
         : 'System Default';
@@ -199,11 +198,8 @@ class SystemTrayManager with TrayListener {
     return 'Ready';
   }
 
-  // ── Microphone selection ──────────────────────────────────
-
   void _selectMicrophone(String deviceId) {
     _ref.read(settingsProvider.notifier).setSelectedMicrophoneId(deviceId);
-    // Refresh menu to update checkmarks.
     final lastState = _ref.read(pipelineStateProvider).value;
     _updateContextMenu(lastState ?? const PipelineStateIdle());
   }
@@ -213,8 +209,6 @@ class SystemTrayManager with TrayListener {
     final lastState = _ref.read(pipelineStateProvider).value;
     _updateContextMenu(lastState ?? const PipelineStateIdle());
   }
-
-  // ── Screen management (single window) ───────────────────
 
   void _showSettings() {
     if (_ref.read(appLifecycleProvider) is! Running) return;
@@ -238,12 +232,9 @@ class SystemTrayManager with TrayListener {
   }
 
   Future<void> dispose() async {
-    _deviceSub?.cancel();
     _trayManager.removeListener(this);
     await _trayManager.destroy();
   }
-
-  // ── TrayListener ────────────────────────────────────────────
 
   @override
   void onTrayIconMouseUp() {
