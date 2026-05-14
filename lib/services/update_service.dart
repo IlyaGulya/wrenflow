@@ -73,9 +73,11 @@ class GitHubUpdateSource implements UpdateSource {
         final latestVersion = tagName.startsWith('v')
             ? tagName.substring(1)
             : tagName;
+        final currentVersion = AppVersion.currentVersion;
 
         if (latestVersion.isEmpty) return UpdateInfo.none;
-        if (!_isNewerVersion(latestVersion, AppVersion.currentVersion)) {
+        if (currentVersion.isEmpty) return UpdateInfo.none;
+        if (!_isNewerVersion(latestVersion, currentVersion)) {
           return UpdateInfo.none;
         }
 

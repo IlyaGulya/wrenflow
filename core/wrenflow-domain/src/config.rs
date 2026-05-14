@@ -4,6 +4,17 @@
 
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_MINIMUM_RECORDING_DURATION_MS: f64 = 300.0;
+pub const DEFAULT_SELECTED_HOTKEY: &str = "61";
+pub const DEFAULT_SELECTED_MICROPHONE_ID: &str = "default";
+pub const DEFAULT_SELECTED_LOCAL_MODEL_ID: &str = "parakeet-tdt-0.6b-v3-onnx";
+
+pub fn default_selected_hotkey_keycode() -> u32 {
+    DEFAULT_SELECTED_HOTKEY
+        .parse()
+        .expect("DEFAULT_SELECTED_HOTKEY must be a valid macOS keycode")
+}
+
 /// All user-configurable settings. Pure data, no IO.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -19,11 +30,11 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            minimum_recording_duration_ms: 300.0,
+            minimum_recording_duration_ms: DEFAULT_MINIMUM_RECORDING_DURATION_MS,
             custom_vocabulary: String::new(),
-            selected_hotkey: "61".to_string(),
-            selected_microphone_id: "default".to_string(),
-            selected_local_model_id: "parakeet-tdt-0.6b-v3-onnx".to_string(),
+            selected_hotkey: DEFAULT_SELECTED_HOTKEY.to_string(),
+            selected_microphone_id: DEFAULT_SELECTED_MICROPHONE_ID.to_string(),
+            selected_local_model_id: DEFAULT_SELECTED_LOCAL_MODEL_ID.to_string(),
             sound_enabled: true,
             has_completed_setup: false,
         }

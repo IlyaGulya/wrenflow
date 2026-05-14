@@ -1,7 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../services/app_version.dart';
 import '../shell/shell_capabilities.dart';
+import 'app_version_provider.dart';
 import 'update_provider.dart';
 
 enum AboutUpdateCardPhase { hidden, checking, action, available }
@@ -30,10 +30,11 @@ final aboutSettingsPresentationProvider =
     Provider<AboutSettingsPresentation>((ref) {
       final updateState = ref.watch(updateProvider);
       final shellCapabilities = ref.watch(shellCapabilitiesProvider);
+      final versionLabel = ref.watch(appVersionLabelProvider);
 
       if (!shellCapabilities.updates) {
         return AboutSettingsPresentation(
-          versionLabel: 'v${AppVersion.displayVersion}',
+          versionLabel: versionLabel,
           showUpdates: false,
           updatePhase: AboutUpdateCardPhase.hidden,
         );
@@ -41,20 +42,20 @@ final aboutSettingsPresentationProvider =
 
       return switch (updateState.phase) {
         UpdatePhase.checking => AboutSettingsPresentation(
-          versionLabel: 'v${AppVersion.displayVersion}',
+          versionLabel: versionLabel,
           showUpdates: true,
           updatePhase: AboutUpdateCardPhase.checking,
           updateMessage: 'Checking for updates...',
         ),
         UpdatePhase.error => AboutSettingsPresentation(
-          versionLabel: 'v${AppVersion.displayVersion}',
+          versionLabel: versionLabel,
           showUpdates: true,
           updatePhase: AboutUpdateCardPhase.action,
           updateMessage: 'Could not check for updates',
           updateActionLabel: 'Retry',
         ),
         UpdatePhase.available => AboutSettingsPresentation(
-          versionLabel: 'v${AppVersion.displayVersion}',
+          versionLabel: versionLabel,
           showUpdates: true,
           updatePhase: AboutUpdateCardPhase.available,
           updateMessage: 'v${updateState.latestVersion} is available',
@@ -64,7 +65,7 @@ final aboutSettingsPresentationProvider =
           isRecentUpdate: updateState.isRecent,
         ),
         _ => AboutSettingsPresentation(
-          versionLabel: 'v${AppVersion.displayVersion}',
+          versionLabel: versionLabel,
           showUpdates: true,
           updatePhase: AboutUpdateCardPhase.action,
           updateMessage: 'You\'re up to date',

@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../runtime/runtime_contract.dart';
 import '../shell/shell_capabilities.dart';
 import '../src/bindings/signals/signals.dart';
 import 'audio_devices_provider.dart';
@@ -20,6 +21,7 @@ class MicrophoneOptionPresentation {
 
 class GeneralSettingsPresentation {
   const GeneralSettingsPresentation({
+    required this.hasSettingsSnapshot,
     required this.selectedHotkey,
     required this.soundEnabled,
     required this.minimumRecordingDurationMs,
@@ -30,6 +32,7 @@ class GeneralSettingsPresentation {
     required this.microphones,
   });
 
+  final bool hasSettingsSnapshot;
   final String selectedHotkey;
   final bool soundEnabled;
   final double minimumRecordingDurationMs;
@@ -57,9 +60,9 @@ final generalSettingsPresentationProvider =
 
       final microphones = <MicrophoneOptionPresentation>[
         MicrophoneOptionPresentation(
-          id: 'default',
+          id: systemDefaultMicrophoneId,
           label: defaultLabel,
-          selected: selectedMicId == 'default',
+          selected: selectedMicId == systemDefaultMicrophoneId,
         ),
         for (final device in audioSnapshot?.devices ?? const <AudioDeviceInfo>[])
           MicrophoneOptionPresentation(
@@ -70,6 +73,7 @@ final generalSettingsPresentationProvider =
       ];
 
       return GeneralSettingsPresentation(
+        hasSettingsSnapshot: settings.hasSnapshot,
         selectedHotkey: settings.selectedHotkey,
         soundEnabled: settings.soundEnabled,
         minimumRecordingDurationMs: settings.minimumRecordingDurationMs,

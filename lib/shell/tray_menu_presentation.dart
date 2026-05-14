@@ -1,8 +1,10 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/audio_devices_provider.dart';
+import '../providers/app_version_provider.dart';
 import '../providers/launch_at_login_provider.dart';
 import '../providers/settings_provider.dart';
+import '../runtime/runtime_contract.dart';
 import 'shell_pipeline_presentation.dart';
 
 class TrayMicrophoneItem {
@@ -19,12 +21,14 @@ class TrayMicrophoneItem {
 
 class TrayMenuPresentation {
   const TrayMenuPresentation({
+    required this.versionLabel,
     required this.statusText,
     required this.launchAtLoginEnabled,
     required this.launchAtLoginLoading,
     required this.microphones,
   });
 
+  final String versionLabel;
   final String statusText;
   final bool launchAtLoginEnabled;
   final bool launchAtLoginLoading;
@@ -36,6 +40,7 @@ final trayMenuPresentationProvider = Provider<TrayMenuPresentation>((ref) {
   final launchAtLogin = ref.watch(launchAtLoginProvider);
   final audioSnapshot = ref.watch(audioDevicesSnapshotProvider).value;
   final settings = ref.watch(settingsProvider);
+  final versionLabel = ref.watch(appVersionLabelProvider);
 
   final selectedMicId =
       audioSnapshot?.effectiveSelectedDeviceId ?? settings.selectedMicrophoneId;
@@ -46,9 +51,9 @@ final trayMenuPresentationProvider = Provider<TrayMenuPresentation>((ref) {
 
   final microphones = <TrayMicrophoneItem>[
     TrayMicrophoneItem(
-      id: 'default',
+      id: systemDefaultMicrophoneId,
       label: defaultLabel,
-      selected: selectedMicId == 'default',
+      selected: selectedMicId == systemDefaultMicrophoneId,
     ),
     for (final device in audioSnapshot?.devices ?? const [])
       TrayMicrophoneItem(
@@ -59,6 +64,7 @@ final trayMenuPresentationProvider = Provider<TrayMenuPresentation>((ref) {
   ];
 
   return TrayMenuPresentation(
+    versionLabel: 'Wrenflow $versionLabel',
     statusText: pipeline.statusText,
     launchAtLoginEnabled: launchAtLogin.enabled,
     launchAtLoginLoading: launchAtLogin.isLoading,

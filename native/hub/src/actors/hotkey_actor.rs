@@ -7,9 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Instant;
 use tokio::sync::mpsc;
-
-/// Default keycode: Right Option (61 on macOS).
-const DEFAULT_KEYCODE: u32 = 61;
+use wrenflow_domain::config::default_selected_hotkey_keycode;
 
 #[derive(Debug)]
 pub enum HotkeyEvent {
@@ -108,7 +106,8 @@ pub fn keycode_from_name(name: &str) -> u32 {
         "f5" => 96,
         _ => {
             // Try parsing as numeric keycode
-            name.parse::<u32>().unwrap_or(DEFAULT_KEYCODE)
+            name.parse::<u32>()
+                .unwrap_or_else(|_| default_selected_hotkey_keycode())
         }
     }
 }

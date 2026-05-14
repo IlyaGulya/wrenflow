@@ -6,15 +6,27 @@ import 'rust_snapshot_bridge.dart';
 /// App settings state mirrored from the Rust-owned persisted config.
 class AppSettings {
   const AppSettings({
-    this.selectedLocalModelId = 'parakeet-tdt-0.6b-v3-onnx',
-    this.selectedHotkey = '61',
-    this.selectedMicrophoneId = 'default',
-    this.soundEnabled = true,
+    this.hasSnapshot = false,
+    this.selectedLocalModelId = '',
+    this.selectedHotkey = '',
+    this.selectedMicrophoneId = '',
+    this.soundEnabled = false,
     this.customVocabulary = '',
-    this.minimumRecordingDurationMs = 300.0,
+    this.minimumRecordingDurationMs = 0,
     this.hasCompletedSetup = false,
   });
 
+  const AppSettings.loading()
+    : hasSnapshot = false,
+      selectedLocalModelId = '',
+      selectedHotkey = '',
+      selectedMicrophoneId = '',
+      soundEnabled = false,
+      customVocabulary = '',
+      minimumRecordingDurationMs = 0,
+      hasCompletedSetup = false;
+
+  final bool hasSnapshot;
   final String selectedLocalModelId;
   final String selectedHotkey;
   final String selectedMicrophoneId;
@@ -24,6 +36,7 @@ class AppSettings {
   final bool hasCompletedSetup;
 
   AppSettings copyWith({
+    bool? hasSnapshot,
     String? selectedLocalModelId,
     String? selectedHotkey,
     String? selectedMicrophoneId,
@@ -33,6 +46,7 @@ class AppSettings {
     bool? hasCompletedSetup,
   }) {
     return AppSettings(
+      hasSnapshot: hasSnapshot ?? this.hasSnapshot,
       selectedLocalModelId: selectedLocalModelId ?? this.selectedLocalModelId,
       selectedHotkey: selectedHotkey ?? this.selectedHotkey,
       selectedMicrophoneId: selectedMicrophoneId ?? this.selectedMicrophoneId,
@@ -46,6 +60,7 @@ class AppSettings {
 
   static AppSettings fromSignalSnapshot(SettingsSnapshot snapshot) {
     return AppSettings(
+      hasSnapshot: true,
       selectedLocalModelId: snapshot.selectedLocalModelId,
       selectedHotkey: snapshot.selectedHotkey,
       selectedMicrophoneId: snapshot.selectedMicrophoneId,
@@ -65,7 +80,7 @@ class SettingsNotifier extends RustSnapshotNotifier<AppSettings> {
       signalStream: SettingsSnapshotChanged.rustSignalStream,
       map: (message) => AppSettings.fromSignalSnapshot(message.snapshot),
     );
-    return const AppSettings();
+    return const AppSettings.loading();
   }
 
   static String _normalizeHotkey(String value) {
@@ -83,7 +98,7 @@ class SettingsNotifier extends RustSnapshotNotifier<AppSettings> {
     AppSettings nextState,
     void Function() sendSignal,
   ) async {
-    state = nextState;
+    state = nextState.copyWith(hasSnapshot: true);
     sendSignal();
   }
 

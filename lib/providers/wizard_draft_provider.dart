@@ -5,7 +5,7 @@ import 'settings_provider.dart';
 
 class WizardDraftState {
   const WizardDraftState({
-    this.selectedHotkey = '61',
+    this.selectedHotkey = '',
     this.vocabularyDraft = '',
     this.lastHydratedHotkey,
     this.lastHydratedVocabulary,
@@ -46,6 +46,10 @@ class WizardDraftNotifier extends Notifier<WizardDraftState> {
   WizardDraftState build() => const WizardDraftState();
 
   void hydrateFromSettings(AppSettings settings) {
+    if (!settings.hasSnapshot) {
+      return;
+    }
+
     final hotkeyWasEdited =
         state.lastHydratedHotkey != null &&
         state.selectedHotkey != state.lastHydratedHotkey;

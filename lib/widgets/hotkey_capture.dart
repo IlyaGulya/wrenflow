@@ -1,99 +1,25 @@
 // ignore_for_file: deprecated_member_use
 
-import 'dart:io';
-
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 
+import '../shell/hotkey_policy.dart';
 import '../theme/wrenflow_theme.dart';
-
-/// Platform-specific hotkey presets.
-class HotkeyPreset {
-  const HotkeyPreset(this.value, this.label);
-
-  /// Value stored in prefs — keycode string for macOS, name for others.
-  final String value;
-
-  /// Human-readable label.
-  final String label;
-}
-
-/// macOS presets (keycode-based).
-const _macPresets = [
-  HotkeyPreset('63', 'Fn'),
-  HotkeyPreset('61', 'Right Option'),
-  HotkeyPreset('96', 'F5'),
-];
-
-List<HotkeyPreset> get platformPresets {
-  if (Platform.isMacOS) return _macPresets;
-  // Add Windows/Linux presets here later.
-  return _macPresets;
-}
-
-/// Known macOS keycodes → human-readable names.
-const _keycodeNames = <int, String>{
-  // Modifier keys
-  54: 'Right Command',
-  55: 'Left Command',
-  56: 'Left Shift',
-  57: 'Caps Lock',
-  58: 'Left Option',
-  59: 'Left Control',
-  60: 'Right Shift',
-  61: 'Right Option',
-  62: 'Right Control',
-  63: 'Fn',
-  // Function keys
-  96: 'F5',
-  97: 'F6',
-  98: 'F7',
-  99: 'F3',
-  100: 'F8',
-  101: 'F9',
-  103: 'F11',
-  105: 'F13',
-  107: 'F14',
-  109: 'F10',
-  111: 'F12',
-  113: 'F15',
-  118: 'F4',
-  120: 'F2',
-  122: 'F1',
-  // Special
-  36: 'Return',
-  48: 'Tab',
-  49: 'Space',
-  51: 'Delete',
-  53: 'Escape',
-  117: 'Forward Delete',
-};
-
-/// Convert a hotkey value to display name.
-String hotkeyDisplayName(String value) {
-  final code = int.tryParse(value);
-  if (code != null) {
-    return _keycodeNames[code] ?? 'Key $code';
-  }
-  // Legacy name mapping.
-  return switch (value) {
-    'fn' || 'fnKey' => 'Fn',
-    'rightOption' => 'Right Option',
-    'f5' => 'F5',
-    _ => value,
-  };
-}
 
 /// Hotkey selector: presets + custom key capture.
 class HotkeyCapture extends StatefulWidget {
   const HotkeyCapture({
     super.key,
+    required this.policy,
     required this.currentValue,
     required this.onKeySelected,
+    this.enabled = true,
   });
 
+  final HotkeyPolicy policy;
   final String currentValue;
   final ValueChanged<String> onKeySelected;
+  final bool enabled;
 
   @override
   State<HotkeyCapture> createState() => _HotkeyCaptureState();
@@ -110,7 +36,7 @@ class _HotkeyCaptureState extends State<HotkeyCapture> {
   }
 
   bool get _isPreset =>
-      platformPresets.any((p) => p.value == widget.currentValue);
+      widget.policy.presets.any((p) => p.value == widget.currentValue);
 
   void _startListening() {
     setState(() => _listening = true);
@@ -121,27 +47,18 @@ class _HotkeyCaptureState extends State<HotkeyCapture> {
     if (!_listening) return;
     if (event is! RawKeyDownEvent) return;
 
-    final macKeycode = _eventToMacKeycode(event);
-    if (macKeycode != null) {
-      widget.onKeySelected(macKeycode.toString());
+    final capturedValue = widget.policy.captureValue(event);
+    if (capturedValue != null) {
+      widget.onKeySelected(capturedValue);
       setState(() => _listening = false);
     }
-  }
-
-  int? _eventToMacKeycode(RawKeyEvent event) {
-    if (Platform.isMacOS && event.data is RawKeyEventDataMacOs) {
-      return (event.data as RawKeyEventDataMacOs).keyCode;
-    }
-    return _physicalToMacKeycode[event.physicalKey];
   }
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
-        // Presets
-        for (final preset in platformPresets) _buildPresetRow(preset),
-        // Custom
+        for (final preset in widget.policy.presets) _buildPresetRow(preset),
         _buildCustomRow(),
       ],
     );
@@ -150,7 +67,7 @@ class _HotkeyCaptureState extends State<HotkeyCapture> {
   Widget _buildPresetRow(HotkeyPreset preset) {
     final isSelected = widget.currentValue == preset.value;
     return GestureDetector(
-      onTap: () => widget.onKeySelected(preset.value),
+      onTap: widget.enabled ? () => widget.onKeySelected(preset.value) : null,
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 10),
@@ -181,18 +98,20 @@ class _HotkeyCaptureState extends State<HotkeyCapture> {
   }
 
   Widget _buildCustomRow() {
-    final isCustomSelected = !_isPreset;
+    final isCustomSelected = widget.currentValue.isNotEmpty && !_isPreset;
     return RawKeyboardListener(
       focusNode: _focusNode,
       onKey: _onKey,
       child: GestureDetector(
-        onTap: () {
-          if (isCustomSelected && !_listening) {
-            _startListening();
-          } else if (!isCustomSelected) {
-            _startListening();
-          }
-        },
+        onTap: !widget.enabled
+            ? null
+            : () {
+                if (isCustomSelected && !_listening) {
+                  _startListening();
+                } else if (!isCustomSelected) {
+                  _startListening();
+                }
+              },
         child: Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 10),
@@ -226,8 +145,15 @@ class _HotkeyCaptureState extends State<HotkeyCapture> {
                 )
               else if (isCustomSelected)
                 Text(
-                  'Custom: ${hotkeyDisplayName(widget.currentValue)}',
+                  'Custom: ${widget.policy.displayName(widget.currentValue)}',
                   style: WrenflowStyle.body(12),
+                )
+              else if (!widget.enabled && widget.currentValue.isEmpty)
+                Text(
+                  'Loading current hotkey...',
+                  style: WrenflowStyle.body(
+                    12,
+                  ).copyWith(color: WrenflowStyle.textTertiary),
                 )
               else
                 Text('Custom...', style: WrenflowStyle.body(12)),
@@ -238,38 +164,3 @@ class _HotkeyCaptureState extends State<HotkeyCapture> {
     );
   }
 }
-
-/// Flutter PhysicalKeyboardKey → macOS virtual keycode.
-final _physicalToMacKeycode = <PhysicalKeyboardKey, int>{
-  PhysicalKeyboardKey.fn: 63,
-  PhysicalKeyboardKey.capsLock: 57,
-  PhysicalKeyboardKey.shiftLeft: 56,
-  PhysicalKeyboardKey.shiftRight: 60,
-  PhysicalKeyboardKey.controlLeft: 59,
-  PhysicalKeyboardKey.controlRight: 62,
-  PhysicalKeyboardKey.altLeft: 58,
-  PhysicalKeyboardKey.altRight: 61,
-  PhysicalKeyboardKey.metaLeft: 55,
-  PhysicalKeyboardKey.metaRight: 54,
-  PhysicalKeyboardKey.f1: 122,
-  PhysicalKeyboardKey.f2: 120,
-  PhysicalKeyboardKey.f3: 99,
-  PhysicalKeyboardKey.f4: 118,
-  PhysicalKeyboardKey.f5: 96,
-  PhysicalKeyboardKey.f6: 97,
-  PhysicalKeyboardKey.f7: 98,
-  PhysicalKeyboardKey.f8: 100,
-  PhysicalKeyboardKey.f9: 101,
-  PhysicalKeyboardKey.f10: 109,
-  PhysicalKeyboardKey.f11: 103,
-  PhysicalKeyboardKey.f12: 111,
-  PhysicalKeyboardKey.f13: 105,
-  PhysicalKeyboardKey.f14: 107,
-  PhysicalKeyboardKey.f15: 113,
-  PhysicalKeyboardKey.escape: 53,
-  PhysicalKeyboardKey.tab: 48,
-  PhysicalKeyboardKey.space: 49,
-  PhysicalKeyboardKey.enter: 36,
-  PhysicalKeyboardKey.backspace: 51,
-  PhysicalKeyboardKey.delete: 117,
-};

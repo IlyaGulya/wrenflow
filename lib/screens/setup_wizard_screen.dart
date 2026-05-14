@@ -11,6 +11,7 @@ import '../providers/settings_provider.dart';
 import '../providers/wizard_draft_provider.dart';
 import '../providers/transcription_test_presentation_provider.dart';
 import '../providers/wizard_presentation_provider.dart';
+import '../shell/hotkey_policy.dart';
 import '../src/bindings/signals/signals.dart';
 import '../state/app_lifecycle_state.dart';
 import '../theme/wrenflow_theme.dart';
@@ -76,7 +77,9 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   Future<void> _finish() async {
     final draft = ref.read(wizardDraftProvider);
     final notifier = ref.read(settingsProvider.notifier);
-    await notifier.setSelectedHotkey(draft.selectedHotkey);
+    if (draft.selectedHotkey.isNotEmpty) {
+      await notifier.setSelectedHotkey(draft.selectedHotkey);
+    }
     final vocab = draft.vocabularyDraft.trim();
     if (vocab.isNotEmpty) {
       await notifier.setCustomVocabulary(vocab);
@@ -141,7 +144,9 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
         final notifier = ref.read(settingsProvider.notifier);
-        await notifier.setSelectedHotkey(draft.selectedHotkey);
+        if (draft.selectedHotkey.isNotEmpty) {
+          await notifier.setSelectedHotkey(draft.selectedHotkey);
+        }
         final vocab = draft.vocabularyDraft.trim();
         if (vocab.isNotEmpty) {
           await notifier.setCustomVocabulary(vocab);
@@ -389,13 +394,16 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
 
   Widget _buildHotkeyStep({Key? key}) {
     final draft = ref.watch(wizardDraftProvider);
+    final settings = ref.watch(settingsProvider);
     return _StepContent(
       key: key,
       icon: CupertinoIcons.keyboard,
       title: 'Hotkey',
       subtitle: 'Hold to record, release to transcribe and paste.',
       child: HotkeyCapture(
+        policy: platformHotkeyPolicy,
         currentValue: draft.selectedHotkey,
+        enabled: settings.hasSnapshot,
         onKeySelected: (value) =>
             ref.read(wizardDraftProvider.notifier).setSelectedHotkey(value),
       ),

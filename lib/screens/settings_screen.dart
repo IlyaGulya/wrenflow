@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wrenflow/providers/about_settings_presentation_provider.dart';
+import 'package:wrenflow/providers/app_version_provider.dart';
 import 'package:wrenflow/providers/general_settings_presentation_provider.dart';
 import 'package:wrenflow/providers/history_provider.dart';
 import 'package:wrenflow/providers/history_entry_presentation.dart';
@@ -11,8 +12,8 @@ import 'package:wrenflow/providers/launch_at_login_provider.dart';
 import 'package:wrenflow/providers/models_settings_presentation_provider.dart';
 import 'package:wrenflow/providers/settings_provider.dart';
 import 'package:wrenflow/providers/update_provider.dart';
+import 'package:wrenflow/shell/hotkey_policy.dart';
 import 'package:wrenflow/shell/main_window_presentation.dart';
-import 'package:wrenflow/services/app_version.dart';
 import 'package:wrenflow/src/bindings/signals/signals.dart';
 import 'package:wrenflow/theme/wrenflow_theme.dart';
 import 'package:wrenflow/widgets/green_toggle.dart';
@@ -121,7 +122,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
           // Version
           Text(
-            'v${AppVersion.displayVersion}',
+            ref.watch(appVersionLabelProvider),
             style: WrenflowStyle.mono(
               10,
             ).copyWith(color: WrenflowStyle.textTertiary),
@@ -243,6 +244,16 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
 
     _hydrateVocabulary(settings);
 
+    if (!presentation.hasSettingsSnapshot) {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: const SettingsCard(
+          title: 'General',
+          child: Text('Loading settings...'),
+        ),
+      );
+    }
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Column(
@@ -306,7 +317,9 @@ class _GeneralContentState extends ConsumerState<_GeneralContent> {
 
   Widget _buildHotkeyOptions(GeneralSettingsPresentation presentation) {
     return HotkeyCapture(
+      policy: platformHotkeyPolicy,
       currentValue: presentation.selectedHotkey,
+      enabled: presentation.hasSettingsSnapshot,
       onKeySelected: (value) =>
           ref.read(settingsProvider.notifier).setSelectedHotkey(value),
     );

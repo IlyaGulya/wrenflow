@@ -8,7 +8,6 @@ import 'package:tray_manager/tray_manager.dart';
 import '../providers/app_lifecycle_provider.dart';
 import '../providers/launch_at_login_provider.dart';
 import '../providers/settings_provider.dart';
-import '../services/app_version.dart';
 import '../state/app_lifecycle_state.dart';
 import 'main_window_presentation.dart';
 import 'shell_pipeline_presentation.dart';
@@ -120,7 +119,7 @@ class SystemTrayManager with TrayListener {
     final menu = Menu(
       items: [
         MenuItem(
-          label: 'Wrenflow v${AppVersion.displayVersion}',
+          label: presentation.versionLabel,
           disabled: true,
         ),
         MenuItem(label: presentation.statusText, disabled: true),
