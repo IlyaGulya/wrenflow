@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 abstract class LaunchAtLoginShell {
+  bool get isSupported;
   Future<bool> isEnabled();
   Future<void> setEnabled(bool enabled);
 }
@@ -15,6 +16,9 @@ LaunchAtLoginShell get platformLaunchAtLoginShell {
 
 class _MacOsLaunchAtLoginShell implements LaunchAtLoginShell {
   const _MacOsLaunchAtLoginShell();
+
+  @override
+  bool get isSupported => true;
 
   static const _channel = MethodChannel('dev.gulya.wrenflow/launch_at_login');
 
@@ -43,6 +47,9 @@ class _MacOsLaunchAtLoginShell implements LaunchAtLoginShell {
 
 class _UnsupportedLaunchAtLoginShell implements LaunchAtLoginShell {
   const _UnsupportedLaunchAtLoginShell();
+
+  @override
+  bool get isSupported => false;
 
   @override
   Future<bool> isEnabled() async {

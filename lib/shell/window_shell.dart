@@ -7,6 +7,7 @@ import '../theme/wrenflow_theme.dart';
 import 'main_window_presentation.dart';
 
 abstract class WindowShell {
+  bool get isSupported;
   Future<void> initializeMainWindow();
   void addListener(WindowListener listener);
   void removeListener(WindowListener listener);
@@ -27,6 +28,9 @@ WindowShell get platformWindowShell {
 
 class _MacOsWindowShell implements WindowShell {
   const _MacOsWindowShell();
+
+  @override
+  bool get isSupported => true;
 
   @override
   Future<void> initializeMainWindow() async {
@@ -95,6 +99,9 @@ class _MacOsWindowShell implements WindowShell {
 
 class _UnsupportedWindowShell implements WindowShell {
   const _UnsupportedWindowShell();
+
+  @override
+  bool get isSupported => false;
 
   @override
   Future<void> initializeMainWindow() async {}

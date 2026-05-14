@@ -1,10 +1,13 @@
-import 'dart:io';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../src/bindings/signals/signals.dart';
 import '../providers/rust_snapshot_bridge.dart';
+import 'launch_at_login_shell.dart';
+import 'overlay_shell.dart';
+import 'permissions_shell.dart';
+import 'tray_shell.dart';
+import 'window_shell.dart';
 
 class ShellCapabilities {
   const ShellCapabilities({
@@ -74,27 +77,21 @@ class ShellCapabilitiesNotifier
       );
     }
 
-    // Current shell/runtime integration is only implemented and packaged for
-    // macOS. Keep this honest until real adapters and packaging exist for
-    // other platforms.
-    if (!Platform.isMacOS) {
-      return const ShellCapabilities(
-        launchAtLogin: false,
-        updates: false,
-        localTranscription: false,
-        microphoneSelection: false,
-        tray: false,
-        overlays: false,
-      );
-    }
+    final supportsWindowShell = platformWindowShell.isSupported;
+    final supportsPermissions = platformPermissionsShell.isSupported;
+    final supportsLaunchAtLogin = platformLaunchAtLoginShell.isSupported;
+    final supportsTray = platformTrayShell.isSupported;
+    final supportsOverlays = platformOverlayShell.isSupported;
+    final supportsDesktopShell =
+        supportsWindowShell && supportsPermissions && supportsTray;
 
-    return const ShellCapabilities(
-      launchAtLogin: true,
-      updates: true,
-      localTranscription: true,
-      microphoneSelection: true,
-      tray: true,
-      overlays: true,
+    return ShellCapabilities(
+      launchAtLogin: supportsLaunchAtLogin,
+      updates: supportsDesktopShell,
+      localTranscription: supportsDesktopShell,
+      microphoneSelection: supportsDesktopShell,
+      tray: supportsTray,
+      overlays: supportsOverlays,
     );
   }
 }

@@ -55,6 +55,7 @@ class TrayMenuModel {
 }
 
 abstract class TrayShell {
+  bool get isSupported;
   void addListener(TrayShellListener listener);
   void removeListener(TrayShellListener listener);
   Future<void> setIcon(String path);
@@ -74,6 +75,9 @@ class _MacOsTrayShell with TrayListener implements TrayShell {
   final _trayManager = TrayManager.instance;
   TrayShellListener? _listener;
   bool _registered = false;
+
+  @override
+  bool get isSupported => true;
 
   @override
   void addListener(TrayShellListener listener) {
@@ -157,6 +161,9 @@ class _MacOsTrayShell with TrayListener implements TrayShell {
 
 class _UnsupportedTrayShell implements TrayShell {
   const _UnsupportedTrayShell();
+
+  @override
+  bool get isSupported => false;
 
   @override
   void addListener(TrayShellListener listener) {}

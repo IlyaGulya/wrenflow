@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 abstract class OverlayShell {
+  bool get isSupported;
   Future<void> show(String state, {double audioLevel = 0.0});
   Future<void> updateAudioLevel(double level);
   Future<void> hide();
@@ -17,6 +18,9 @@ OverlayShell get platformOverlayShell {
 
 class _MacOsOverlayShell implements OverlayShell {
   const _MacOsOverlayShell();
+
+  @override
+  bool get isSupported => true;
 
   static const _channel = MethodChannel('dev.gulya.wrenflow/overlay');
 
@@ -70,6 +74,9 @@ class _MacOsOverlayShell implements OverlayShell {
 
 class _UnsupportedOverlayShell implements OverlayShell {
   const _UnsupportedOverlayShell();
+
+  @override
+  bool get isSupported => false;
 
   @override
   Future<void> show(String state, {double audioLevel = 0.0}) async {}

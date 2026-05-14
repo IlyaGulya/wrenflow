@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 enum MicrophonePermission { granted, denied, notDetermined }
 
 abstract class PermissionsShell {
+  bool get isSupported;
   Future<MicrophonePermission> checkMicrophone();
   Future<bool> requestMicrophone();
   Future<bool> checkAccessibility();
@@ -21,6 +22,9 @@ PermissionsShell get platformPermissionsShell {
 
 class _MacOsPermissionsShell implements PermissionsShell {
   const _MacOsPermissionsShell();
+
+  @override
+  bool get isSupported => true;
 
   static const _channel = MethodChannel('dev.gulya.wrenflow/permissions');
 
@@ -100,6 +104,9 @@ class _MacOsPermissionsShell implements PermissionsShell {
 
 class _UnsupportedPermissionsShell implements PermissionsShell {
   const _UnsupportedPermissionsShell();
+
+  @override
+  bool get isSupported => false;
 
   @override
   Future<MicrophonePermission> checkMicrophone() async {
