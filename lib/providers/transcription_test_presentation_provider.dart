@@ -130,21 +130,21 @@ final transcriptionTestPresentationProvider =
       if (modelState is ModelStateError) {
         return TranscriptionTestPresentation(
           phase: TranscriptionTestPhase.modelError,
-          message: '$modelName failed. Tap to retry.',
+          message: '$modelName failed. Open its card and retry.',
         );
       }
       if (!isActive) {
         return TranscriptionTestPresentation(
           phase: TranscriptionTestPhase.modelManual,
           message: isInstalled
-              ? '${selectedModel.displayName} is selected but not active yet.'
-              : '${selectedModel.displayName} is selected but not installed yet.',
+              ? '${selectedModel.displayName} is selected but not active yet. Use its card to activate it.'
+              : '${selectedModel.displayName} is selected but not installed yet. Use its card to download and activate it.',
         );
       }
       if (modelState is! ModelStateReady) {
         return TranscriptionTestPresentation(
           phase: TranscriptionTestPhase.modelPending,
-          message: 'Activate ${selectedModel.displayName} to run a live test.',
+          message: 'Use the selected model card to finish preparing ${selectedModel.displayName}.',
         );
       }
 

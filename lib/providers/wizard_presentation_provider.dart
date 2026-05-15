@@ -97,9 +97,9 @@ final wizardPresentationProvider =
         ModelStateDownloading() => 'Wait for ${selectedModel?.displayName ?? 'the selected model'} to finish downloading.',
         ModelStateLoading() => 'Wait for ${selectedModel?.displayName ?? 'the selected model'} to finish loading.',
         ModelStateWarming() => 'Wait for ${selectedModel?.displayName ?? 'the selected model'} to finish warming up.',
-        ModelStateError() => 'Fix the selected model before continuing.',
+        ModelStateError() => 'Fix the selected model from its card before continuing.',
         ModelStateReady() when selectedModelReady => null,
-        _ => 'Download and activate your selected model before continuing.',
+        _ => 'Use the selected model card to download or activate it before continuing.',
       };
 
       return WizardPresentation(
