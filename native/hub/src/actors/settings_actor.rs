@@ -3,7 +3,7 @@
 use rinf::{DartSignal, RustSignal};
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
-use wrenflow_core::ConfigStore;
+use wrenflow_core::{ConfigStore, merge_legacy_preferences};
 use wrenflow_domain::config::AppConfig;
 
 use crate::signals;
@@ -50,7 +50,13 @@ fn send_snapshot(snapshot: &signals::SettingsSnapshot) {
 }
 
 pub fn load_initial_config() -> AppConfig {
-    ConfigStore::default_for(APP_NAME).load_or_default()
+    let store = ConfigStore::default_for(APP_NAME);
+    let loaded = store.load_or_default();
+    let merged = merge_legacy_preferences(loaded);
+    if let Err(error) = store.save(&merged) {
+        log::error!("Failed to persist merged settings config: {error}");
+    }
+    merged
 }
 
 pub fn shared_runtime(initial_config: AppConfig) -> SettingsRuntime {

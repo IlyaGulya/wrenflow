@@ -7,6 +7,7 @@ import 'local_model_status_provider.dart';
 import 'local_models_provider.dart';
 import 'model_state_provider.dart';
 import 'pipeline_state_provider.dart';
+import 'runtime_capabilities_provider.dart';
 
 enum TranscriptionTestPhase {
   loadingCatalog,
@@ -16,6 +17,7 @@ enum TranscriptionTestPhase {
   modelError,
   modelManual,
   modelPending,
+  runtimeUnavailable,
   transcript,
   recording,
   starting,
@@ -44,6 +46,7 @@ final transcriptionTestPresentationProvider =
       final latestTranscript = ref.watch(latestTranscriptProvider).value;
       final selectedModelOperation = ref.watch(selectedModelRuntimeStateProvider);
       final globalModelOperation = ref.watch(globalModelOperationProvider);
+      final runtimeCapabilities = ref.watch(runtimeCapabilitiesProvider).value;
       final modelState = selectedModelOperation?.state;
       final models = ref.watch(localModelsProvider);
       final modelStatus = ref.watch(localModelsStatusProvider);
@@ -62,6 +65,42 @@ final transcriptionTestPresentationProvider =
         return const TranscriptionTestPresentation(
           phase: TranscriptionTestPhase.loadingCatalog,
           message: 'Loading available models...',
+        );
+      }
+
+      if (runtimeCapabilities == null) {
+        return const TranscriptionTestPresentation(
+          phase: TranscriptionTestPhase.loadingCatalog,
+          message: 'Loading runtime support...',
+        );
+      }
+
+      if (!runtimeCapabilities.audioCapture) {
+        return const TranscriptionTestPresentation(
+          phase: TranscriptionTestPhase.runtimeUnavailable,
+          message: 'Audio capture is unavailable in the current runtime.',
+        );
+      }
+
+      if (!runtimeCapabilities.localTranscription) {
+        return const TranscriptionTestPresentation(
+          phase: TranscriptionTestPhase.runtimeUnavailable,
+          message: 'Local transcription is unavailable in the current runtime.',
+        );
+      }
+
+      if (!runtimeCapabilities.modelActivation) {
+        return const TranscriptionTestPresentation(
+          phase: TranscriptionTestPhase.runtimeUnavailable,
+          message: 'Model activation is unavailable in the current runtime.',
+        );
+      }
+
+      if (!selectedModel.supportsCurrentRuntime) {
+        return TranscriptionTestPresentation(
+          phase: TranscriptionTestPhase.runtimeUnavailable,
+          message:
+              '${selectedModel.displayName} is not supported by the current runtime.',
         );
       }
 

@@ -136,6 +136,11 @@ impl AudioCapture {
         Self::default()
     }
 
+    /// Whether the current backend can at least enumerate input devices.
+    pub fn backend_available() -> bool {
+        cpal::default_host().input_devices().is_ok()
+    }
+
     /// Enumerate available audio input devices.
     pub fn list_input_devices() -> Vec<AudioDeviceInfo> {
         let host = cpal::default_host();

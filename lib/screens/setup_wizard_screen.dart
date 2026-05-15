@@ -19,7 +19,6 @@ import '../widgets/green_toggle.dart';
 import '../widgets/hotkey_capture.dart';
 import '../widgets/initializing_dots.dart';
 import '../widgets/local_model_picker.dart';
-import '../widgets/model_download_widget.dart';
 import '../widgets/waveform_painter.dart';
 
 /// Setup wizard — used for both onboarding and permission recovery.
@@ -436,22 +435,25 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       icon: CupertinoIcons.waveform_path_ecg,
       title: 'Transcription Model',
       subtitle:
-          'Choose your preferred local model first. Nothing downloads or activates until you do it explicitly.',
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const LocalModelPicker(compact: true),
-          const SizedBox(height: 12),
-          const ModelDownloadWidget(),
-          if (presentation.modelStepMessage != null) ...[
-            const SizedBox(height: 10),
-            Text(
-              presentation.modelStepMessage!,
-              textAlign: TextAlign.center,
-              style: WrenflowStyle.caption(11),
-            ),
-          ],
-        ],
+          'Choose your preferred local model. The selected card shows download, activation, progress, and errors directly.',
+      child: SizedBox(
+        height: 300,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const LocalModelPicker(compact: true),
+              if (presentation.modelStepMessage != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  presentation.modelStepMessage!,
+                  textAlign: TextAlign.center,
+                  style: WrenflowStyle.caption(11),
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -805,6 +807,15 @@ class _TranscriptionTestWidgetState
       case TranscriptionTestPhase.modelPending:
       return Center(
         key: const ValueKey('model-pending'),
+        child: Text(
+          presentation.message!,
+          style: WrenflowStyle.caption(11),
+          textAlign: TextAlign.center,
+        ),
+      );
+      case TranscriptionTestPhase.runtimeUnavailable:
+      return Center(
+        key: const ValueKey('runtime-unavailable'),
         child: Text(
           presentation.message!,
           style: WrenflowStyle.caption(11),

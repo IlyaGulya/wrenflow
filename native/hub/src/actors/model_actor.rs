@@ -16,6 +16,7 @@ use wrenflow_core::model_management::{
 use wrenflow_core::transcription_local::LocalTranscriptionEngine;
 use wrenflow_domain::config::AppConfig;
 
+use crate::platform::runtime_probe;
 use crate::signals;
 
 /// Shared transcription engine — None until model is loaded.
@@ -326,6 +327,18 @@ async fn handle_initialize(
         );
         return;
     };
+    let Some(catalog_entry) = all_local_model_catalog_entries()
+        .into_iter()
+        .find(|entry| entry.id == selected_model_id) else {
+        set_model_state(
+            &snapshot,
+            &selected_model_id,
+            signals::ModelState::Error {
+                message: format!("Local model '{selected_model_id}' is missing from the catalog"),
+            },
+        );
+        return;
+    };
     let Some(dir) = model_dir_for(&selected_model_id) else {
         set_model_state(
             &snapshot,
@@ -336,6 +349,44 @@ async fn handle_initialize(
         );
         return;
     };
+
+    if !catalog_entry.supports_current_runtime {
+        set_model_state(
+            &snapshot,
+            &selected_model_id,
+            signals::ModelState::Error {
+                message: format!(
+                    "{} is not supported by the current runtime",
+                    catalog_entry.display_name
+                ),
+            },
+        );
+        return;
+    }
+
+    if !runtime_probe::onnx_runtime_available() {
+        set_model_state(
+            &snapshot,
+            &selected_model_id,
+            signals::ModelState::Error {
+                message: "Local ONNX runtime is unavailable in the current build".to_string(),
+            },
+        );
+        return;
+    }
+
+    if !model_downloader::is_model_present(&model, &dir) && !runtime_probe::model_storage_writable()
+    {
+        set_model_state(
+            &snapshot,
+            &selected_model_id,
+            signals::ModelState::Error {
+                message: "Local model storage is not writable".to_string(),
+            },
+        );
+        return;
+    }
+
     log::info!(
         "Model dir: {:?}, present: {}",
         dir,

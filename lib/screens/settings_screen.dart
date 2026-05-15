@@ -19,7 +19,6 @@ import 'package:wrenflow/theme/wrenflow_theme.dart';
 import 'package:wrenflow/widgets/green_toggle.dart';
 import 'package:wrenflow/widgets/hotkey_capture.dart';
 import 'package:wrenflow/widgets/local_model_picker.dart';
-import 'package:wrenflow/widgets/model_download_widget.dart';
 import 'package:wrenflow/widgets/settings_card.dart';
 
 extension on SettingsTab {
@@ -529,11 +528,6 @@ class _ModelsContent extends StatelessWidget {
           _ModelsSummaryCard(),
           SizedBox(height: 16),
           SettingsCard(title: 'Choose model', child: LocalModelPicker()),
-          SizedBox(height: 16),
-          SettingsCard(
-            title: 'Install / Activate',
-            child: ModelDownloadWidget(),
-          ),
         ],
       ),
     );
@@ -566,7 +560,7 @@ class _ModelsSummaryCard extends ConsumerWidget {
           ],
           const SizedBox(height: 10),
           Text(
-            'Changing the selection only updates your preferred model. Downloading and activating stay fully manual.',
+            'Selecting a card changes your preferred model. Download, activation, progress, and errors are shown directly inside the selected card.',
             style: WrenflowStyle.caption(11),
           ),
         ],
@@ -940,6 +934,20 @@ class _AboutContent extends ConsumerWidget {
             const SizedBox(height: 16),
           ],
 
+          SettingsCard(
+            title: 'Runtime status',
+            child: Column(
+              children: [
+                for (final item in presentation.diagnostics) ...[
+                  _diagnosticRow(item),
+                  if (item != presentation.diagnostics.last)
+                    const SizedBox(height: 8),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+
           GestureDetector(
             onTap: () async {
               final uri = Uri.parse(_githubUrl);
@@ -1015,6 +1023,37 @@ class _AboutContent extends ConsumerWidget {
               color: WrenflowStyle.textOp50,
               decoration: TextDecoration.underline,
             ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _diagnosticRow(AboutDiagnosticItem item) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          item.healthy
+              ? CupertinoIcons.check_mark_circled_solid
+              : CupertinoIcons.exclamationmark_triangle_fill,
+          size: 14,
+          color: item.healthy ? WrenflowStyle.green : WrenflowStyle.red,
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 64,
+          child: Text(
+            item.label,
+            style: WrenflowStyle.body(
+              12,
+            ).copyWith(color: WrenflowStyle.textSecondary),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            item.value,
+            style: WrenflowStyle.body(12),
           ),
         ),
       ],

@@ -50,7 +50,7 @@ class ShellCapabilitiesNotifier
     return _detectLocalCapabilities();
   }
 
-  void reportLocalCapabilities() {
+  ShellCapabilities reportLocalCapabilities() {
     final localSnapshot = _detectLocalCapabilities();
     state = localSnapshot;
     ReportShellCapabilitiesSnapshot(
@@ -63,6 +63,7 @@ class ShellCapabilitiesNotifier
         overlays: localSnapshot.overlays,
       ),
     ).sendSignalToRust();
+    return localSnapshot;
   }
 
   ShellCapabilities _detectLocalCapabilities() {

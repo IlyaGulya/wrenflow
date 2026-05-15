@@ -1,9 +1,10 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'overlay_controller.dart';
-import 'shell_capabilities.dart';
 import 'shell_runtime.dart';
 import 'system_tray.dart';
+import 'overlay_shell.dart';
+import 'tray_shell.dart';
 
 /// Owns non-UI shell startup work for the desktop app.
 class ShellAppCoordinator {
@@ -18,11 +19,10 @@ class ShellAppCoordinator {
 
   Future<void> init() async {
     await _runtime.init();
-    final capabilities = _container.read(shellCapabilitiesProvider);
-    if (capabilities.tray) {
+    if (platformTrayShell.isSupported) {
       await _tray.init();
     }
-    if (capabilities.overlays) {
+    if (platformOverlayShell.isSupported) {
       _overlay.init();
     }
   }

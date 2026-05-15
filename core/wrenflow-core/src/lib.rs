@@ -24,5 +24,7 @@ pub mod transcription_local;
 pub mod transcription_whisper;
 
 // Convenience re-exports
-pub use config_store::{default_config_path, ConfigError, ConfigStore};
+pub use config_store::{
+    ConfigError, ConfigStore, default_config_path, merge_legacy_preferences,
+};
 pub use history_store::{HistoryError, HistoryStore};

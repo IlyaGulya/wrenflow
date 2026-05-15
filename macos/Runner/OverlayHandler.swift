@@ -325,8 +325,8 @@ class OverlayHandler {
         }
         errorDismissTimer?.invalidate()
 
-        let panelWidth: CGFloat = 320
-        let panelHeight: CGFloat = 44
+        let panelWidth: CGFloat = 520
+        let panelHeight: CGFloat = 72
 
         let panel = makeOverlayPanel(width: panelWidth, height: panelHeight)
         panel.hasShadow = true
@@ -468,16 +468,20 @@ struct ErrorToastView: View {
     let message: String
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text("⚠")
-                .font(.system(size: 14))
+        HStack(alignment: .top, spacing: 10) {
+            Text("▲")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(.white.opacity(0.95))
+                .padding(.top, 2)
             Text(message)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(.white)
-                .lineLimit(2)
-            Spacer()
+                .lineLimit(3)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
     }
 }

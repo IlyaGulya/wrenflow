@@ -24,6 +24,8 @@ use rinf::{DartSignal, RustSignal};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::spawn;
+use wrenflow_core::model_downloader;
+use wrenflow_core::model_management::{LocalModelCatalogEntry, local_model_by_id};
 use wrenflow_domain::config::AppConfig;
 use wrenflow_domain::pipeline::TranscriptionResult;
 
@@ -179,6 +181,13 @@ fn spawn_pipeline_loop(
                     match event {
                         hotkey_actor::HotkeyEvent::KeyDown => {
                             log::info!("Hotkey DOWN");
+                            if let Some(message) = model_preflight_error(
+                                &settings_runtime,
+                                &transcription_engine,
+                            ) {
+                                pipeline.on_error(&message);
+                                continue;
+                            }
                             pipeline.handle_hotkey_down();
                             let preferred_device_id = settings_actor::current_config(&settings_runtime)
                                 .selected_microphone_id;
@@ -280,7 +289,7 @@ fn spawn_pipeline_loop(
                                         }
                                         Ok(None) => {
                                             log::warn!("Transcription returned None (model not loaded?)");
-                                            pipeline.on_error("Model not loaded. Download the model first.");
+                                            pipeline.on_error("The active model is unavailable. Open Settings -> Models and activate a model again.");
                                         }
                                         Err(e) => {
                                             log::error!("Transcription task failed: {e}");
@@ -318,6 +327,149 @@ fn spawn_pipeline_loop(
             pipeline.check_timers().await;
         }
     });
+}
+
+fn model_preflight_error(
+    settings_runtime: &settings_actor::SettingsRuntime,
+    engine_handle: &model_actor::SharedTranscriptionEngine,
+) -> Option<String> {
+    if let Ok(guard) = engine_handle.lock()
+        && guard.is_some()
+    {
+        return None;
+    }
+
+    let config = settings_actor::current_config(settings_runtime);
+    let selected_model_id = config.selected_local_model_id;
+
+    let catalog_entry = wrenflow_core::model_management::all_local_model_catalog_entries()
+        .into_iter()
+        .find(|entry| entry.id == selected_model_id);
+
+    let Some(catalog_entry) = catalog_entry else {
+        return Some(no_model_selected_message());
+    };
+
+    let Some(model) = local_model_by_id(&selected_model_id) else {
+        return Some(format!(
+            "{} is not wired correctly. Open Settings -> Models and choose another model.",
+            catalog_entry.display_name
+        ));
+    };
+
+    let model_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("wrenflow")
+        .join("models")
+        .join(model.directory_name.clone());
+
+    let is_installed = model_downloader::is_model_present(&model, &model_dir);
+
+    model_preflight_error_for_state(&catalog_entry, is_installed)
+}
+
+fn no_model_selected_message() -> String {
+    "No local model is selected. Open Settings -> Models and choose one.".to_string()
+}
+
+fn model_preflight_error_for_state(
+    catalog_entry: &LocalModelCatalogEntry,
+    is_installed: bool,
+) -> Option<String> {
+    if !catalog_entry.is_available {
+        return Some(format!(
+            "{} is not shipped in this build yet. Open Settings -> Models and choose another model.",
+            catalog_entry.display_name
+        ));
+    }
+
+    if !catalog_entry.supports_current_runtime {
+        return Some(format!(
+            "{} is not supported by the current runtime. Open Settings -> Models and choose another model.",
+            catalog_entry.display_name
+        ));
+    }
+
+    if is_installed {
+        Some(format!(
+            "{} is selected but not active yet. Open Settings -> Models and activate it first.",
+            catalog_entry.display_name
+        ))
+    } else {
+        Some(format!(
+            "{} is not downloaded yet. Open Settings -> Models to download it, or choose another model.",
+            catalog_entry.display_name
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn catalog_entry() -> LocalModelCatalogEntry {
+        LocalModelCatalogEntry {
+            id: "whisper-large-v3-turbo-onnx".to_string(),
+            display_name: "Whisper Turbo".to_string(),
+            subtitle: String::new(),
+            download_label: String::new(),
+            family: String::new(),
+            runtime_label: String::new(),
+            is_recommended: false,
+            is_available: true,
+            supports_current_runtime: true,
+        }
+    }
+
+    #[test]
+    fn preflight_requires_download_before_recording() {
+        let entry = catalog_entry();
+        let message = model_preflight_error_for_state(&entry, false);
+        assert_eq!(
+            message.as_deref(),
+            Some(
+                "Whisper Turbo is not downloaded yet. Open Settings -> Models to download it, or choose another model."
+            )
+        );
+    }
+
+    #[test]
+    fn preflight_requires_activation_before_recording() {
+        let entry = catalog_entry();
+        let message = model_preflight_error_for_state(&entry, true);
+        assert_eq!(
+            message.as_deref(),
+            Some(
+                "Whisper Turbo is selected but not active yet. Open Settings -> Models and activate it first."
+            )
+        );
+    }
+
+    #[test]
+    fn preflight_rejects_unavailable_model() {
+        let mut entry = catalog_entry();
+        entry.is_available = false;
+        let message = model_preflight_error_for_state(&entry, false);
+        assert_eq!(
+            message.as_deref(),
+            Some(
+                "Whisper Turbo is not shipped in this build yet. Open Settings -> Models and choose another model."
+            )
+        );
+    }
+
+    #[test]
+    fn preflight_rejects_runtime_unsupported_model() {
+        let mut entry = catalog_entry();
+        entry.supports_current_runtime = false;
+        let message = model_preflight_error_for_state(&entry, false);
+        assert_eq!(
+            message.as_deref(),
+            Some(
+                "Whisper Turbo is not supported by the current runtime. Open Settings -> Models and choose another model."
+            )
+        );
+    }
 }
 
 /// Persistent directory for audio recordings.

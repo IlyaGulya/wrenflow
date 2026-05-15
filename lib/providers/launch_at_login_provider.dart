@@ -7,6 +7,15 @@ import '../shell/launch_at_login_shell.dart';
 import '../src/bindings/signals/signals.dart' as sig;
 import 'rust_snapshot_bridge.dart';
 
+String _summarizeLaunchAtLoginError(Object error) {
+  final text = error.toString().trim();
+  const prefix = 'Exception: ';
+  if (text.startsWith(prefix)) {
+    return text.substring(prefix.length);
+  }
+  return text;
+}
+
 @immutable
 class LaunchAtLoginState {
   const LaunchAtLoginState({
@@ -125,7 +134,7 @@ class LaunchAtLoginNotifier extends RustSnapshotNotifier<LaunchAtLoginState> {
       if (!ref.mounted) return;
       final nextState = state.copyWith(
         isLoading: false,
-        errorMessage: error.toString(),
+        errorMessage: _summarizeLaunchAtLoginError(error),
       );
       state = nextState;
       _reportSnapshot(nextState);
@@ -163,7 +172,7 @@ class LaunchAtLoginNotifier extends RustSnapshotNotifier<LaunchAtLoginState> {
         enabled: previous,
         isLoading: false,
         unavailableReason: state.unavailableReason,
-        errorMessage: error.toString(),
+        errorMessage: _summarizeLaunchAtLoginError(error),
       );
       state = nextState;
       _reportSnapshot(nextState);

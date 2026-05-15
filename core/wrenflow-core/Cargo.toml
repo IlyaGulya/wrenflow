@@ -22,6 +22,7 @@ opus-rs = "0.1"
 ogg = "0.9"
 realfft = "3"
 tokenizers = { version = "0.22.2", default-features = false, features = ["onig"] }
+plist = "1.7"
 
 [lints]
 workspace = true

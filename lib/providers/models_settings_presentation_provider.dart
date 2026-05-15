@@ -36,12 +36,15 @@ final modelsSettingsPresentationProvider =
         preferredModelLabel: selectedModel?.displayName ?? 'Loading...',
         activeModelLabel: activeModel?.displayName ?? 'None',
         installedCountLabel: '${modelStatus?.installedModelIds.length ?? 0}',
-        runtimeHint: runtimeCapabilities == null
-            ? 'Loading runtime support...'
-            : runtimeCapabilities.localTranscription &&
-                  runtimeCapabilities.modelDownload &&
-                  runtimeCapabilities.modelActivation
-            ? null
-            : 'Local model runtime is not fully available on this platform yet.',
+        runtimeHint: switch (runtimeCapabilities) {
+          null => 'Loading runtime support...',
+          _ when !runtimeCapabilities.localTranscription =>
+            'The local ONNX transcription runtime is unavailable in the current build.',
+          _ when !runtimeCapabilities.modelActivation =>
+            'Model activation is unavailable in the current runtime.',
+          _ when !runtimeCapabilities.modelDownload =>
+            'Model downloads are unavailable because local model storage is not writable.',
+          _ => null,
+        },
       );
     });

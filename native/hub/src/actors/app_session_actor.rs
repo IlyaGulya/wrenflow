@@ -44,6 +44,19 @@ impl AppSessionRuntimeState {
         )
     }
 
+    fn initial_onboarding_step(&self) -> signals::AppSessionOnboardingStep {
+        if self.has_permission_snapshot {
+            if self.microphone != signals::PermissionStatus::Granted {
+                return signals::AppSessionOnboardingStep::Microphone;
+            }
+            if self.accessibility != signals::PermissionStatus::Granted {
+                return signals::AppSessionOnboardingStep::Accessibility;
+            }
+        }
+
+        signals::AppSessionOnboardingStep::Hotkey
+    }
+
     fn evaluate_bootstrap(&mut self) {
         if !self.bootstrapped {
             self.state = signals::AppSessionState::Initializing;
@@ -51,8 +64,13 @@ impl AppSessionRuntimeState {
         }
 
         if !self.has_completed_setup {
+            if !self.has_permission_snapshot {
+                self.state = signals::AppSessionState::Initializing;
+                return;
+            }
+
             self.state = signals::AppSessionState::Onboarding {
-                step: signals::AppSessionOnboardingStep::Microphone,
+                step: self.initial_onboarding_step(),
             };
             return;
         }
@@ -91,14 +109,14 @@ impl AppSessionRuntimeState {
                     if self.microphone == signals::PermissionStatus::Granted =>
                 {
                     self.state = signals::AppSessionState::Onboarding {
-                        step: signals::AppSessionOnboardingStep::Accessibility,
+                        step: self.initial_onboarding_step(),
                     };
                 }
                 signals::AppSessionOnboardingStep::Accessibility
                     if self.accessibility == signals::PermissionStatus::Granted =>
                 {
                     self.state = signals::AppSessionState::Onboarding {
-                        step: signals::AppSessionOnboardingStep::Hotkey,
+                        step: self.initial_onboarding_step(),
                     };
                 }
                 _ => {}
@@ -141,9 +159,7 @@ impl AppSessionRuntimeState {
         };
 
         let next = match step {
-            signals::AppSessionOnboardingStep::Microphone => {
-                signals::AppSessionOnboardingStep::Accessibility
-            }
+            signals::AppSessionOnboardingStep::Microphone => self.initial_onboarding_step(),
             signals::AppSessionOnboardingStep::Accessibility => {
                 signals::AppSessionOnboardingStep::Hotkey
             }
@@ -168,11 +184,19 @@ impl AppSessionRuntimeState {
         let previous = match step {
             signals::AppSessionOnboardingStep::Microphone => return,
             signals::AppSessionOnboardingStep::Accessibility => {
+                if self.microphone == signals::PermissionStatus::Granted {
+                    return;
+                }
                 signals::AppSessionOnboardingStep::Microphone
             }
-            signals::AppSessionOnboardingStep::Hotkey => {
-                signals::AppSessionOnboardingStep::Accessibility
-            }
+            signals::AppSessionOnboardingStep::Hotkey => match (
+                self.microphone == signals::PermissionStatus::Granted,
+                self.accessibility == signals::PermissionStatus::Granted,
+            ) {
+                (false, _) => signals::AppSessionOnboardingStep::Microphone,
+                (true, false) => signals::AppSessionOnboardingStep::Accessibility,
+                (true, true) => return,
+            },
             signals::AppSessionOnboardingStep::Model => signals::AppSessionOnboardingStep::Hotkey,
             signals::AppSessionOnboardingStep::Vocabulary => {
                 signals::AppSessionOnboardingStep::Model
@@ -222,6 +246,7 @@ pub async fn run(mut config_rx: watch::Receiver<AppConfig>) {
     let next_recv = signals::AdvanceOnboarding::get_dart_signal_receiver();
     let back_recv = signals::RetreatOnboarding::get_dart_signal_receiver();
     let quit_recv = signals::RequestQuit::get_dart_signal_receiver();
+    let mut last_has_completed_setup = config_rx.borrow().has_completed_setup;
 
     state.evaluate_bootstrap();
     send_snapshot(&state);
@@ -244,8 +269,12 @@ pub async fn run(mut config_rx: watch::Receiver<AppConfig>) {
                 send_snapshot(&state);
             }
             Ok(()) = config_rx.changed() => {
-                state.set_has_completed_setup(config_rx.borrow().has_completed_setup);
-                send_snapshot(&state);
+                let next_has_completed_setup = config_rx.borrow().has_completed_setup;
+                if next_has_completed_setup != last_has_completed_setup {
+                    last_has_completed_setup = next_has_completed_setup;
+                    state.set_has_completed_setup(next_has_completed_setup);
+                    send_snapshot(&state);
+                }
             }
             Some(_) = quit_recv.recv() => {
                 state.state = signals::AppSessionState::ShuttingDown;
@@ -253,5 +282,84 @@ pub async fn run(mut config_rx: watch::Receiver<AppConfig>) {
             }
             else => break,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_onboarding_step(
+        state: &AppSessionRuntimeState,
+        expected: signals::AppSessionOnboardingStep,
+    ) {
+        match &state.state {
+            signals::AppSessionState::Onboarding { step } => assert_eq!(*step, expected),
+            other => panic!("expected onboarding state, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn completed_setup_waits_for_permission_snapshot_before_ready() {
+        let mut state = AppSessionRuntimeState::new(true);
+        state.evaluate_bootstrap();
+        assert!(matches!(state.state, signals::AppSessionState::Initializing));
+    }
+
+    #[test]
+    fn completed_setup_with_all_permissions_becomes_ready() {
+        let mut state = AppSessionRuntimeState::new(true);
+        state.update_permissions(
+            signals::PermissionStatus::Granted,
+            signals::PermissionStatus::Granted,
+        );
+        assert!(matches!(state.state, signals::AppSessionState::Ready));
+    }
+
+    #[test]
+    fn onboarding_skips_granted_permission_steps() {
+        let mut state = AppSessionRuntimeState::new(false);
+        state.update_permissions(
+            signals::PermissionStatus::Granted,
+            signals::PermissionStatus::Granted,
+        );
+        assert_onboarding_step(&state, signals::AppSessionOnboardingStep::Hotkey);
+    }
+
+    #[test]
+    fn onboarding_starts_at_microphone_when_missing() {
+        let mut state = AppSessionRuntimeState::new(false);
+        state.update_permissions(
+            signals::PermissionStatus::Denied,
+            signals::PermissionStatus::Granted,
+        );
+        assert_onboarding_step(&state, signals::AppSessionOnboardingStep::Microphone);
+    }
+
+    #[test]
+    fn onboarding_advances_to_hotkey_after_permissions_resolved() {
+        let mut state = AppSessionRuntimeState::new(false);
+        state.update_permissions(
+            signals::PermissionStatus::Denied,
+            signals::PermissionStatus::Granted,
+        );
+        assert_onboarding_step(&state, signals::AppSessionOnboardingStep::Microphone);
+
+        state.update_permissions(
+            signals::PermissionStatus::Granted,
+            signals::PermissionStatus::Granted,
+        );
+        assert_onboarding_step(&state, signals::AppSessionOnboardingStep::Hotkey);
+    }
+
+    #[test]
+    fn completing_onboarding_after_permissions_goes_ready() {
+        let mut state = AppSessionRuntimeState::new(false);
+        state.update_permissions(
+            signals::PermissionStatus::Granted,
+            signals::PermissionStatus::Granted,
+        );
+        state.set_has_completed_setup(true);
+        assert!(matches!(state.state, signals::AppSessionState::Ready));
     }
 }

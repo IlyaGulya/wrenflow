@@ -12,6 +12,19 @@ class UpdateCheckException implements Exception {
   String toString() => message;
 }
 
+String summarizeUpdateError(Object? error) {
+  final text = error?.toString().trim();
+  if (text == null || text.isEmpty) {
+    return 'Could not check for updates.';
+  }
+
+  const prefix = 'Exception: ';
+  if (text.startsWith(prefix)) {
+    return text.substring(prefix.length);
+  }
+  return text;
+}
+
 /// Information about an available update.
 class UpdateInfo {
   const UpdateInfo({

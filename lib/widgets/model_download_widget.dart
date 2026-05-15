@@ -45,6 +45,9 @@ class ModelDownloadWidget extends ConsumerWidget {
     if (!selectedModel.isAvailable) {
       return _buildUnavailable(selectedModel);
     }
+    if (!selectedModel.supportsCurrentRuntime) {
+      return _buildRuntimeUnsupported(selectedModel);
+    }
 
     final state = effectiveOperation?.state;
 
@@ -134,6 +137,38 @@ class ModelDownloadWidget extends ConsumerWidget {
           const SizedBox(height: 16),
           const Text(
             'This model is not shipped in the current build yet.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12, color: Color(0xFF8E8E93)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRuntimeUnsupported(LocalModelDescriptor selectedModel) {
+    return _CardContainer(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            CupertinoIcons.lock_circle,
+            size: 40,
+            color: CupertinoColors.systemGrey,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            selectedModel.displayName,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            selectedModel.subtitle,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 12, color: Color(0xFF8E8E93)),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'This build cannot activate this model on the current runtime yet.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: Color(0xFF8E8E93)),
           ),

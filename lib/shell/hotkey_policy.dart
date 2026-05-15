@@ -28,6 +28,7 @@ class HotkeyPolicy {
 
 const _macPresets = [
   HotkeyPreset('63', 'Fn'),
+  HotkeyPreset('54', 'Right Command'),
   HotkeyPreset('61', 'Right Option'),
   HotkeyPreset('96', 'F5'),
 ];

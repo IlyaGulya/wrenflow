@@ -60,6 +60,8 @@ final wizardPresentationProvider =
           selectedModelId != null &&
           localModelsSnapshot.activeModelId == selectedModelId &&
           selectedModelState is ModelStateReady;
+      final selectedModelUnsupported =
+          selectedModel != null && !selectedModel.supportsCurrentRuntime;
 
       final canAdvance = switch (currentStep) {
         OnboardingStep.microphone =>
@@ -90,6 +92,8 @@ final wizardPresentationProvider =
         _ when runtimeCapabilities.modelActivation == false =>
           'Model activation is not available in the current runtime yet.',
         null => 'Loading model catalog...',
+        _ when selectedModelUnsupported =>
+          '${selectedModel.displayName} is not supported by the current runtime.',
         ModelStateDownloading() => 'Wait for ${selectedModel?.displayName ?? 'the selected model'} to finish downloading.',
         ModelStateLoading() => 'Wait for ${selectedModel?.displayName ?? 'the selected model'} to finish loading.',
         ModelStateWarming() => 'Wait for ${selectedModel?.displayName ?? 'the selected model'} to finish warming up.',

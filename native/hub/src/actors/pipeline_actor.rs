@@ -101,7 +101,6 @@ impl PipelineActor {
         self.init_deadline = None;
         if transcribing {
             self.indicator_deadline = Some(Instant::now() + INDICATOR_TIMEOUT);
-            // TODO: trigger actual transcription (freeflow-385)
         }
     }
 

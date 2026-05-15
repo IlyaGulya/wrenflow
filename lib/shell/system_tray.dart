@@ -102,15 +102,22 @@ class SystemTrayManager implements TrayShellListener {
   }
 
   Future<void> _updateContextMenu(TrayMenuPresentation presentation) async {
-    final micItems = presentation.microphones
-        .map(
-          (item) => TrayMenuCheckboxItem(
-            label: item.label,
-            checked: item.selected,
-            onTap: () => _selectMicrophone(item.id),
-          ),
-        )
-        .toList();
+    final micItems = presentation.microphoneSelectionAvailable
+        ? presentation.microphones
+              .map(
+                (item) => TrayMenuCheckboxItem(
+                  label: item.label,
+                  checked: item.selected,
+                  onTap: () => _selectMicrophone(item.id),
+                ),
+              )
+              .toList()
+        : <TrayMenuEntry>[
+            TrayMenuLabelItem(
+              label: presentation.microphoneHint ?? 'Microphone selection unavailable',
+              disabled: true,
+            ),
+          ];
 
     final menu = TrayMenuModel(
       items: [
@@ -135,8 +142,13 @@ class SystemTrayManager implements TrayShellListener {
           children: micItems,
         ),
         const TrayMenuSeparator(),
-        TrayMenuLabelItem(label: 'Settings...', onTap: _showSettings),
-        TrayMenuLabelItem(label: 'History', onTap: _showHistory),
+        TrayMenuLabelItem(
+          label: presentation.settingsLabel,
+          disabled: !presentation.settingsEnabled,
+          onTap: _showSettings,
+        ),
+        if (presentation.showHistory)
+          TrayMenuLabelItem(label: 'History', onTap: _showHistory),
         const TrayMenuSeparator(),
         TrayMenuLabelItem(
           label: 'Quit Wrenflow',

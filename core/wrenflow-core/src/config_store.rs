@@ -5,7 +5,9 @@
 
 use std::path::{Path, PathBuf};
 use thiserror::Error;
-use wrenflow_domain::config::AppConfig;
+use wrenflow_domain::config::{
+    AppConfig, DEFAULT_SELECTED_HOTKEY, DEFAULT_SELECTED_LOCAL_MODEL_ID,
+};
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -51,6 +53,120 @@ impl ConfigStore {
     pub fn load_or_default(&self) -> AppConfig {
         self.load().unwrap_or_default()
     }
+}
+
+#[cfg(target_os = "macos")]
+fn legacy_preferences_path() -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    Some(
+        PathBuf::from(home)
+            .join("Library/Preferences")
+            .join("me.gulya.wrenflow.plist"),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn legacy_string(
+    dict: &plist::Dictionary,
+    key: &str,
+) -> Option<String> {
+    dict.get(key)?.as_string().map(ToOwned::to_owned)
+}
+
+#[cfg(target_os = "macos")]
+fn legacy_bool(dict: &plist::Dictionary, key: &str) -> Option<bool> {
+    dict.get(key)?.as_boolean()
+}
+
+#[cfg(target_os = "macos")]
+fn legacy_f64(dict: &plist::Dictionary, key: &str) -> Option<f64> {
+    dict.get(key)
+        .and_then(|value| value.as_signed_integer().map(|v| v as f64))
+        .or_else(|| dict.get(key).and_then(|value| value.as_real()))
+}
+
+#[cfg(target_os = "macos")]
+pub fn merge_legacy_preferences(mut config: AppConfig) -> AppConfig {
+    let Some(path) = legacy_preferences_path() else {
+        return config;
+    };
+    let Ok(value) = plist::Value::from_file(&path) else {
+        return config;
+    };
+    let Some(dict) = value.as_dictionary() else {
+        return config;
+    };
+
+    if !config.has_completed_setup {
+        if let Some(has_completed_setup) = legacy_bool(dict, "flutter.has_completed_setup") {
+            if has_completed_setup {
+                config.has_completed_setup = true;
+            }
+        }
+    }
+
+    if config.selected_hotkey == DEFAULT_SELECTED_HOTKEY {
+        if let Some(selected_hotkey) =
+            legacy_string(dict, "flutter.settings_selected_hotkey")
+        {
+            if !selected_hotkey.is_empty() {
+                config.selected_hotkey = selected_hotkey;
+            }
+        }
+    }
+
+    if config.selected_local_model_id == DEFAULT_SELECTED_LOCAL_MODEL_ID {
+        if let Some(selected_model_id) =
+            legacy_string(dict, "flutter.settings_selected_local_model_id")
+        {
+            if !selected_model_id.is_empty() {
+                config.selected_local_model_id = selected_model_id;
+            }
+        }
+    }
+
+    if config.selected_microphone_id == "default" {
+        if let Some(selected_microphone_id) =
+            legacy_string(dict, "flutter.settings_selected_microphone_id")
+        {
+            if !selected_microphone_id.is_empty() {
+                config.selected_microphone_id = selected_microphone_id;
+            }
+        }
+    }
+
+    if config.custom_vocabulary.is_empty() {
+        if let Some(custom_vocabulary) =
+            legacy_string(dict, "flutter.settings_custom_vocabulary")
+        {
+            if !custom_vocabulary.is_empty() {
+                config.custom_vocabulary = custom_vocabulary;
+            }
+        }
+    }
+
+    if config.minimum_recording_duration_ms == 300.0 {
+        if let Some(min_duration) =
+            legacy_f64(dict, "flutter.settings_minimum_recording_duration_ms")
+        {
+            if min_duration > 0.0 {
+                config.minimum_recording_duration_ms = min_duration;
+            }
+        }
+    }
+
+    if config.sound_enabled {
+        if let Some(sound_enabled) = legacy_bool(dict, "flutter.settings_sound_enabled") {
+            config.sound_enabled = sound_enabled;
+        }
+    }
+
+    config
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn merge_legacy_preferences(config: AppConfig) -> AppConfig {
+    config
 }
 
 /// Default config file path for the current platform.
