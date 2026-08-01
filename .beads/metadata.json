@@ -1,7 +1,4 @@
 {
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "server",
-  "dolt_database": "wrenflow",
-  "project_id": "02a8cd53-b6d7-4252-9278-db9f01826275"
+  "database": "beads.db",
+  "jsonl_export": "issues.jsonl"
 }

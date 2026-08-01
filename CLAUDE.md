@@ -33,25 +33,27 @@ See [release skill](.claude/skills/release/SKILL.md) for the full release workfl
 
 `Developer ID Application: Ilya Gulya (T4LV8K9BGV)`, bundle `me.gulya.wrenflow`
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:b9766037 -->
+<!-- BEGIN BEADS_RUST INTEGRATION -->
 ## Beads Issue Tracker
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+This project uses **br (beads_rust)** for issue tracking. Run `br robot-docs guide` for the agent workflow.
+
+**Note:** `br` is non-invasive and never executes git commands. After `br sync --flush-only`, stage `.beads/` and commit it explicitly.
 
 ### Quick Reference
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
+br ready                # Find available work
+br show <id>            # View issue details
+br update <id> --claim  # Claim work
+br close <id>           # Complete work
 ```
 
 ### Rules
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+- Use `br` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Use `br comments add <id> --message "..."` for persistent task knowledge — do NOT use MEMORY.md files
+- Use `--json` for machine-readable output when automating
 
 ## Landing the Plane (Session Completion)
 
@@ -64,8 +66,10 @@ bd close <id>         # Complete work
 3. **Update issue status** - Close finished work, update in-progress items
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
+   br sync --flush-only
+   git add .beads/
+   git commit -m "chore: sync beads"  # only when the index contains changes
    git pull --rebase
-   bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```
@@ -78,4 +82,4 @@ bd close <id>         # Complete work
 - NEVER stop before pushing - that leaves work stranded locally
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
-<!-- END BEADS INTEGRATION -->
+<!-- END BEADS_RUST INTEGRATION -->

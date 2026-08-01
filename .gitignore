@@ -11,7 +11,7 @@ build/
 *.pem
 *.key
 
-# Dolt database files (added by bd init)
+# Local issue-tracker databases
 .dolt/
 *.db
 
@@ -69,3 +69,5 @@ Resources/icon-preview.html
 # Claude Code (local only)
 .claude/settings.local.json
 .claude/worktrees/
+# br doctor per-run artifacts
+.doctor/
