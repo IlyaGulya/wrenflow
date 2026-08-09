@@ -14,6 +14,11 @@ for pinned_tool in \
         exit 1
     }
 done
+if sed -n '/^\[tasks\.supply-chain-audit\]$/,/^\[tasks\./p; /^\[tasks\.supply-chain-metadata\]$/,/^\[tasks\./p; /^\[tasks\.test-supply-chain\]$/,/^\[tasks\./p' \
+    "$REPO_DIR/mise.toml" | grep -Fq 'tools = {'; then
+    echo "Supply-chain tasks must not override the globally pinned CLI environment" >&2
+    exit 1
+fi
 
 for required in \
     "$REPO_DIR/supply-chain/pins.json" \

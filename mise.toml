@@ -293,7 +293,6 @@ run = "pinact run"
 
 [tasks.supply-chain-audit]
 description = "Reject vulnerable, unapproved-license, wildcard-source and unlocked Rust dependencies"
-tools = { "cargo:cargo-deny" = "0.20.2" }
 run = """
 cargo deny --locked check advisories licenses bans sources
 cargo deny --manifest-path native/wrenflow-gpui/Cargo.toml --locked check advisories licenses bans sources
@@ -306,7 +305,6 @@ run = "cargo fetch --manifest-path native/wrenflow-gpui/Cargo.toml --locked"
 [tasks.supply-chain-metadata]
 description = "Generate deterministic CycloneDX, license inventory, checksums and provenance inputs"
 depends = ["supply-chain-audit", "supply-chain-fetch"]
-tools = { "cargo:cargo-about" = "0.9.1", "cargo:cargo-cyclonedx" = "0.5.9", jq = "1.8.1" }
 run = "scripts/generate-supply-chain.sh"
 
 [tasks.setup-release-tools]
@@ -316,7 +314,6 @@ run = "scripts/install-release-tools.sh"
 [tasks.test-supply-chain]
 description = "Exercise fail-closed download, metadata, notice and workflow invariants"
 depends = ["supply-chain-metadata"]
-tools = { "cargo:cargo-about" = "0.9.1", "cargo:cargo-cyclonedx" = "0.5.9", jq = "1.8.1" }
 run = "scripts/test-supply-chain.sh"
 
 [tasks.clean]
