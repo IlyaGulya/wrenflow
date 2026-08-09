@@ -5,6 +5,7 @@ ruby.compile = false
 rust = "1.94.1"
 resvg = "0.47.0"
 jq = "1.8.1"
+ripgrep = "14.1.1"
 
 # ── Tasks ──────────────────────────────────────────────────────
 
@@ -31,6 +32,7 @@ fi
 rustup component add --toolchain "$RUSTUP_TOOLCHAIN" clippy rustfmt
 cargo clippy --version
 cargo fmt --version
+rg --version
 """
 
 [tasks.download-ort]
