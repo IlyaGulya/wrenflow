@@ -21,6 +21,7 @@ pub enum AccessibilityRole {
     Button,
     Switch,
     TextField,
+    Slider,
     ProgressIndicator,
     Dialog,
     Status,
@@ -88,6 +89,8 @@ pub struct AccessibilityNode {
     pub role: AccessibilityRole,
     pub label: String,
     pub value: Option<String>,
+    pub minimum_value: Option<f64>,
+    pub maximum_value: Option<f64>,
     pub enabled: bool,
     pub focused: bool,
     pub actions: Vec<AccessibilityAction>,
@@ -224,6 +227,8 @@ mod tests {
                 role: AccessibilityRole::Button,
                 label: "Save".to_string(),
                 value: None,
+                minimum_value: None,
+                maximum_value: None,
                 enabled: true,
                 focused: false,
                 actions: vec![AccessibilityAction::Press, AccessibilityAction::Focus],
@@ -241,6 +246,40 @@ mod tests {
         assert_eq!(json["coordinateSpace"], "windowContentTopLeft");
         assert_eq!(json["nodes"][0]["actions"][0], "press");
         assert_eq!(json["nodes"][0]["frame"]["width"], 80.0);
+    }
+
+    #[test]
+    fn slider_schema_carries_native_range_and_adjustment_actions() {
+        let node = AccessibilityNode {
+            id: "duration".to_string(),
+            parent_id: None,
+            role: AccessibilityRole::Slider,
+            label: "Minimum recording duration".to_string(),
+            value: Some("450".to_string()),
+            minimum_value: Some(100.0),
+            maximum_value: Some(1_000.0),
+            enabled: true,
+            focused: true,
+            actions: vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::Increment,
+                AccessibilityAction::Decrement,
+                AccessibilityAction::SetValue,
+            ],
+            frame: AccessibilityFrame {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 24.0,
+            },
+            order: 0,
+        };
+        let json = serde_json::to_value(node).unwrap_or_default();
+        assert_eq!(json["role"], "slider");
+        assert_eq!(json["minimumValue"], 100.0);
+        assert_eq!(json["maximumValue"], 1_000.0);
+        assert_eq!(json["actions"][1], "increment");
+        assert_eq!(json["actions"][3], "setValue");
     }
 
     #[test]

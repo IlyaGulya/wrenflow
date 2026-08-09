@@ -1,0 +1,406 @@
+{
+  "schema_version": 1,
+  "budget_version": "gpui-performance-v1",
+  "status": "pre-candidate",
+  "support_floor": {
+    "os": "macOS 14 latest patch",
+    "architecture": "arm64",
+    "hardware": "base Apple M1",
+    "memory_gib": 8,
+    "power": "AC power, Low Power Mode off, nominal thermal state"
+  },
+  "validation_policy": "Hybrid: GitHub-hosted macos-14 M1/7-GB constrained evidence for deterministic non-interactive metrics; explicitly post_event_tap_synthetic signed-app typed-hotkey-callback/overlay/paste evidence with a fixture-backed recording source; and a supported physical Apple-Silicon Mac for Instruments and display interaction. Post-event-tap synthetic evidence is never relabeled as physical, event-tap, microphone, TCC or M06 human proof.",
+  "workload": {
+    "default_model": "Parakeet TDT 0.6B int8 at immutable revision 8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce",
+    "latency_phrase_seconds": 2.0,
+    "idle_seconds": 1800,
+    "recording_seconds": 60,
+    "transcription_cycles": 20,
+    "history_rows": 50,
+    "launch_samples": {
+      "cold": 5,
+      "warm": 10
+    },
+    "latency_samples": 20
+  },
+  "required_instruments_templates": [
+    "Activity Monitor",
+    "Allocations",
+    "Animation Hitches",
+    "Audio System Trace",
+    "Leaks",
+    "Power Profiler",
+    "System Trace",
+    "Time Profiler"
+  ],
+  "evidence_policy": {
+    "constrained_noninteractive": [
+      "launch.cold.p95_ms",
+      "launch.warm.p95_ms",
+      "idle.duration_seconds",
+      "idle.cpu.avg_percent",
+      "idle.cpu.p95_percent",
+      "idle.wakeups.avg_per_s",
+      "idle.wakeups.p95_per_s",
+      "idle.energy.avg_impact",
+      "idle.energy.p95_impact",
+      "transcription.cpu.p95_percent",
+      "transcription.energy.p95_impact",
+      "model.download.p95_ms",
+      "model.cold_load.p95_ms",
+      "memory.post_warmup.p95_mib",
+      "memory.peak_mib",
+      "resources.fd.peak",
+      "resources.thread.peak",
+      "cycles.completed.count",
+      "history.rows.count",
+      "growth.rss.delta_mib",
+      "growth.rss.slope_mib_per_cycle",
+      "growth.fd.delta",
+      "growth.thread.delta",
+      "growth.monotonic_tail.count"
+    ],
+    "post_event_tap_synthetic": [
+      "latency.hotkey_handler_to_overlay.p95_ms",
+      "latency.release_handler_to_paste_dispatch.p95_ms",
+      "recording.duration_seconds"
+    ],
+    "physical_interactive": [
+      "recording.cpu.p95_percent",
+      "recording.energy.p95_impact",
+      "settings.navigation.p95_ms",
+      "history.open_50.p95_ms",
+      "frame.pacing.p95_ms",
+      "ui.stalls.over_100ms.count",
+      "ui.main_thread.p95_percent",
+      "render.full_tree_per_audio_tick.count",
+      "leaks.definite.growth_count"
+    ]
+  },
+  "budgets": [
+    {
+      "metric": "launch.cold.p95_ms",
+      "comparison": "<=",
+      "threshold": 2000,
+      "unit": "ms",
+      "min_samples": 5,
+      "owner": "GPUI lifecycle",
+      "rationale": "Cold LaunchServices startup must become a usable menu-bar process within two seconds on the support floor."
+    },
+    {
+      "metric": "launch.warm.p95_ms",
+      "comparison": "<=",
+      "threshold": 1000,
+      "unit": "ms",
+      "min_samples": 10,
+      "owner": "GPUI lifecycle",
+      "rationale": "Warm LaunchServices startup must settle within one second."
+    },
+    {
+      "metric": "latency.hotkey_handler_to_overlay.p95_ms",
+      "comparison": "<=",
+      "threshold": 100,
+      "unit": "ms",
+      "min_samples": 20,
+      "owner": "Swift overlay bridge",
+      "rationale": "After the production event-tap boundary, recording feedback must feel immediate and stay below the perceptible interaction boundary."
+    },
+    {
+      "metric": "latency.release_handler_to_paste_dispatch.p95_ms",
+      "comparison": "<=",
+      "threshold": 3000,
+      "unit": "ms",
+      "min_samples": 20,
+      "owner": "audio/ONNX/paste pipeline",
+      "rationale": "The fixed Parakeet fixture must reach successful production Cmd+V dispatch within three seconds of typed release-handler ingress; target insertion remains M07 human acceptance."
+    },
+    {
+      "metric": "idle.duration_seconds",
+      "comparison": ">=",
+      "threshold": 1800,
+      "unit": "s",
+      "min_samples": 1,
+      "owner": "GPUI runtime",
+      "rationale": "An idle budget is valid only after a continuous thirty-minute residency."
+    },
+    {
+      "metric": "idle.cpu.avg_percent",
+      "comparison": "<=",
+      "threshold": 0.5,
+      "unit": "% of one core",
+      "min_samples": 1800,
+      "owner": "GPUI runtime",
+      "rationale": "A menu-bar app must be effectively quiescent while idle."
+    },
+    {
+      "metric": "idle.cpu.p95_percent",
+      "comparison": "<=",
+      "threshold": 1.5,
+      "unit": "% of one core",
+      "min_samples": 1800,
+      "owner": "GPUI runtime",
+      "rationale": "Normal housekeeping must not produce sustained idle CPU bursts."
+    },
+    {
+      "metric": "idle.wakeups.avg_per_s",
+      "comparison": "<=",
+      "threshold": 2,
+      "unit": "wakeups/s",
+      "min_samples": 1799,
+      "owner": "Swift shell/runtime timers",
+      "rationale": "Idle polling and timers are limited to two package-idle wakeups per second on average."
+    },
+    {
+      "metric": "idle.wakeups.p95_per_s",
+      "comparison": "<=",
+      "threshold": 10,
+      "unit": "wakeups/s",
+      "min_samples": 1799,
+      "owner": "Swift shell/runtime timers",
+      "rationale": "Occasional housekeeping may burst but must remain bounded."
+    },
+    {
+      "metric": "idle.energy.avg_impact",
+      "comparison": "<=",
+      "threshold": 1,
+      "unit": "macOS energy impact",
+      "min_samples": 1800,
+      "owner": "GPUI runtime",
+      "rationale": "The Activity Monitor energy proxy must remain negligible during residency."
+    },
+    {
+      "metric": "idle.energy.p95_impact",
+      "comparison": "<=",
+      "threshold": 3,
+      "unit": "macOS energy impact",
+      "min_samples": 1800,
+      "owner": "GPUI runtime",
+      "rationale": "Idle energy spikes must not resemble foreground work."
+    },
+    {
+      "metric": "recording.duration_seconds",
+      "comparison": ">=",
+      "threshold": 60,
+      "unit": "s",
+      "min_samples": 1,
+      "owner": "audio pipeline",
+      "rationale": "The active capture budget covers one continuous sixty-second recording."
+    },
+    {
+      "metric": "recording.cpu.p95_percent",
+      "comparison": "<=",
+      "threshold": 35,
+      "unit": "% of one core",
+      "min_samples": 60,
+      "owner": "audio pipeline",
+      "rationale": "Capture and Opus work must leave substantial CPU headroom on base M1."
+    },
+    {
+      "metric": "recording.energy.p95_impact",
+      "comparison": "<=",
+      "threshold": 40,
+      "unit": "macOS energy impact",
+      "min_samples": 60,
+      "owner": "audio pipeline",
+      "rationale": "Recording energy must stay proportional to light real-time audio work."
+    },
+    {
+      "metric": "transcription.cpu.p95_percent",
+      "comparison": "<=",
+      "threshold": 750,
+      "unit": "% of one core",
+      "min_samples": 20,
+      "owner": "ONNX runtime",
+      "rationale": "Inference may use the eight-core base M1 but must not exceed its available CPU envelope."
+    },
+    {
+      "metric": "transcription.energy.p95_impact",
+      "comparison": "<=",
+      "threshold": 800,
+      "unit": "macOS energy impact",
+      "min_samples": 20,
+      "owner": "ONNX runtime",
+      "rationale": "Inference energy is allowed to be bursty but remains bounded to the base-M1 CPU envelope."
+    },
+    {
+      "metric": "model.download.p95_ms",
+      "comparison": "<=",
+      "threshold": 180000,
+      "unit": "ms on >=100 Mbps network",
+      "min_samples": 1,
+      "owner": "model downloader",
+      "rationale": "The single clean constrained run measures the normal 640 MiB pinned-model download, integrity verification and atomic publication on the declared link before the 20-cycle workload."
+    },
+    {
+      "metric": "model.cold_load.p95_ms",
+      "comparison": "<=",
+      "threshold": 8000,
+      "unit": "ms",
+      "min_samples": 1,
+      "owner": "ONNX runtime",
+      "rationale": "The same clean constrained run measures cold load/prewarm separately from download before reusing exactly one engine for 20 cycles."
+    },
+    {
+      "metric": "settings.navigation.p95_ms",
+      "comparison": "<=",
+      "threshold": 100,
+      "unit": "ms",
+      "min_samples": 20,
+      "owner": "GPUI screens",
+      "rationale": "Settings route changes stay within the direct-manipulation response boundary."
+    },
+    {
+      "metric": "history.open_50.p95_ms",
+      "comparison": "<=",
+      "threshold": 250,
+      "unit": "ms",
+      "min_samples": 20,
+      "owner": "GPUI history",
+      "rationale": "A full retained history must render without perceptible blocking."
+    },
+    {
+      "metric": "frame.pacing.p95_ms",
+      "comparison": "<=",
+      "threshold": 33.3,
+      "unit": "ms",
+      "min_samples": 120,
+      "owner": "GPUI rendering",
+      "rationale": "Interactive navigation and history scrolling must sustain at least 30 fps at p95."
+    },
+    {
+      "metric": "ui.stalls.over_100ms.count",
+      "comparison": "<=",
+      "threshold": 0,
+      "unit": "stalls",
+      "min_samples": 1,
+      "owner": "GPUI rendering",
+      "rationale": "No main-thread stall above 100 ms is accepted during the scripted UI workload."
+    },
+    {
+      "metric": "ui.main_thread.p95_percent",
+      "comparison": "<=",
+      "threshold": 30,
+      "unit": "% of one core",
+      "min_samples": 20,
+      "owner": "GPUI rendering",
+      "rationale": "The scripted Settings and 50-row History workload leaves main-thread headroom for input and AppKit."
+    },
+    {
+      "metric": "render.full_tree_per_audio_tick.count",
+      "comparison": "<=",
+      "threshold": 0,
+      "unit": "audio-tick-driven full-tree renders",
+      "min_samples": 1,
+      "owner": "GPUI presentation boundary",
+      "rationale": "Audio-level updates must remain in their narrow presentation path and never rebuild the full screen tree."
+    },
+    {
+      "metric": "memory.post_warmup.p95_mib",
+      "comparison": "<=",
+      "threshold": 1800,
+      "unit": "MiB",
+      "min_samples": 20,
+      "owner": "GPUI/ONNX runtime",
+      "rationale": "The loaded default model leaves more than three quarters of an 8 GiB machine available to macOS and other apps."
+    },
+    {
+      "metric": "memory.peak_mib",
+      "comparison": "<=",
+      "threshold": 2500,
+      "unit": "MiB",
+      "min_samples": 20,
+      "owner": "GPUI/ONNX runtime",
+      "rationale": "Transient model and transcription allocations must not pressure an 8 GiB support-floor machine."
+    },
+    {
+      "metric": "resources.fd.peak",
+      "comparison": "<=",
+      "threshold": 128,
+      "unit": "file descriptors",
+      "min_samples": 20,
+      "owner": "runtime IO",
+      "rationale": "Descriptor usage stays far below the process limit and exposes leaked recordings, databases or trace handles."
+    },
+    {
+      "metric": "resources.thread.peak",
+      "comparison": "<=",
+      "threshold": 64,
+      "unit": "threads",
+      "min_samples": 20,
+      "owner": "GPUI/ONNX runtime",
+      "rationale": "Thread pools remain bounded across the Swift, GPUI, audio and ONNX layers."
+    },
+    {
+      "metric": "cycles.completed.count",
+      "comparison": "==",
+      "threshold": 20,
+      "unit": "signed-app fixture transcriptions",
+      "min_samples": 1,
+      "owner": "audio/ONNX pipeline",
+      "rationale": "Constrained growth evidence requires exactly twenty sequential fixture transcriptions through the signed AppModel/runtime with one warmed engine; real microphone/paste cycles remain separate physical supporting evidence."
+    },
+    {
+      "metric": "history.rows.count",
+      "comparison": "==",
+      "threshold": 50,
+      "unit": "current-format history rows",
+      "min_samples": 1,
+      "owner": "GPUI history",
+      "rationale": "History rendering evidence uses the complete fifty-entry retention workload."
+    },
+    {
+      "metric": "growth.rss.delta_mib",
+      "comparison": "<=",
+      "threshold": 64,
+      "unit": "MiB over 20 cycles",
+      "min_samples": 20,
+      "owner": "GPUI/ONNX runtime",
+      "rationale": "Post-warmup retained memory growth is bounded across twenty cycles."
+    },
+    {
+      "metric": "growth.rss.slope_mib_per_cycle",
+      "comparison": "<=",
+      "threshold": 2,
+      "unit": "MiB/cycle",
+      "min_samples": 20,
+      "owner": "GPUI/ONNX runtime",
+      "rationale": "A low positive slope catches leaks even when end-point noise remains inside the absolute allowance."
+    },
+    {
+      "metric": "growth.fd.delta",
+      "comparison": "<=",
+      "threshold": 2,
+      "unit": "file descriptors over 20 cycles",
+      "min_samples": 20,
+      "owner": "runtime IO",
+      "rationale": "No recording, database or paste descriptor family may leak per cycle."
+    },
+    {
+      "metric": "growth.thread.delta",
+      "comparison": "<=",
+      "threshold": 2,
+      "unit": "threads over 20 cycles",
+      "min_samples": 20,
+      "owner": "GPUI/ONNX runtime",
+      "rationale": "Thread pools settle after warmup and do not multiply with each inference."
+    },
+    {
+      "metric": "growth.monotonic_tail.count",
+      "comparison": "<=",
+      "threshold": 0,
+      "unit": "monotonically growing resource families",
+      "min_samples": 20,
+      "owner": "GPUI/ONNX runtime",
+      "rationale": "RSS, descriptors and threads must not rise at every one of the final ten cycle boundaries."
+    },
+    {
+      "metric": "leaks.definite.growth_count",
+      "comparison": "==",
+      "threshold": 0,
+      "unit": "new definite leaks after 20 closed cycles",
+      "min_samples": 20,
+      "owner": "GPUI/Swift/ONNX owners by stack",
+      "rationale": "Identical stack-logged pre/post scans must add no definite leaks across 20 app-correlated cycles. The evidence-backed startup baseline is 2 CFString / 112 bytes in cpal Device::name -> CoreAudio and is tracked non-blockingly as wrenflow-bda; total leak count is never mislabeled zero."
+    }
+  ]
+}

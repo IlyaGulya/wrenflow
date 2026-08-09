@@ -11,6 +11,8 @@ pub(super) struct AccessibilityNodeDraft {
     pub role: AccessibilityRole,
     pub label: String,
     pub value: Option<String>,
+    pub minimum_value: Option<f64>,
+    pub maximum_value: Option<f64>,
     pub enabled: bool,
     pub actions: Vec<AccessibilityAction>,
 }
@@ -28,6 +30,8 @@ impl AccessibilityNodeDraft {
             role,
             label: label.into(),
             value: None,
+            minimum_value: None,
+            maximum_value: None,
             enabled: true,
             actions: Vec::new(),
         }
@@ -35,6 +39,12 @@ impl AccessibilityNodeDraft {
 
     pub fn value(mut self, value: impl Into<String>) -> Self {
         self.value = Some(value.into());
+        self
+    }
+
+    pub const fn numeric_range(mut self, minimum: f64, maximum: f64) -> Self {
+        self.minimum_value = Some(minimum);
+        self.maximum_value = Some(maximum);
         self
     }
 
@@ -135,6 +145,11 @@ impl AccessibilityState {
         self.next_announcement_serial = self.next_announcement_serial.saturating_add(1);
     }
 
+    pub fn end_announcement_occurrence(&mut self) {
+        self.last_announcement_key = None;
+        self.latest_announcement = None;
+    }
+
     pub fn seal(&mut self, epoch: u64) {
         if epoch != self.epoch {
             return;
@@ -158,7 +173,7 @@ impl AccessibilityState {
     }
 
     fn try_publish(&mut self) {
-        if !self.sealed || self.working.iter().any(|node| node.frame.is_none()) {
+        if !self.sealed {
             return;
         }
         let nodes = self
@@ -184,6 +199,8 @@ impl AccessibilityState {
                     role: node.draft.role,
                     label: node.draft.label.clone(),
                     value: node.draft.value.clone(),
+                    minimum_value: node.draft.minimum_value,
+                    maximum_value: node.draft.maximum_value,
                     enabled: node.draft.enabled,
                     focused: false,
                     actions: node.draft.actions.clone(),
@@ -192,6 +209,14 @@ impl AccessibilityState {
                 })
             })
             .collect::<Vec<_>>();
+        // GPUI may virtualize children below a scroll viewport and therefore
+        // never lay them out. Publish the fully measured visible subtree
+        // instead of freezing the previous route until every off-screen node
+        // happens to receive geometry. `filter_map` above also excludes any
+        // descendant whose parent chain is not fully measured.
+        if nodes.is_empty() {
+            return;
+        }
         let announcement = self.latest_announcement.clone();
         if self.published.nodes == nodes && self.published.announcement == announcement {
             return;
@@ -234,7 +259,7 @@ mod tests {
     use super::{AccessibilityNodeDraft, AccessibilityState};
 
     #[test]
-    fn publishes_only_complete_real_geometry_frames() {
+    fn publishes_only_measured_real_geometry_and_adds_visible_descendants() {
         let mut state = AccessibilityState::default();
         let epoch = state.begin_frame();
         state.register(AccessibilityNodeDraft::new(
@@ -260,7 +285,10 @@ mod tests {
                 height: 620.0,
             },
         );
-        assert!(state.snapshot().nodes.is_empty());
+        let root_only = state.snapshot();
+        assert_eq!(root_only.nodes.len(), 1);
+        assert_eq!(root_only.nodes[0].id, "root");
+        assert_eq!(root_only.nodes[0].frame.width, 760.0);
 
         state.measure(
             epoch,
@@ -273,13 +301,13 @@ mod tests {
             },
         );
         let snapshot = state.snapshot();
-        assert_eq!(snapshot.generation, 1);
+        assert_eq!(snapshot.generation, 2);
         assert_eq!(snapshot.nodes.len(), 2);
         assert_eq!(snapshot.nodes[1].frame.x, 20.0);
     }
 
     #[test]
-    fn deduplicates_announcements_but_repeats_after_a_different_event() {
+    fn deduplicates_within_an_occurrence_and_repeats_after_quiet_or_different_events() {
         let mut state = AccessibilityState::default();
         state.announce("saving", "Saving settings", AccessibilityPriority::Low);
         let first = state.latest_announcement.clone().unwrap_or_else(|| {
@@ -288,10 +316,20 @@ mod tests {
         state.announce("saving", "Saving settings", AccessibilityPriority::Low);
         assert_eq!(state.latest_announcement.as_ref(), Some(&first));
         state.announce("saved", "Settings saved", AccessibilityPriority::Medium);
+        let different = state
+            .latest_announcement
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| panic!("different announcement should exist"));
+        assert!(different.serial > first.serial);
+
+        state.end_announcement_occurrence();
+        assert!(state.latest_announcement.is_none());
+        state.announce("saving", "Saving settings", AccessibilityPriority::Low);
         assert!(state
             .latest_announcement
             .as_ref()
-            .is_some_and(|announcement| announcement.serial > first.serial));
+            .is_some_and(|announcement| announcement.serial > different.serial));
     }
 
     #[test]

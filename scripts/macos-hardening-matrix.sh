@@ -20,18 +20,30 @@ case "${1:-}" in
     check-bundle)
         require_app
         NOTICES="$APP_PATH/Contents/Resources/ThirdPartyNotices.txt"
-        GPUI_LICENSE="$APP_PATH/Contents/Resources/ThirdPartyLicenses/GPUI-Apache-2.0.txt"
+        RUST_LICENSES="$APP_PATH/Contents/Resources/RustThirdPartyLicenses.txt"
         ORT_LICENSE="$APP_PATH/Contents/Resources/ThirdPartyLicenses/ONNX-Runtime-LICENSE.txt"
         ORT_NOTICES="$APP_PATH/Contents/Resources/ThirdPartyLicenses/ONNX-Runtime-ThirdPartyNotices.txt"
-        for notice_path in "$NOTICES" "$GPUI_LICENSE" "$ORT_LICENSE" "$ORT_NOTICES"; do
+        SUPPLY_CHAIN="$APP_PATH/Contents/Resources/SupplyChain"
+        for notice_path in "$NOTICES" "$RUST_LICENSES" "$ORT_LICENSE" "$ORT_NOTICES" \
+            "$SUPPLY_CHAIN/Wrenflow.cdx.json" "$SUPPLY_CHAIN/pins.json" \
+            "$SUPPLY_CHAIN/exceptions.json" "$SUPPLY_CHAIN/provenance.json" \
+            "$SUPPLY_CHAIN/SHA256SUMS"; do
             if [[ ! -s "$notice_path" ]]; then
                 echo "Bundled third-party notice is missing or empty: $notice_path" >&2
                 exit 68
             fi
         done
-        grep -Fq "GPUI 0.2.2" "$NOTICES"
-        grep -Fq "gpui-component 0.5.1" "$NOTICES"
+        grep -Fq "gpui 0.2.2" "$RUST_LICENSES"
+        grep -Fq "gpui-component 0.5.1" "$RUST_LICENSES"
         grep -Fq "ONNX Runtime 1.24.2" "$NOTICES"
+        grep -Fq "Parakeet TDT 0.6B V3 ONNX model" "$NOTICES"
+        grep -Fq "Whisper Large V3 Turbo ONNX model" "$NOTICES"
+        (
+            cd "$SUPPLY_CHAIN"
+            shasum -a 256 -c SHA256SUMS
+        )
+        jq -e '.specVersion == "1.5" and .serialNumber == null' \
+            "$SUPPLY_CHAIN/Wrenflow.cdx.json" >/dev/null
         codesign --verify --deep --strict --verbose=2 "$APP_PATH"
         plutil -p "$APP_PATH/Contents/Info.plist"
         codesign --display --verbose=4 "$APP_PATH" 2>&1 |

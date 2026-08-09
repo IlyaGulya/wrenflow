@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "onnx_runtime": {
+    "version": "1.24.2",
+    "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.24.2/onnxruntime-osx-arm64-1.24.2.tgz",
+    "archive_sha256": "0af4fa503e8ea285245b47ee42d0a7461b8156a81270857da0c1d4ecf858abde",
+    "dylib_sha256": "87df6f94dd559ea958748adc80fd4c46d91c52bc025771f513291d155539590a",
+    "license": "MIT"
+  },
+  "critical_rust_dependencies": [
+    {
+      "name": "gpui",
+      "version": "0.2.2",
+      "checksum": "979b45cfa6ec723b6f42330915a1b3769b930d02b2d505f9697f8ca602bee707"
+    },
+    {
+      "name": "gpui-component",
+      "version": "0.5.1",
+      "checksum": "d021d46b4088d3d93a57ccdf443da85695a77272108caca2f6fe5369f584966a"
+    },
+    {
+      "name": "gpui-component-assets",
+      "version": "0.5.1",
+      "checksum": "afc6e4c6551a1a12d4e8b69c3e8eba3cef43331c8c87898a0d4d040c78c6865e"
+    },
+    {
+      "name": "parakeet-rs",
+      "version": "0.3.4",
+      "checksum": "ac2c29bb70e3b63ddfa9af7cbb66f87a200550a5f6a5ac82fabf527b270c6615"
+    }
+  ],
+  "models": [
+    {
+      "id": "parakeet-tdt-0.6b-v3-onnx",
+      "repository": "istupakov/parakeet-tdt-0.6b-v3-onnx",
+      "revision": "8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce",
+      "license": "CC-BY-4.0",
+      "files": [
+        {"path":"encoder-model.int8.onnx","size":652183999,"sha256":"6139d2fa7e1b086097b277c7149725edbab89cc7c7ae64b23c741be4055aff09"},
+        {"path":"decoder_joint-model.int8.onnx","size":18202004,"sha256":"eea7483ee3d1a30375daedc8ed83e3960c91b098812127a0d99d1c8977667a70"},
+        {"path":"nemo128.onnx","size":139764,"sha256":"a9fde1486ebfcc08f328d75ad4610c67835fea58c73ba57e3209a6f6cf019e9f"},
+        {"path":"vocab.txt","size":93939,"sha256":"d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d"},
+        {"path":"config.json","size":97,"sha256":"666903c76b9798caf2c210afd4f6cd60b08a8dbf9800ec8d7a3bc0d2148ac466"}
+      ]
+    },
+    {
+      "id": "whisper-large-v3-turbo-onnx",
+      "repository": "onnx-community/whisper-large-v3-turbo-ONNX",
+      "revision": "f2d0148f21bb07751a7e6e9a4377e1ae7146607f",
+      "license": "MIT",
+      "license_basis": "openai/whisper-large-v3-turbo@41f01f3fe87f28c78e2fbf8b568835947dd65ed9",
+      "files": [
+        {"path":"config.json","size":1223,"sha256":"fdd959b061c832e534dea5c3d606fae22fbbd3ab12ad126d0d2eb602779eb9a3"},
+        {"path":"generation_config.json","size":3797,"sha256":"8568ddf83476167b4607014956b87142763fa6923e71259a606734beb39bdfc8"},
+        {"path":"preprocessor_config.json","size":340,"sha256":"7ccc62c6f2765af1f3b46c00c9b5894426835a05021c8b9c01eecb6dfb542711"},
+        {"path":"tokenizer.json","size":2480645,"sha256":"b3c8202bbf06d8ee4232c5984baa563784ac4737e2e7fdc42fa180200d3cfcdb"},
+        {"path":"tokenizer_config.json","size":282843,"sha256":"844b642c73a91359722f47b35705f7174686df33d252695d8572cf9ac03a6389"},
+        {"path":"special_tokens_map.json","size":2186,"sha256":"baea4ea09372eb4fca86b4e4346139fd73cb807d5087e9de0948e971739c3e74"},
+        {"path":"added_tokens.json","size":34648,"sha256":"3c51f66c4c21f9e126970078f11ae77a78c74aee8df606ee9daba86e467108e0"},
+        {"path":"merges.txt","size":493869,"sha256":"2df2990a395e35e8dfbc7511e08c12d56018d8d04691e0133e5d63b21e154dc6"},
+        {"path":"normalizer.json","size":52666,"sha256":"bf1c507dc8724ca9cf9903640dacfb69dae2f00edee4f21ceba106a7392f26dd"},
+        {"path":"vocab.json","size":1036558,"sha256":"e2aa043ef015641d363d8288e7c241c85e36a5c761fb303598e0710233344387"},
+        {"path":"onnx/encoder_model_int8.onnx","size":644822094,"sha256":"e44c0d5cfcc6ad283011602a738fa28dfa1ad7f7540c9503205479072a9cc1ef"},
+        {"path":"onnx/decoder_model_int8.onnx","size":437936043,"sha256":"fe2eb71adea258a0153071660ba9d21b8062705b56389d672be916c675ceb04d"},
+        {"path":"onnx/decoder_with_past_model_int8.onnx","size":424790944,"sha256":"da041a6cdb493360796acc07030e7e04cc40a6e30ef210a4defd676d74363b9d"}
+      ]
+    }
+  ],
+  "tools": {
+    "cargo-about": "0.9.1",
+    "cargo-cyclonedx": "0.5.9",
+    "cargo-deny": "0.20.2",
+    "create-dmg": "1.3.0"
+  }
+}

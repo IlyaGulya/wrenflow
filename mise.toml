@@ -4,6 +4,7 @@ ruby.compile = false
 [tools]
 rust = "1.94.1"
 resvg = "0.47.0"
+jq = "1.8.1"
 
 # ── Tasks ──────────────────────────────────────────────────────
 
@@ -11,11 +12,25 @@ resvg = "0.47.0"
 description = "Install Rust tooling and fetch both locked Cargo workspaces"
 run = """
 mise install
+mise run setup-rust-components
 cargo fetch --locked
 CARGO_HOME="$PWD/build/gpui-production-cargo-home" cargo fetch \
   --manifest-path native/wrenflow-gpui/Cargo.toml \
   --locked \
   --config 'source.crates-io.registry="sparse+https://index.crates.io/"'
+"""
+
+[tasks.setup-rust-components]
+description = "Install the exact Rust lint/format components required by CI and release gates"
+run = """
+: "${RUSTUP_TOOLCHAIN:?mise must select the pinned Rust toolchain}"
+if [ "$RUSTUP_TOOLCHAIN" != "1.94.1" ]; then
+  echo "Expected pinned Rust 1.94.1; got $RUSTUP_TOOLCHAIN" >&2
+  exit 1
+fi
+rustup component add --toolchain "$RUSTUP_TOOLCHAIN" clippy rustfmt
+cargo clippy --version
+cargo fmt --version
 """
 
 [tasks.download-ort]
@@ -28,8 +43,16 @@ run = "scripts/generate-app-icon.sh"
 
 [tasks.build]
 description = "Build and sign the production GPUI macOS app bundle"
-depends = ["download-ort"]
+depends = ["download-ort", "supply-chain-metadata", "verify-macos-support"]
 run = "CARGO_HOME=\"$PWD/build/gpui-production-cargo-home\" CARGO_TARGET_DIR=\"$PWD/build/gpui-production-target\" native/wrenflow-gpui/scripts/build-app.sh"
+
+[tasks.verify-macos-support]
+description = "Reject drift in the production macOS, architecture and toolchain contract"
+run = "scripts/verify-macos-support.sh source"
+
+[tasks.test-macos-support]
+description = "Exercise arm64/minimum-version support acceptance and rejection paths"
+run = "scripts/test-macos-support.sh"
 
 [tasks.release]
 description = "Build the signed, hardened production app bundle"
@@ -41,6 +64,73 @@ description = "Build release app, replace installed app, and relaunch it"
 depends = ["release"]
 run = "native/wrenflow-gpui/scripts/install-app.sh"
 
+[tasks.release-uninstall]
+description = "Unregister the login item and move the installed GPUI app to Trash"
+run = "native/wrenflow-gpui/scripts/uninstall-app.sh"
+
+[tasks.reset-app-data]
+description = "Reset an explicit GPUI current-data or legacy-data scope"
+run = "native/wrenflow-gpui/scripts/reset-app-data.sh"
+
+[tasks.test-lifecycle-contract]
+description = "Validate lifecycle scripts, safe paths, and clean-break declarations"
+run = """
+native/wrenflow-gpui/scripts/lifecycle-contract-test.sh
+native/wrenflow-gpui/scripts/accessibility-harness-test.sh
+"""
+
+[tasks.endurance-preflight]
+description = "Run deterministic disposable-root GPUI M13-M16/M21-M22 preflight only"
+run = "scripts/gpui-endurance-preflight.sh automated"
+
+[tasks.test-endurance-preflight]
+description = "Test fail-closed GPUI endurance and candidate-evidence harness behavior"
+run = "scripts/gpui-endurance-preflight-test.sh"
+
+[tasks.performance-preflight]
+description = "Capture sanitized macOS, hardware, power, xctrace and signed-candidate inventory"
+run = "mise exec -- python3 scripts/perf/gpui-performance.py preflight"
+
+[tasks.performance-sample]
+description = "Sample one exact LaunchServices GPUI candidate performance phase"
+run = "mise exec -- python3 scripts/perf/gpui-performance.py sample"
+
+[tasks.performance-self-test]
+description = "Run the two-gate signed GPUI fixture workload through LaunchServices"
+run = "mise exec -- python3 scripts/perf/gpui-performance.py self-test"
+
+[tasks.performance-leaks]
+description = "Attach macOS leaks to the exact running signed GPUI candidate"
+run = "mise exec -- python3 scripts/perf/gpui-performance.py leaks"
+
+[tasks.performance-merge-cold]
+description = "Merge five sealed fresh-runner cold-launch evidence shards"
+run = "mise exec -- python3 scripts/perf/gpui-performance.py merge-cold"
+
+[tasks.performance-verify]
+description = "Verify GPUI candidate evidence against versioned numeric budgets"
+run = "mise exec -- python3 scripts/perf/gpui-performance.py verify --budgets support/performance/budgets-v1.json"
+
+[tasks.performance-trace]
+description = "Attach an approved Instruments template to one exact signed GPUI candidate"
+run = "scripts/perf/capture-instruments.sh"
+
+[tasks.test-performance-harness]
+description = "Test fail-closed GPUI performance inventory, observers and budget verification"
+run = "scripts/test-gpui-performance.sh"
+
+[tasks.visual-parity-verify]
+description = "Verify persisted sanitized Flutter/GPUI captures against the v1 numeric parity contract"
+run = "swift native/wrenflow-gpui/scripts/verify-visual-parity.swift support/visual-parity/thresholds-v1.json build/visual-parity"
+
+[tasks.verify-release-runbook]
+description = "Validate the GPUI beta/stable runbook policy and workflow source invariants"
+run = "scripts/verify-release-promotion.sh source"
+
+[tasks.test-release-runbook]
+description = "Test byte-identical and fully revalidated successor promotion decisions"
+run = "scripts/test-production-release-runbook.sh"
+
 [tasks.hardening-bundle]
 description = "Verify the signed production app bundle and print its identity"
 run = "scripts/macos-hardening-matrix.sh check-bundle"
@@ -50,12 +140,12 @@ description = "Verify a notarized release DMG and its signed app"
 run = "scripts/macos-hardening-matrix.sh check-notarized"
 
 [tasks.hardening-lifecycle]
-description = "Launch the exact GPUI bundle and report its LaunchServices identity"
-run = "scripts/macos-hardening-matrix.sh launch-lifecycle"
+description = "Exercise single-instance, reopen and quit/relaunch on the exact signed GPUI bundle"
+depends = ["build"]
+run = "native/wrenflow-gpui/scripts/lifecycle-self-test.sh"
 
 [tasks.hardening-accessibility]
 description = "Run the signed app and verify the real AppKit accessibility tree bridge"
-depends = ["build"]
 run = "native/wrenflow-gpui/scripts/accessibility-self-test.sh"
 
 [tasks.hardening-tcc-status]
@@ -82,10 +172,12 @@ run = "true"
 
 [tasks.lint-rust]
 description = "Run clippy for all production Rust libraries"
+depends = ["setup-rust-components"]
 run = "cargo clippy --workspace --lib -- -D warnings"
 
 [tasks.lint-app]
 description = "Run clippy for the isolated production app"
+depends = ["setup-rust-components"]
 run = "CARGO_HOME=\"$PWD/build/gpui-production-cargo-home\" CARGO_TARGET_DIR=\"$PWD/build/gpui-production-target\" cargo clippy --manifest-path native/wrenflow-gpui/Cargo.toml --locked --all-targets --config 'source.crates-io.registry=\"sparse+https://index.crates.io/\"' -- -D warnings"
 
 [tasks.lint-workflows]
@@ -99,7 +191,7 @@ scripts/test-release-workflow.sh
 
 [tasks.test]
 description = "Run core/runtime and production app tests"
-depends = ["test-rust", "test-app"]
+depends = ["test-rust", "test-app", "test-lifecycle-contract", "test-macos-support", "test-supply-chain", "test-endurance-preflight", "test-release-runbook", "test-performance-harness"]
 run = "true"
 
 [tasks.test-rust]
@@ -193,6 +285,34 @@ description = "Pin GitHub Actions to full-length commit SHAs"
 depends = ["lint-workflows"]
 tools = { pinact = "3.9.0" }
 run = "pinact run"
+
+[tasks.supply-chain-audit]
+description = "Reject vulnerable, unapproved-license, wildcard-source and unlocked Rust dependencies"
+tools = { "cargo:cargo-deny" = "0.20.2" }
+run = """
+cargo deny --locked check advisories licenses bans sources
+cargo deny --manifest-path native/wrenflow-gpui/Cargo.toml --locked check advisories licenses bans sources
+"""
+
+[tasks.supply-chain-fetch]
+description = "Fetch the complete locked production graph for offline license harvesting"
+run = "cargo fetch --manifest-path native/wrenflow-gpui/Cargo.toml --locked"
+
+[tasks.supply-chain-metadata]
+description = "Generate deterministic CycloneDX, license inventory, checksums and provenance inputs"
+depends = ["supply-chain-audit", "supply-chain-fetch"]
+tools = { "cargo:cargo-about" = "0.9.1", "cargo:cargo-cyclonedx" = "0.5.9", jq = "1.8.1" }
+run = "scripts/generate-supply-chain.sh"
+
+[tasks.setup-release-tools]
+description = "Install checksum-pinned create-dmg 1.3.0"
+run = "scripts/install-release-tools.sh"
+
+[tasks.test-supply-chain]
+description = "Exercise fail-closed download, metadata, notice and workflow invariants"
+depends = ["supply-chain-metadata"]
+tools = { "cargo:cargo-about" = "0.9.1", "cargo:cargo-cyclonedx" = "0.5.9", jq = "1.8.1" }
+run = "scripts/test-supply-chain.sh"
 
 [tasks.clean]
 description = "Clean all build artifacts"

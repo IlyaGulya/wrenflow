@@ -1,9 +1,10 @@
 use crate::app::{AppAction, CommandStatus, ContentState, NavigationTarget, SettingsPresentation};
 use crate::ui::StatusKind;
+use wrenflow_runtime::ThemePreference;
 
 use super::common::{
-    ActionPlan, BlockPlan, CardPlan, ControlPlan, InputKind, ScreenPlan, SectionPlan, TextPlan,
-    TextTone, ToggleKind,
+    ActionPlan, BlockPlan, CardPlan, ControlPlan, InputKind, ScreenPlan, SectionPlan, SliderKind,
+    TextPlan, TextTone, ToggleKind,
 };
 
 const MINIMUM_DURATION_MS: f64 = 100.0;
@@ -11,36 +12,34 @@ const MAXIMUM_DURATION_MS: f64 = 1_000.0;
 const DURATION_STEP_MS: f64 = 50.0;
 
 pub(super) fn project(settings: &SettingsPresentation) -> ScreenPlan {
-    let mut blocks = vec![
-        BlockPlan::Card(
-            CardPlan::new("settings-hotkey", "Push-to-talk key")
-                .line(TextPlan::muted(
-                    "Hold the key to record, then release to transcribe and paste.",
-                ))
-                .control(ControlPlan::Input {
-                    kind: InputKind::Hotkey,
-                    id: "settings-hotkey-input".to_string(),
-                    label: "Push-to-talk key".to_string(),
-                    value: settings.selected_hotkey.clone(),
-                    hint: settings.hotkey_hint.clone().unwrap_or_else(|| {
-                        "Choose a preset or focus Custom key and press any key.".to_string()
-                    }),
-                    enabled: settings.hotkey_hint.is_none(),
-                }),
-        ),
-        BlockPlan::Card(
-            CardPlan::new("settings-sound", "Sound effects")
-                .line(TextPlan::muted(
-                    "Play feedback when recording starts and stops.",
-                ))
-                .control(ControlPlan::Toggle {
-                    id: "settings-sound-toggle".to_string(),
-                    label: "Play sounds".to_string(),
-                    checked: settings.sound_enabled,
-                    enabled: !matches!(settings.command, CommandStatus::Pending { .. }),
-                    kind: ToggleKind::SoundEnabled,
-                }),
-        ),
+    let mut blocks = vec![BlockPlan::Card(
+        CardPlan::new("settings-hotkey", "Push-to-talk key").control(ControlPlan::Input {
+            kind: InputKind::Hotkey,
+            id: "settings-hotkey-input".to_string(),
+            label: "Push-to-talk key".to_string(),
+            value: settings.selected_hotkey.clone(),
+            hint: settings.hotkey_hint.clone().unwrap_or_default(),
+            enabled: settings.hotkey_hint.is_none(),
+        }),
+    )];
+
+    if settings.show_microphone_selection {
+        blocks.push(microphone_card(settings));
+    }
+    if settings.show_launch_at_login {
+        blocks.push(launch_at_login_card(settings));
+    }
+
+    blocks.extend([
+        BlockPlan::Card(CardPlan::new("settings-sound", "Sound effects").control(
+            ControlPlan::Toggle {
+                id: "settings-sound-toggle".to_string(),
+                label: "Play sounds".to_string(),
+                checked: settings.sound_enabled,
+                enabled: !matches!(settings.command, CommandStatus::Pending { .. }),
+                kind: ToggleKind::SoundEnabled,
+            },
+        )),
         duration_card(settings.minimum_recording_duration_ms),
         BlockPlan::Card(
             CardPlan::new("settings-vocabulary", "Custom vocabulary")
@@ -56,14 +55,7 @@ pub(super) fn project(settings: &SettingsPresentation) -> ScreenPlan {
                     enabled: !matches!(settings.command, CommandStatus::Pending { .. }),
                 }),
         ),
-    ];
-
-    if settings.show_microphone_selection {
-        blocks.insert(1, microphone_card(settings));
-    }
-    if settings.show_launch_at_login {
-        blocks.insert(2, launch_at_login_card(settings));
-    }
+    ]);
 
     match &settings.command {
         CommandStatus::Pending { .. } => blocks.push(BlockPlan::Status {
@@ -82,15 +74,35 @@ pub(super) fn project(settings: &SettingsPresentation) -> ScreenPlan {
     }
 
     let mut plan = ScreenPlan::application(NavigationTarget::Settings, "General");
-    plan.subtitle = Some("Recording, input and transcription preferences.".to_string());
-    plan.sections = vec![SectionPlan::new("Preferences", blocks)];
+    plan.sections = vec![SectionPlan::untitled(blocks)];
     plan
 }
 
+pub(super) fn appearance_actions(selected: ThemePreference) -> Vec<ActionPlan> {
+    [
+        ("system", "System", ThemePreference::System),
+        ("light", "Light", ThemePreference::Light),
+        ("dark", "Dark", ThemePreference::Dark),
+    ]
+    .into_iter()
+    .map(|(id, label, preference)| {
+        let mut action = ActionPlan::dispatch(
+            format!("theme-{id}"),
+            label,
+            AppAction::SetThemePreference(preference),
+        );
+        action.style = if selected == preference {
+            crate::ui::ButtonStyle::Selected
+        } else {
+            crate::ui::ButtonStyle::Secondary
+        };
+        action
+    })
+    .collect()
+}
+
 fn microphone_card(settings: &SettingsPresentation) -> BlockPlan {
-    let mut card = CardPlan::new("settings-microphone", "Microphone").line(TextPlan::muted(
-        "Choose an input device. The effective device reflects the current system route.",
-    ));
+    let mut card = CardPlan::new("settings-microphone", "Microphone");
     match &settings.microphones {
         ContentState::Loading => {
             card = card.line(TextPlan::muted("Loading microphones…"));
@@ -106,39 +118,38 @@ fn microphone_card(settings: &SettingsPresentation) -> BlockPlan {
             let actions = microphones
                 .iter()
                 .map(|microphone| {
-                    let suffix = if microphone.effective {
-                        " · In use"
-                    } else if microphone.selected {
-                        " · Selected"
-                    } else {
-                        ""
-                    };
-                    ActionPlan::dispatch(
+                    let selected = microphone.effective || microphone.selected;
+                    let mut action = ActionPlan::dispatch(
                         format!("select-microphone-{}", microphone.id),
-                        format!("{}{suffix}", microphone.name),
+                        microphone.name.clone(),
                         AppAction::SetSelectedMicrophone(microphone.id.clone()),
                     )
-                    .enabled(
-                        !microphone.selected
-                            && !matches!(
-                                &settings.audio_devices_command,
-                                CommandStatus::Pending { .. }
-                            ),
-                    )
+                    .enabled(!matches!(
+                        &settings.audio_devices_command,
+                        CommandStatus::Pending { .. }
+                    ));
+                    action.style = if selected {
+                        crate::ui::ButtonStyle::Selected
+                    } else {
+                        crate::ui::ButtonStyle::Secondary
+                    };
+                    action
                 })
                 .collect();
             card = card.control(ControlPlan::Actions(actions));
         }
     }
-    card = card.control(ControlPlan::Actions(vec![ActionPlan::dispatch(
-        "reload-microphones",
-        "Reload devices",
-        AppAction::ReloadAudioDevices,
-    )
-    .enabled(!matches!(
-        &settings.audio_devices_command,
-        CommandStatus::Pending { .. }
-    ))]));
+    if !matches!(&settings.microphones, ContentState::Ready(_)) {
+        card = card.control(ControlPlan::Actions(vec![ActionPlan::dispatch(
+            "reload-microphones",
+            "Reload devices",
+            AppAction::ReloadAudioDevices,
+        )
+        .enabled(!matches!(
+            &settings.audio_devices_command,
+            CommandStatus::Pending { .. }
+        ))]));
+    }
     match &settings.audio_devices_command {
         CommandStatus::Pending { .. } => {
             card = card.line(TextPlan::muted("Reloading audio devices…"));
@@ -178,29 +189,18 @@ fn launch_at_login_card(settings: &SettingsPresentation) -> BlockPlan {
 fn duration_card(value: f64) -> BlockPlan {
     let value = value.clamp(MINIMUM_DURATION_MS, MAXIMUM_DURATION_MS);
     BlockPlan::Card(
-        CardPlan::new("settings-minimum-duration", "Minimum recording duration")
-            .line(TextPlan::pair("Duration", format!("{value:.0} ms")))
-            .line(TextPlan::muted(
-                "Very short key presses are ignored to prevent accidental recordings.",
-            ))
-            .control(ControlPlan::Actions(vec![
-                ActionPlan::dispatch(
-                    "decrease-minimum-duration",
-                    "Decrease 50 ms",
-                    AppAction::SetMinimumRecordingDurationMs(
-                        (value - DURATION_STEP_MS).max(MINIMUM_DURATION_MS),
-                    ),
-                )
-                .enabled(value > MINIMUM_DURATION_MS),
-                ActionPlan::dispatch(
-                    "increase-minimum-duration",
-                    "Increase 50 ms",
-                    AppAction::SetMinimumRecordingDurationMs(
-                        (value + DURATION_STEP_MS).min(MAXIMUM_DURATION_MS),
-                    ),
-                )
-                .enabled(value < MAXIMUM_DURATION_MS),
-            ])),
+        CardPlan::new("settings-minimum-duration", "Minimum recording duration").control(
+            ControlPlan::Slider {
+                id: "settings-minimum-duration-slider".to_string(),
+                label: "Duration".to_string(),
+                value,
+                minimum: MINIMUM_DURATION_MS,
+                maximum: MAXIMUM_DURATION_MS,
+                step: DURATION_STEP_MS,
+                enabled: true,
+                kind: SliderKind::MinimumRecordingDuration,
+            },
+        ),
     )
 }
 
@@ -209,9 +209,11 @@ mod tests {
     use crate::app::{
         AppAction, CommandStatus, ContentState, LaunchAtLoginPresentation, SettingsPresentation,
     };
-    use crate::screens::common::{BlockPlan, ControlPlan, ScreenIntent, ToggleKind};
+    use crate::screens::common::{
+        BlockPlan, ControlPlan, ScreenIntent, ScreenLayout, SliderKind, ToggleKind,
+    };
 
-    use super::project;
+    use super::{appearance_actions, project, ThemePreference};
 
     #[test]
     fn settings_plan_maps_every_mutable_preference_to_app_actions() {
@@ -219,6 +221,7 @@ mod tests {
             selected_hotkey: "Option+Space".to_string(),
             hotkey_hint: None,
             sound_enabled: true,
+            theme_preference: ThemePreference::System,
             custom_vocabulary: "Wrenflow".to_string(),
             minimum_recording_duration_ms: 300.0,
             microphones: ContentState::Ready(Vec::new()),
@@ -236,6 +239,26 @@ mod tests {
         };
         let plan = project(&presentation);
 
+        assert_eq!(plan.layout, ScreenLayout::Application);
+        assert!(plan.subtitle.is_none());
+        assert!(plan.sections[0].title.is_none());
+        assert_eq!(
+            plan.sections[0]
+                .blocks
+                .iter()
+                .filter_map(|block| match block {
+                    BlockPlan::Card(card) => Some(card.title.as_str()),
+                    BlockPlan::Status { .. } => None,
+                })
+                .collect::<Vec<_>>(),
+            [
+                "Push-to-talk key",
+                "Launch at login",
+                "Sound effects",
+                "Minimum recording duration",
+                "Custom vocabulary",
+            ]
+        );
         assert!(plan.sections[0].blocks.iter().any(|block| matches!(
             block,
             BlockPlan::Card(card) if card.controls.iter().any(|control| matches!(
@@ -243,15 +266,24 @@ mod tests {
                 ControlPlan::Toggle { kind: ToggleKind::LaunchAtLogin, .. }
             ))
         )));
+        let theme_actions = appearance_actions(ThemePreference::System);
+        assert!(theme_actions.iter().any(|action| matches!(
+            &action.intent,
+            ScreenIntent::Dispatch(AppAction::SetThemePreference(ThemePreference::System))
+        )));
+        assert_eq!(theme_actions[0].style, crate::ui::ButtonStyle::Selected);
         assert!(plan.sections[0].blocks.iter().any(|block| matches!(
             block,
             BlockPlan::Card(card) if card.controls.iter().any(|control| matches!(
                 control,
-                ControlPlan::Actions(actions) if actions.iter().any(|action|
-                    matches!(action.intent, ScreenIntent::Dispatch(
-                        AppAction::SetMinimumRecordingDurationMs(250.0)
-                    ))
-                )
+                ControlPlan::Slider {
+                    value: 300.0,
+                    minimum: 100.0,
+                    maximum: 1_000.0,
+                    step: 50.0,
+                    kind: SliderKind::MinimumRecordingDuration,
+                    ..
+                }
             ))
         )));
     }

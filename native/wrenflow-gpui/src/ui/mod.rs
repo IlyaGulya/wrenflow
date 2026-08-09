@@ -27,8 +27,9 @@ pub use settings::{
     SettingsSurface,
 };
 pub use theme::{
-    install_theme, ColorTokens, ControlTokens, SpacingTokens, ThemeMode, TypographyTokens,
-    WrenflowTheme, WrenflowTokens,
+    install_accessibility_preferences, install_theme, install_theme_selection,
+    synchronize_window_theme, AccessibilityPreferences, ColorTokens, ControlTokens, SpacingTokens,
+    ThemeMode, ThemeSelection, TypographyTokens, WrenflowTheme, WrenflowTokens,
 };
 
 use gpui::App;

@@ -3,11 +3,26 @@ set -euo pipefail
 
 CRATE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REPO_DIR="$(cd "$CRATE_DIR/../.." && pwd)"
-APP_PATH="$REPO_DIR/build/gpui/Wrenflow.app"
+APP_PATH="${WRENFLOW_TEST_APP:-$REPO_DIR/build/gpui/Wrenflow.app}"
 
-if [[ ! -d "$APP_PATH" ]]; then
-    echo "Production GPUI bundle not found at $APP_PATH" >&2
+if [[ "$APP_PATH" != /* || "$(basename "$APP_PATH")" != "Wrenflow.app" ]]; then
+    echo "WRENFLOW_TEST_APP must be an absolute Wrenflow.app path" >&2
     exit 65
+fi
+if [[ ! -d "$APP_PATH" || -L "$APP_PATH" ]]; then
+    echo "Production GPUI bundle not found or is a symlink: $APP_PATH" >&2
+    exit 66
+fi
+codesign --verify --deep --strict "$APP_PATH"
+PLIST="$APP_PATH/Contents/Info.plist"
+BUNDLE_ID="$(plutil -extract CFBundleIdentifier raw -o - "$PLIST")"
+SIGNATURE="$(codesign --display --verbose=4 "$APP_PATH" 2>&1)"
+IDENTIFIER="$(sed -n 's/^Identifier=//p' <<<"$SIGNATURE")"
+TEAM_ID="$(sed -n 's/^TeamIdentifier=//p' <<<"$SIGNATURE")"
+if [[ "$BUNDLE_ID" != "me.gulya.wrenflow" || "$IDENTIFIER" != "me.gulya.wrenflow" || \
+      "$TEAM_ID" != "T4LV8K9BGV" ]]; then
+    echo "Accessibility smoke requires the exact Wrenflow Developer ID bundle" >&2
+    exit 67
 fi
 
 EVIDENCE_DIR="$(mktemp -d /tmp/wrenflow-accessibility-self-test.XXXXXX)"

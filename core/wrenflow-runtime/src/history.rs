@@ -9,7 +9,10 @@ use crate::store::RuntimeStore;
 use crate::{RuntimeError, RuntimeEvent};
 
 enum HistoryCommand {
-    Insert(HistoryEntry),
+    Insert {
+        entry: HistoryEntry,
+        completion: Option<oneshot::Sender<Result<u64, String>>>,
+    },
     Delete {
         id: String,
         completion: oneshot::Sender<Result<u64, String>>,
@@ -28,8 +31,28 @@ pub(crate) struct HistoryHandle {
 impl HistoryHandle {
     pub(crate) fn insert(&self, entry: HistoryEntry) -> Result<(), RuntimeError> {
         self.commands
-            .send(HistoryCommand::Insert(entry))
+            .send(HistoryCommand::Insert {
+                entry,
+                completion: None,
+            })
             .map_err(|_| RuntimeError::ServiceClosed("history"))
+    }
+
+    pub(crate) async fn insert_acknowledged(
+        &self,
+        entry: HistoryEntry,
+    ) -> Result<u64, RuntimeError> {
+        let (completion, result) = oneshot::channel();
+        self.commands
+            .send(HistoryCommand::Insert {
+                entry,
+                completion: Some(completion),
+            })
+            .map_err(|_| RuntimeError::ServiceClosed("history"))?;
+        result
+            .await
+            .map_err(|_| RuntimeError::ServiceClosed("history"))?
+            .map_err(history_error)
     }
 
     pub(crate) async fn delete(&self, id: String) -> Result<u64, RuntimeError> {
@@ -65,9 +88,15 @@ pub(crate) struct HistoryRuntime {
 }
 
 pub(crate) fn start(path: PathBuf, runtime: RuntimeStore) -> Result<HistoryRuntime, RuntimeError> {
-    let store = HistoryStore::open(&path).map_err(|error| RuntimeError::ServiceFailed {
-        service: "history",
-        message: error.to_string(),
+    let store = HistoryStore::open(&path).map_err(|error| {
+        let message = format!(
+            "{error}. The original database was not overwritten; inspect the quarantine and use the explicit GPUI data reset flow if recovery is not required"
+        );
+        log::error!("Current GPUI history recovery required: {message}");
+        RuntimeError::ServiceFailed {
+            service: "history",
+            message,
+        }
     })?;
     let initial_entries = store
         .load_all()
@@ -96,16 +125,21 @@ pub(crate) fn start(path: PathBuf, runtime: RuntimeStore) -> Result<HistoryRunti
     })
 }
 
-fn run(store: HistoryStore, receiver: mpsc::Receiver<HistoryCommand>, runtime: RuntimeStore) {
+fn run(mut store: HistoryStore, receiver: mpsc::Receiver<HistoryCommand>, runtime: RuntimeStore) {
     while let Ok(command) = receiver.recv() {
         match command {
-            HistoryCommand::Insert(entry) => insert(&store, &runtime, entry),
+            HistoryCommand::Insert { entry, completion } => {
+                let result = insert(&mut store, &runtime, entry);
+                if let Some(completion) = completion {
+                    let _ = completion.send(result);
+                }
+            }
             HistoryCommand::Delete { id, completion } => {
-                let result = delete(&store, &runtime, &id);
+                let result = delete(&mut store, &runtime, &id);
                 let _ = completion.send(result);
             }
             HistoryCommand::Clear { completion } => {
-                let result = clear(&store, &runtime);
+                let result = clear(&mut store, &runtime);
                 let _ = completion.send(result);
             }
             HistoryCommand::Shutdown => break,
@@ -113,19 +147,24 @@ fn run(store: HistoryStore, receiver: mpsc::Receiver<HistoryCommand>, runtime: R
     }
 }
 
-fn insert(store: &HistoryStore, runtime: &RuntimeStore, entry: HistoryEntry) {
+fn insert(
+    store: &mut HistoryStore,
+    runtime: &RuntimeStore,
+    entry: HistoryEntry,
+) -> Result<u64, String> {
     if let Err(error) = store.insert(&entry) {
         runtime.emit(RuntimeEvent::PipelineError {
             message: format!("Failed to persist history: {error}"),
             action: None,
         });
-        return;
+        return Err(error.to_string());
     }
     if let Err(error) = store.trim(50) {
         log::error!("Failed to trim history: {error}");
+        return Err(error.to_string());
     }
     let event_entry = entry.clone();
-    if runtime
+    let update = runtime
         .update(|snapshot| {
             snapshot.history.has_snapshot = true;
             snapshot
@@ -136,13 +175,12 @@ fn insert(store: &HistoryStore, runtime: &RuntimeStore, entry: HistoryEntry) {
             snapshot.history.entries.truncate(50);
             true
         })
-        .is_ok()
-    {
-        runtime.emit(RuntimeEvent::HistoryEntryAdded(event_entry));
-    }
+        .map_err(|error| error.to_string())?;
+    runtime.emit(RuntimeEvent::HistoryEntryAdded(event_entry));
+    Ok(update.revision)
 }
 
-fn delete(store: &HistoryStore, runtime: &RuntimeStore, id: &str) -> Result<u64, String> {
+fn delete(store: &mut HistoryStore, runtime: &RuntimeStore, id: &str) -> Result<u64, String> {
     store.delete(id).map_err(|error| error.to_string())?;
     let update = runtime
         .update(|snapshot| {
@@ -155,7 +193,7 @@ fn delete(store: &HistoryStore, runtime: &RuntimeStore, id: &str) -> Result<u64,
     Ok(update.revision)
 }
 
-fn clear(store: &HistoryStore, runtime: &RuntimeStore) -> Result<u64, String> {
+fn clear(store: &mut HistoryStore, runtime: &RuntimeStore) -> Result<u64, String> {
     store.clear_all().map_err(|error| error.to_string())?;
     let update = runtime
         .update(|snapshot| {
@@ -173,10 +211,4 @@ fn history_error(message: String) -> RuntimeError {
         service: "history",
         message,
     }
-}
-
-pub(crate) fn default_history_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("Wrenflow/history.sqlite")
 }

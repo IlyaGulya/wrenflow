@@ -1,6 +1,9 @@
 use wrenflow_runtime::{
+    recovery::RecoveryMode,
+    support::SupportBundleFailureCode,
+    update::{UpdateChannel, UpdateFailureCode},
     AppSessionState, HistoryEntry, LocalModelsSnapshot, ModelOperationState, OnboardingStep,
-    PermissionStatus, PipelineState, RuntimeSnapshot, UpdateStatus,
+    PermissionStatus, PipelineState, RuntimeSnapshot, ThemePreference, UpdateStatus,
 };
 
 const SYSTEM_DEFAULT_MICROPHONE_ID: &str = "default";
@@ -76,6 +79,7 @@ pub struct SettingsPresentation {
     pub selected_hotkey: String,
     pub hotkey_hint: Option<String>,
     pub sound_enabled: bool,
+    pub theme_preference: ThemePreference,
     pub custom_vocabulary: String,
     pub minimum_recording_duration_ms: f64,
     pub microphones: ContentState<Vec<MicrophoneOptionPresentation>>,
@@ -194,17 +198,58 @@ pub struct TranscriptionTestPresentation {
 pub enum UpdatePresentation {
     Unsupported,
     Idle,
-    Checking,
-    UpToDate,
+    Checking {
+        channel: UpdateChannel,
+    },
+    UpToDate {
+        channel: UpdateChannel,
+    },
     Available {
         latest_version: String,
-        release_url: String,
-        download_url: String,
+        channel: UpdateChannel,
         published_at_iso: Option<String>,
+        size_bytes: u64,
+    },
+    Downloading {
+        latest_version: String,
+        total_bytes: u64,
+    },
+    ReadyToInstall {
+        latest_version: String,
+    },
+    Installing {
+        latest_version: String,
+    },
+    RecoveryRequired {
+        code: UpdateFailureCode,
     },
     Error {
-        message: String,
+        code: UpdateFailureCode,
+        retryable: bool,
+        retry_after_seconds: Option<u64>,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SupportBundlePresentation {
+    Idle,
+    Exporting,
+    Exported {
+        suggested_filename: String,
+        size_bytes: u64,
+    },
+    Error {
+        code: SupportBundleFailureCode,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecoveryPresentation {
+    pub mode: RecoveryMode,
+    pub consecutive_unclean_launches: u8,
+    pub cleaned_temporary_files: u16,
+    pub reset_current_data_available: bool,
+    pub reinstall_current_line_recommended: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -212,6 +257,8 @@ pub struct AboutPresentation {
     pub version: String,
     pub show_updates: bool,
     pub update: UpdatePresentation,
+    pub support_bundle: SupportBundlePresentation,
+    pub recovery: RecoveryPresentation,
     pub diagnostics: Vec<DiagnosticPresentation>,
 }
 
@@ -404,6 +451,7 @@ fn settings(
             Some("Global hotkeys are unavailable in the current runtime.".to_string())
         },
         sound_enabled: snapshot.settings.sound_enabled,
+        theme_preference: snapshot.settings.theme_preference,
         custom_vocabulary: snapshot.settings.custom_vocabulary.clone(),
         minimum_recording_duration_ms: snapshot.settings.minimum_recording_duration_ms,
         microphones,
@@ -822,6 +870,16 @@ fn about(snapshot: &RuntimeSnapshot) -> AboutPresentation {
         version: env!("CARGO_PKG_VERSION").to_string(),
         show_updates: snapshot.shell.capabilities.updates,
         update: update(&snapshot.shell.update_status),
+        support_bundle: support_bundle(&snapshot.shell.support_bundle_status),
+        recovery: RecoveryPresentation {
+            mode: snapshot.recovery.mode,
+            consecutive_unclean_launches: snapshot.recovery.consecutive_unclean_launches,
+            cleaned_temporary_files: snapshot.recovery.cleanup.total(),
+            reset_current_data_available: snapshot.recovery.reset_current_data_available,
+            reinstall_current_line_recommended: snapshot
+                .recovery
+                .reinstall_current_line_recommended,
+        },
         diagnostics,
     }
 }
@@ -830,22 +888,61 @@ fn update(status: &UpdateStatus) -> UpdatePresentation {
     match status {
         UpdateStatus::Unsupported => UpdatePresentation::Unsupported,
         UpdateStatus::Idle => UpdatePresentation::Idle,
-        UpdateStatus::Checking => UpdatePresentation::Checking,
-        UpdateStatus::UpToDate => UpdatePresentation::UpToDate,
+        UpdateStatus::Checking { channel } => UpdatePresentation::Checking { channel: *channel },
+        UpdateStatus::UpToDate { channel } => UpdatePresentation::UpToDate { channel: *channel },
         UpdateStatus::Available {
             latest_version,
-            release_url,
-            download_url,
+            channel,
             published_at_iso,
+            size_bytes,
         } => UpdatePresentation::Available {
             latest_version: latest_version.clone(),
-            release_url: release_url.clone(),
-            download_url: download_url.clone(),
+            channel: *channel,
             published_at_iso: published_at_iso.clone(),
+            size_bytes: *size_bytes,
         },
-        UpdateStatus::Error { message } => UpdatePresentation::Error {
-            message: message.clone(),
+        UpdateStatus::Downloading {
+            latest_version,
+            total_bytes,
+        } => UpdatePresentation::Downloading {
+            latest_version: latest_version.clone(),
+            total_bytes: *total_bytes,
         },
+        UpdateStatus::ReadyToInstall { latest_version } => UpdatePresentation::ReadyToInstall {
+            latest_version: latest_version.clone(),
+        },
+        UpdateStatus::Installing { latest_version } => UpdatePresentation::Installing {
+            latest_version: latest_version.clone(),
+        },
+        UpdateStatus::RecoveryRequired { code } => {
+            UpdatePresentation::RecoveryRequired { code: *code }
+        }
+        UpdateStatus::Error {
+            code,
+            retryable,
+            retry_after_seconds,
+        } => UpdatePresentation::Error {
+            code: *code,
+            retryable: *retryable,
+            retry_after_seconds: *retry_after_seconds,
+        },
+    }
+}
+
+fn support_bundle(status: &wrenflow_runtime::SupportBundleStatus) -> SupportBundlePresentation {
+    match status {
+        wrenflow_runtime::SupportBundleStatus::Idle => SupportBundlePresentation::Idle,
+        wrenflow_runtime::SupportBundleStatus::Exporting => SupportBundlePresentation::Exporting,
+        wrenflow_runtime::SupportBundleStatus::Ready {
+            suggested_filename,
+            size_bytes,
+        } => SupportBundlePresentation::Exported {
+            suggested_filename: suggested_filename.clone(),
+            size_bytes: *size_bytes,
+        },
+        wrenflow_runtime::SupportBundleStatus::Error { code } => {
+            SupportBundlePresentation::Error { code: *code }
+        }
     }
 }
 

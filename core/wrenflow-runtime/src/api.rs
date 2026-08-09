@@ -1,12 +1,13 @@
 use std::time::Duration;
 
 use tokio::sync::oneshot;
+use wrenflow_domain::config::ThemePreference;
 use wrenflow_domain::history::HistoryEntry;
 use wrenflow_domain::pipeline::PipelineSound;
 
 use crate::state::{
     ErrorAction, LaunchAtLoginSnapshot, PermissionsSnapshot, ShellCapabilities,
-    TranscriptDisposition, UpdateStatus,
+    SupportBundleStatus, TranscriptDisposition, UpdateStatus,
 };
 
 /// A single typed input to the product runtime.
@@ -26,6 +27,7 @@ pub enum RuntimeCommand {
     ReportPermissions(PermissionsSnapshot),
     ReportLaunchAtLogin(LaunchAtLoginSnapshot),
     ReportUpdateStatus(UpdateStatus),
+    ReportSupportBundleStatus(SupportBundleStatus),
     ReportShellCapabilities(ShellCapabilities),
     RequestQuit,
     Shutdown,
@@ -50,6 +52,7 @@ pub enum SettingsPatch {
     SelectedHotkey(String),
     SelectedMicrophoneId(String),
     SoundEnabled(bool),
+    ThemePreference(ThemePreference),
     CustomVocabulary(String),
     MinimumRecordingDuration(Duration),
     HasCompletedSetup(bool),

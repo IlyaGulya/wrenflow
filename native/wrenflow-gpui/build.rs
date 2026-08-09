@@ -18,8 +18,9 @@ fn main() {
     let dylib = out_dir.join("libWrenflowShell.dylib");
     let architecture = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
         Ok("aarch64") => "arm64",
-        Ok("x86_64") => "x86_64",
-        Ok(other) => panic!("unsupported macOS architecture: {other}"),
+        Ok(other) => {
+            panic!("unsupported macOS architecture: {other}; Wrenflow ships only for Apple Silicon")
+        }
         Err(error) => panic!("CARGO_CFG_TARGET_ARCH is required: {error}"),
     };
     let deployment_target = env::var("MACOSX_DEPLOYMENT_TARGET").unwrap_or_else(|_| "14.0".into());

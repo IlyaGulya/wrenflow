@@ -16,6 +16,8 @@
 Wrenflow is a free, open-source dictation app. Hold a key, speak, release — text appears at your cursor. All transcription runs locally on your Mac.
 
 > **Platform support:** macOS only for now. The core is written in Rust — other platforms are planned.
+> The production build requires macOS 14 or later on Apple Silicon (M1 or
+> newer); see the [complete support contract](docs/macos-support.md).
 
 ## How it works
 
@@ -27,7 +29,7 @@ Transcription typically completes in under a second. The model downloads automat
 
 ## Features
 
-- **On-device transcription** — [Parakeet TDT 0.6B](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) via ONNX Runtime, no internet required
+- **On-device transcription** — [Parakeet TDT 0.6B V3 ONNX, exact pinned revision](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/tree/8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce) via ONNX Runtime, no internet required after model installation
 - **Model prewarm** — first transcription is as fast as subsequent ones
 - **Configurable hotkey** — Fn, Right Option, or F5
 - **Transcription history** — searchable log with audio recordings saved as OGG/Opus
@@ -90,7 +92,7 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/). Pre
 git config core.hooksPath .githooks
 ```
 
-Releases are managed by [release-please](https://github.com/googleapis/release-please) — push `feat:` or `fix:` commits to `main` and a release PR will be created automatically.
+Releases are managed by [release-please](https://github.com/googleapis/release-please) — push `feat:` or `fix:` commits to `main` and a release PR will be created automatically. Merging that PR stages a draft; stable publication is a separate exact-byte manual promotion after the production go/no-go.
 
 ## Acknowledgments
 

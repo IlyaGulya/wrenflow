@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arboard::Clipboard;
 use tokio::sync::mpsc;
@@ -13,6 +13,10 @@ use wrenflow_domain::pipeline::{
     PipelineEngine, PipelineListener, PipelineSound, PipelineState, TranscriptionResult,
 };
 
+use crate::diagnostics::{
+    emit_diagnostic, new_correlation_id, CorrelationId, DiagnosticCategory, DiagnosticCode,
+    DiagnosticEvent, DiagnosticLevel,
+};
 use crate::history::HistoryHandle;
 use crate::model::{self, TranscriptionService};
 use crate::platform::paste;
@@ -23,6 +27,21 @@ use crate::{ErrorAction, RuntimeEvent, RuntimeSnapshot};
 const INIT_TIMEOUT: Duration = Duration::from_millis(500);
 const INDICATOR_TIMEOUT: Duration = Duration::from_secs(1);
 const TIMER_TICK: Duration = Duration::from_millis(50);
+static RECORDING_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static PERFORMANCE_SYNTHETIC_RECORDING: OnceLock<Arc<Vec<f32>>> = OnceLock::new();
+
+/// Install the pinned recording source only from the validated private
+/// performance request, before the runtime and pipeline are started.
+pub(crate) fn install_performance_synthetic_recording(samples: Arc<Vec<f32>>) -> Result<(), ()> {
+    if samples.is_empty() {
+        return Err(());
+    }
+    PERFORMANCE_SYNTHETIC_RECORDING.set(samples).map_err(|_| ())
+}
+
+fn performance_synthetic_recording() -> Option<Arc<Vec<f32>>> {
+    PERFORMANCE_SYNTHETIC_RECORDING.get().cloned()
+}
 
 enum PipelineCommand {
     Shutdown,
@@ -135,6 +154,7 @@ impl PipelineListener for RuntimePipelineListener {
 struct PipelineController {
     engine: PipelineEngine,
     listener: RuntimePipelineListener,
+    correlation: Option<CorrelationId>,
     init_deadline: Option<Instant>,
     indicator_deadline: Option<Instant>,
 }
@@ -144,6 +164,7 @@ impl PipelineController {
         Self {
             engine: PipelineEngine::new(config),
             listener: RuntimePipelineListener { store, history },
+            correlation: None,
             init_deadline: None,
             indicator_deadline: None,
         }
@@ -151,6 +172,16 @@ impl PipelineController {
 
     fn hotkey_down(&mut self) {
         if self.engine.handle_hotkey_down(&self.listener) {
+            let correlation = new_correlation_id();
+            emit_diagnostic(
+                DiagnosticEvent::new(
+                    DiagnosticCategory::Recording,
+                    DiagnosticLevel::Info,
+                    DiagnosticCode::RecordingStarted,
+                )
+                .correlated(&correlation),
+            );
+            self.correlation = Some(correlation);
             self.init_deadline = Some(Instant::now() + INIT_TIMEOUT);
             self.indicator_deadline = None;
         }
@@ -158,8 +189,31 @@ impl PipelineController {
 
     fn hotkey_up(&mut self, duration_ms: f64) {
         let transcribing = self.engine.handle_hotkey_up(duration_ms, &self.listener);
+        if let Some(correlation) = &self.correlation {
+            emit_diagnostic(
+                DiagnosticEvent::new(
+                    DiagnosticCategory::Recording,
+                    DiagnosticLevel::Info,
+                    DiagnosticCode::RecordingStopped,
+                )
+                .correlated(correlation),
+            );
+            if transcribing {
+                emit_diagnostic(
+                    DiagnosticEvent::new(
+                        DiagnosticCategory::Transcription,
+                        DiagnosticLevel::Info,
+                        DiagnosticCode::TranscriptionStarted,
+                    )
+                    .correlated(correlation),
+                );
+            }
+        }
         self.init_deadline = None;
         self.indicator_deadline = transcribing.then(|| Instant::now() + INDICATOR_TIMEOUT);
+        if !transcribing {
+            self.correlation = None;
+        }
     }
 
     fn update_config(&mut self, config: AppConfig) {
@@ -173,6 +227,17 @@ impl PipelineController {
     fn transcription_complete(&mut self, result: TranscriptionResult) {
         self.engine
             .on_transcription_complete(result, &self.listener);
+        if let Some(correlation) = &self.correlation {
+            emit_diagnostic(
+                DiagnosticEvent::new(
+                    DiagnosticCategory::Transcription,
+                    DiagnosticLevel::Info,
+                    DiagnosticCode::TranscriptionCompleted,
+                )
+                .correlated(correlation),
+            );
+        }
+        self.correlation = None;
         self.indicator_deadline = None;
     }
 
@@ -182,10 +247,29 @@ impl PipelineController {
 
     fn first_audio(&mut self) {
         self.engine.on_first_audio(&self.listener);
+        if let Some(correlation) = &self.correlation {
+            emit_diagnostic(
+                DiagnosticEvent::new(
+                    DiagnosticCategory::Recording,
+                    DiagnosticLevel::Debug,
+                    DiagnosticCode::RecordingAudioReady,
+                )
+                .correlated(correlation),
+            );
+        }
         self.init_deadline = None;
     }
 
     fn error(&mut self, message: &str) {
+        let correlation = self.correlation.take().unwrap_or_else(new_correlation_id);
+        emit_diagnostic(
+            DiagnosticEvent::new(
+                DiagnosticCategory::Transcription,
+                DiagnosticLevel::Error,
+                DiagnosticCode::PipelineFailed,
+            )
+            .correlated(&correlation),
+        );
         self.engine.on_pipeline_error(message, &self.listener);
         self.indicator_deadline = None;
     }
@@ -229,6 +313,7 @@ async fn run(
     history: Option<HistoryHandle>,
 ) {
     let audio = AudioCapture::new();
+    let synthetic_recording = performance_synthetic_recording();
     let (audio_tx, mut audio_rx) = mpsc::unbounded_channel();
     let mut snapshots = store.subscribe_snapshots();
     let mut controller =
@@ -252,28 +337,37 @@ async fn run(
                             continue;
                         }
                         controller.hotkey_down();
-                        let device_id = effective_device_id(&store.snapshot());
-                        let selected = (device_id != DEFAULT_SELECTED_MICROPHONE_ID)
-                            .then_some(device_id.as_str());
-                        let listener = Arc::new(RuntimeAudioListener {
-                            store: store.clone(),
-                            events: audio_tx.clone(),
-                            first_audio_sent: AtomicBool::new(false),
-                        });
-                        if let Err(error) = audio.start_recording(selected, listener) {
-                            controller.error(&format!("Failed to start audio: {error}"));
+                        if synthetic_recording.is_some() {
+                            controller.first_audio();
+                        } else {
+                            let device_id = effective_device_id(&store.snapshot());
+                            let selected = (device_id != DEFAULT_SELECTED_MICROPHONE_ID)
+                                .then_some(device_id.as_str());
+                            let listener = Arc::new(RuntimeAudioListener {
+                                store: store.clone(),
+                                events: audio_tx.clone(),
+                                first_audio_sent: AtomicBool::new(false),
+                            });
+                            if let Err(error) = audio.start_recording(selected, listener) {
+                                controller.error(&format!("Failed to start audio: {error}"));
+                            }
                         }
                     }
                     Some(HotkeyEvent::KeyUp { duration_ms }) => {
-                        let recording = audio.stop_recording();
+                        let recording = match &synthetic_recording {
+                            Some(samples) => Ok(Some(samples.as_ref().clone())),
+                            None => audio
+                                .stop_recording()
+                                .map(|recording| recording.map(|recording| recording.samples_16k)),
+                        };
                         store.set_audio_level(0.0);
                         controller.hotkey_up(duration_ms);
                         if controller.is_transcribing() {
                             match recording {
                                 Ok(Some(recording)) => {
-                                    save_recording(recording.samples_16k.clone());
+                                    save_recording(recording.clone());
                                     let vocabulary = controller.custom_vocabulary();
-                                    match transcription.transcribe(recording.samples_16k, vocabulary).await {
+                                    match transcription.transcribe(recording, vocabulary).await {
                                         Ok(result) => {
                                             let transcript = result.raw_transcript.trim().to_string();
                                             controller.transcription_complete(result);
@@ -356,26 +450,47 @@ fn resolve_model_error_action(message: &str, snapshot: &RuntimeSnapshot) -> Opti
 fn save_recording(samples: Vec<f32>) {
     tokio::task::spawn_blocking(move || {
         let directory = recordings_dir();
-        if let Err(error) = std::fs::create_dir_all(&directory) {
-            log::error!("Failed to create recordings dir: {error}");
-            return;
-        }
-        let millis = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let path = directory.join(format!("recording_{millis}.ogg"));
-        match std::fs::File::create(&path) {
-            Ok(mut file) => {
-                if let Err(error) =
-                    wrenflow_core::opus_encoder::encode_ogg_opus(&mut file, &samples)
-                {
-                    log::error!("Opus encode error: {error}");
-                }
-            }
-            Err(error) => log::error!("Opus file create error: {error}"),
+        if let Err(error) = persist_recording(&directory, &samples) {
+            log::error!("Failed to persist recording atomically: {error}");
         }
     });
+}
+
+fn persist_recording(directory: &std::path::Path, samples: &[f32]) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(directory)
+        .map_err(|error| format!("create recordings directory: {error}"))?;
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let sequence = RECORDING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let file_name = format!("recording_{millis}_{sequence}.ogg");
+    let destination = directory.join(&file_name);
+    let temporary = directory.join(format!(".{file_name}.tmp-{}", std::process::id()));
+
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(|error| format!("create temporary recording: {error}"))?;
+        wrenflow_core::opus_encoder::encode_ogg_opus(&mut file, samples)
+            .map_err(|error| format!("encode OGG/Opus: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("sync temporary recording: {error}"))?;
+        drop(file);
+        std::fs::rename(&temporary, &destination)
+            .map_err(|error| format!("publish recording: {error}"))?;
+        #[cfg(unix)]
+        std::fs::File::open(directory)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| format!("sync recordings directory: {error}"))?;
+        Ok(destination.clone())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
 }
 
 fn paste_text(text: &str) -> Result<(), String> {
@@ -388,9 +503,7 @@ fn paste_text(text: &str) -> Result<(), String> {
 }
 
 fn recordings_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("Wrenflow/recordings")
+    crate::data_paths::current_data_paths().recordings
 }
 
 #[cfg(test)]
@@ -425,6 +538,39 @@ mod tests {
             effective_device_id(&snapshot),
             DEFAULT_SELECTED_MICROPHONE_ID
         );
+    }
+
+    #[test]
+    fn ordinary_runtime_has_no_synthetic_recording_source() {
+        assert!(performance_synthetic_recording().is_none());
+    }
+
+    #[test]
+    fn recording_is_published_as_one_complete_ogg_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = persist_recording(dir.path(), &vec![0.0; 3_200]).unwrap();
+
+        assert_eq!(
+            path.extension().and_then(|value| value.to_str()),
+            Some("ogg")
+        );
+        assert!(std::fs::metadata(path).unwrap().len() > 0);
+        assert!(std::fs::read_dir(dir.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".tmp-")));
+    }
+
+    #[test]
+    fn recording_storage_error_is_surfaced_without_partial_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let occupied = dir.path().join("occupied");
+        std::fs::write(&occupied, b"not-a-directory").unwrap();
+
+        let error = persist_recording(&occupied, &[0.0; 320]).unwrap_err();
+        assert!(error.contains("create recordings directory"));
+        assert_eq!(std::fs::read(occupied).unwrap(), b"not-a-directory");
     }
 
     #[test]

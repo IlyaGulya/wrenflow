@@ -1,9 +1,11 @@
 use std::ffi::{c_char, CStr, CString};
 use std::fmt;
+use std::path::Path;
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use wrenflow_runtime::ThemePreference;
 
 static EVENT_SENDER: OnceLock<Mutex<Option<mpsc::Sender<ShellEvent>>>> = OnceLock::new();
 
@@ -21,6 +23,7 @@ pub enum ShellEvent {
     HotkeyPressed,
     HotkeyReleased(Duration),
     AccessibilityAction(AccessibilityActionRequest),
+    AccessibilityPreferencesChanged(AccessibilityPreferencesObservation),
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -29,6 +32,16 @@ pub struct AccessibilityActionRequest {
     pub id: String,
     pub action: String,
     pub value: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessibilityPreferencesObservation {
+    pub increase_contrast: bool,
+    pub differentiate_without_color: bool,
+    pub reduce_motion: bool,
+    pub reduce_transparency: bool,
+    pub text_scale_percent: u16,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -65,7 +78,6 @@ pub struct TrayPresentation {
     pub microphones: Vec<TrayMicrophone>,
     pub selected_microphone_id: String,
     pub selected_hotkey: u16,
-    pub update_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -79,6 +91,12 @@ pub enum OverlayPhase {
     Initializing = 0,
     Recording = 1,
     Transcribing = 2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowLayout {
+    Compact = 0,
+    Settings = 1,
 }
 
 #[derive(Clone, Copy)]
@@ -96,6 +114,18 @@ impl fmt::Display for ShellError {
 impl std::error::Error for ShellError {}
 
 impl MacShell {
+    pub fn prepare_process() {
+        // SAFETY: the process entry point calls this on the main thread before
+        // GPUI constructs NSApplication; no borrowed values cross the boundary.
+        unsafe { wrenflow_shell_prepare_process() };
+    }
+
+    pub fn claim_single_instance() -> bool {
+        // SAFETY: this synchronous AppKit query has no borrowed arguments and
+        // runs before any runtime IO is started.
+        unsafe { wrenflow_shell_claim_single_instance() == 0 }
+    }
+
     pub fn install(
         window_title: &str,
         version: &str,
@@ -110,12 +140,17 @@ impl MacShell {
         *slot = Some(sender);
         drop(slot);
 
+        // SAFETY: the function pointer has static lifetime and Swift stores it
+        // only until synchronous shutdown.
+        unsafe { wrenflow_shell_set_diagnostic_callback(Some(native_diagnostic_callback)) };
         // SAFETY: both pointers are valid for the duration of this synchronous
         // call and the callback is a C-compatible function pointer.
         let result = unsafe {
             wrenflow_shell_install(title.as_ptr(), version.as_ptr(), native_event_callback)
         };
         if result != 0 {
+            // SAFETY: clear the callback before returning a failed shell.
+            unsafe { wrenflow_shell_set_diagnostic_callback(None) };
             clear_event_sender();
             return Err(ShellError(format!(
                 "native shell install failed with status {result}"
@@ -128,6 +163,8 @@ impl MacShell {
         // SAFETY: the linked Swift function accepts no arguments and runs its
         // AppKit cleanup synchronously on the main thread.
         unsafe { wrenflow_shell_shutdown() };
+        // SAFETY: Swift has completed shutdown and will issue no callbacks.
+        unsafe { wrenflow_shell_set_diagnostic_callback(None) };
         clear_event_sender();
     }
 
@@ -139,6 +176,24 @@ impl MacShell {
     pub fn hide_main_window(self) {
         // SAFETY: no arguments cross the FFI boundary.
         unsafe { wrenflow_shell_hide_main_window() };
+    }
+
+    pub fn apply_window_layout(self, layout: WindowLayout) -> Result<(), ShellError> {
+        // SAFETY: the layout discriminants are shared with the Swift enum.
+        let result = unsafe { wrenflow_shell_apply_window_layout(layout as i32) };
+        status_result(result, "apply window layout")
+    }
+
+    pub fn apply_theme_preference(self, preference: ThemePreference) -> Result<(), ShellError> {
+        let preference = match preference {
+            ThemePreference::System => 0,
+            ThemePreference::Light => 1,
+            ThemePreference::Dark => 2,
+        };
+        // SAFETY: the closed integer discriminants are decoded by Swift on
+        // the main thread and do not borrow across the FFI boundary.
+        let result = unsafe { wrenflow_shell_apply_theme_preference(preference) };
+        status_result(result, "apply app-local theme preference")
     }
 
     pub fn update_tray(self, presentation: &TrayPresentation) -> Result<(), ShellError> {
@@ -159,6 +214,35 @@ impl MacShell {
         // decodes and retains its own accessibility element snapshot.
         let result = unsafe { wrenflow_shell_update_accessibility(json.as_ptr()) };
         status_result(result, "update accessibility tree")
+    }
+
+    /// Start the post-event-tap typed-callback performance driver. The paths
+    /// are exposed only by an already validated two-gate performance request.
+    pub fn start_performance_interaction(
+        self,
+        ready_path: &Path,
+        report_path: &Path,
+    ) -> Result<(), ShellError> {
+        let ready_path = ready_path
+            .to_str()
+            .ok_or_else(|| ShellError("performance ready path is not UTF-8".into()))?;
+        let report_path = report_path
+            .to_str()
+            .ok_or_else(|| ShellError("performance report path is not UTF-8".into()))?;
+        let ready_path = c_string(ready_path, "performance ready path")?;
+        let report_path = c_string(report_path, "performance report path")?;
+        // SAFETY: Swift copies both absolute paths during this synchronous
+        // call; their originating request was validated before runtime start.
+        let result = unsafe {
+            wrenflow_shell_start_performance_interaction(ready_path.as_ptr(), report_path.as_ptr())
+        };
+        status_result(result, "start performance interaction")
+    }
+
+    pub fn observe_performance_paste_dispatch(self) {
+        // SAFETY: the runtime event is projected on the GPUI main thread and
+        // the gated Swift observer copies no borrowed data.
+        unsafe { wrenflow_shell_observe_performance_paste_dispatch() };
     }
 
     pub fn accessibility_node_count(self) -> i32 {
@@ -190,16 +274,7 @@ impl MacShell {
     #[allow(dead_code)]
     pub fn set_launch_at_login(self, enabled: bool) {
         // SAFETY: Rust and Swift use the C ABI boolean representation here.
-        unsafe { wrenflow_shell_set_launch_at_login(enabled) };
-    }
-
-    // Stable shell API consumed by the upcoming update screen.
-    #[allow(dead_code)]
-    pub fn open_url(self, url: &str) -> Result<(), ShellError> {
-        let url = c_string(url, "URL")?;
-        // SAFETY: the pointer is valid during this synchronous call.
-        let result = unsafe { wrenflow_shell_open_url(url.as_ptr()) };
-        status_result(result, "open URL")
+        let _ = unsafe { wrenflow_shell_set_launch_at_login(enabled) };
     }
 
     pub fn show_overlay(self, phase: OverlayPhase, audio_level: f32) {
@@ -273,6 +348,10 @@ fn clear_event_sender() {
     }
 }
 
+extern "C" fn native_diagnostic_callback(code: u8) {
+    wrenflow_runtime::diagnostics::wrenflow_diagnostics_report_shell_failure(code);
+}
+
 extern "C" fn native_event_callback(code: i32, payload: *const c_char) {
     let payload = if payload.is_null() {
         None
@@ -322,12 +401,18 @@ fn decode_event(code: i32, payload: Option<&str>) -> Option<ShellEvent> {
         14 => payload
             .and_then(|value| serde_json::from_str(value).ok())
             .map(ShellEvent::AccessibilityAction),
+        15 => payload
+            .and_then(|value| serde_json::from_str(value).ok())
+            .map(ShellEvent::AccessibilityPreferencesChanged),
         _ => None,
     }
 }
 
 #[allow(dead_code)]
 unsafe extern "C" {
+    fn wrenflow_shell_prepare_process();
+    fn wrenflow_shell_claim_single_instance() -> i32;
+    fn wrenflow_shell_set_diagnostic_callback(callback: Option<extern "C" fn(u8)>);
     fn wrenflow_shell_install(
         title: *const c_char,
         version: *const c_char,
@@ -336,15 +421,21 @@ unsafe extern "C" {
     fn wrenflow_shell_shutdown();
     fn wrenflow_shell_show_main_window();
     fn wrenflow_shell_hide_main_window();
+    fn wrenflow_shell_apply_window_layout(layout: i32) -> i32;
+    fn wrenflow_shell_apply_theme_preference(preference: i32) -> i32;
     fn wrenflow_shell_update_tray(json: *const c_char) -> i32;
     fn wrenflow_shell_update_accessibility(json: *const c_char) -> i32;
+    fn wrenflow_shell_start_performance_interaction(
+        ready_path: *const c_char,
+        report_path: *const c_char,
+    ) -> i32;
+    fn wrenflow_shell_observe_performance_paste_dispatch();
     fn wrenflow_shell_accessibility_node_count() -> i32;
     fn wrenflow_accessibility_validate_snapshot(json: *const c_char) -> i32;
     fn wrenflow_shell_request_microphone();
     fn wrenflow_shell_request_accessibility();
     fn wrenflow_shell_open_permission_settings(kind: i32);
-    fn wrenflow_shell_set_launch_at_login(enabled: bool);
-    fn wrenflow_shell_open_url(url: *const c_char) -> i32;
+    fn wrenflow_shell_set_launch_at_login(enabled: bool) -> i32;
     fn wrenflow_shell_show_overlay(phase: i32, audio_level: f32);
     fn wrenflow_shell_update_overlay_audio(audio_level: f32);
     fn wrenflow_shell_hide_overlay();
@@ -359,8 +450,8 @@ unsafe extern "C" {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_event, AccessibilityActionRequest, LaunchAtLoginObservation, PermissionObservation,
-        PermissionValue, ShellEvent,
+        decode_event, AccessibilityActionRequest, AccessibilityPreferencesObservation,
+        LaunchAtLoginObservation, PermissionObservation, PermissionValue, ShellEvent,
     };
     use std::ffi::CString;
 
@@ -419,17 +510,37 @@ mod tests {
     #[test]
     fn decodes_accessibility_action_event() {
         assert_eq!(
-            decode_event(
-                14,
-                Some(r#"{"id":"save","action":"press","value":null}"#)
-            ),
-            Some(ShellEvent::AccessibilityAction(AccessibilityActionRequest {
-                id: "save".into(),
-                action: "press".into(),
-                value: None,
-            }))
+            decode_event(14, Some(r#"{"id":"save","action":"press","value":null}"#)),
+            Some(ShellEvent::AccessibilityAction(
+                AccessibilityActionRequest {
+                    id: "save".into(),
+                    action: "press".into(),
+                    value: None,
+                }
+            ))
         );
         assert_eq!(decode_event(14, Some("{}")), None);
+    }
+
+    #[test]
+    fn decodes_live_accessibility_display_preferences() {
+        assert_eq!(
+            decode_event(
+                15,
+                Some(
+                    r#"{"increaseContrast":true,"differentiateWithoutColor":true,"reduceMotion":true,"reduceTransparency":true,"textScalePercent":150}"#
+                )
+            ),
+            Some(ShellEvent::AccessibilityPreferencesChanged(
+                AccessibilityPreferencesObservation {
+                    increase_contrast: true,
+                    differentiate_without_color: true,
+                    reduce_motion: true,
+                    reduce_transparency: true,
+                    text_scale_percent: 150,
+                }
+            ))
+        );
     }
 
     #[test]

@@ -18,6 +18,8 @@ private struct WrenflowAccessibilityNodeSnapshot: Decodable {
     let role: String
     let label: String
     let value: String?
+    let minimumValue: Double?
+    let maximumValue: Double?
     let enabled: Bool
     let focused: Bool
     let actions: [String]
@@ -47,7 +49,7 @@ private struct WrenflowAccessibilityActionPayload: Encodable {
 
 private enum WrenflowAccessibilitySchema {
     static let roles: Set<String> = [
-        "window", "button", "switch", "textField", "listBox", "progressIndicator",
+        "window", "button", "switch", "textField", "listBox", "slider", "progressIndicator",
         "dialog", "navigation", "status", "group", "heading", "staticText"
     ]
     static let actions: Set<String> = [
@@ -72,6 +74,7 @@ private enum WrenflowAccessibilitySchema {
               snapshot.nodes.allSatisfy({ node in
                   !node.id.isEmpty && !node.label.isEmpty && roles.contains(node.role) &&
                       node.frame.isValid && Set(node.actions).isSubset(of: actions) &&
+                      validateRoleMetadata(node) &&
                       node.parentID.map { identifiers.contains($0) && $0 != node.id } ?? true
               }),
               snapshot.focusedID.map(identifiers.contains) ?? true else {
@@ -88,6 +91,18 @@ private enum WrenflowAccessibilitySchema {
             }
         }
         return true
+    }
+
+    private static func validateRoleMetadata(_ node: WrenflowAccessibilityNodeSnapshot) -> Bool {
+        guard node.role == "slider" else { return true }
+        guard let minimum = node.minimumValue,
+              let maximum = node.maximumValue,
+              let value = node.value.flatMap(Double.init),
+              minimum.isFinite, maximum.isFinite, value.isFinite,
+              minimum < maximum, (minimum ... maximum).contains(value) else {
+            return false
+        }
+        return Set(["focus", "increment", "decrement", "setValue"]).isSubset(of: node.actions)
     }
 }
 
@@ -180,6 +195,10 @@ private final class WrenflowAccessibilityElement: NSAccessibilityElement {
         setAccessibilityEnabled(snapshot.enabled)
         setAccessibilityFocused(snapshot.focused)
         setAccessibilityValue(accessibilityValue(for: snapshot))
+        setAccessibilityMinValue(snapshot.minimumValue.map { NSNumber(value: $0) })
+        setAccessibilityMaxValue(snapshot.maximumValue.map { NSNumber(value: $0) })
+        setAccessibilityModal(snapshot.role == "dialog")
+        setAccessibilitySubrole(subrole(for: snapshot.role))
 
         let localFrame = NSRect(
             x: snapshot.frame.x,
@@ -211,10 +230,22 @@ private final class WrenflowAccessibilityElement: NSAccessibilityElement {
         case "switch": return .checkBox
         case "textField": return .textField
         case "listBox": return .popUpButton
+        case "slider": return .slider
         case "progressIndicator": return .progressIndicator
-        case "status", "heading", "staticText": return .staticText
-        case "window", "dialog", "navigation", "group": return .group
+        case "heading": return NSAccessibility.Role(rawValue: "AXHeading")
+        case "status", "staticText": return .staticText
+        case "window", "dialog": return .window
+        case "navigation": return .list
+        case "group": return .group
         default: return .group
+        }
+    }
+
+    private func subrole(for role: String) -> NSAccessibility.Subrole? {
+        switch role {
+        case "window": return .standardWindow
+        case "dialog": return .dialog
+        default: return nil
         }
     }
 
@@ -223,7 +254,7 @@ private final class WrenflowAccessibilityElement: NSAccessibilityElement {
         if snapshot.role == "switch" {
             return NSNumber(value: value == "true" || value == "on" || value == "1")
         }
-        if snapshot.role == "progressIndicator", let numericValue = Double(value) {
+        if ["slider", "progressIndicator"].contains(snapshot.role), let numericValue = Double(value) {
             return NSNumber(value: numericValue)
         }
         return value

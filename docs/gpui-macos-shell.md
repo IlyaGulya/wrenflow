@@ -1,15 +1,14 @@
 # Production GPUI macOS shell
 
-Status: production shell. The GPUI bundle is the sole application target; the
-former compatibility UI and transport were removed during the migration
-cutover.
+Status: production shell. The GPUI bundle is the sole application target; no
+compatibility UI or transport is shipped.
 
 ## Ownership boundary
 
 | Owner | Responsibilities |
 | --- | --- |
 | GPUI/Rust | Settings content, navigation state, runtime commands and snapshots |
-| Swift/AppKit | `NSStatusItem`, activation policy, TCC, launch at login, external URLs, window show/hide and native panels |
+| Swift/AppKit | `NSStatusItem`, activation policy, TCC, launch at login, fixed permission-settings deep links, window show/hide and native panels |
 | Runtime | Transport-neutral product state, transcription lifecycle and cooperative shutdown |
 
 `native/wrenflow-gpui/src/shell.rs` is the only Rust FFI surface. It converts
@@ -18,18 +17,27 @@ matching AppKit implementation. `WrenflowOverlayController.swift` preserves the
 non-activating, screenSaver-level SwiftUI/AppKit recording, transcribing and
 actionable error panels behind the typed FFI boundary.
 
-The settings window is created once with `show: false`. The app starts as an
-`LSUIElement` accessory, and the status item opens that same GPUI window after
-switching to regular policy. Closing the red button hides the window and returns
-to accessory policy; it does not tear down GPUI or the runtime. Tray Quit asks
-the runtime to quit, GPUI's `on_app_quit` awaits `RuntimeInstance::shutdown`,
-then the AppKit bridge is released.
+The bundle is a Dock-free `LSUIElement` application. Onboarding or permission
+recovery creates a compact GPUI window automatically. Closing the red button
+removes that window from GPUI's registry and returns to accessory policy while
+preserving `AppModel` and the runtime. The status item, a forced current-line
+duplicate, or `mise run run` enters the typed OpenSettings boundary and creates
+a new route-sized GPUI window; plain Finder reopen is not a windowless-show
+contract. Tray Quit asks the runtime to quit, GPUI's
+`on_app_quit` awaits `RuntimeInstance::shutdown`, then the AppKit bridge is
+released.
 
 Permissions are observed every second because macOS can change TCC state while
-the app is open. Microphone and Accessibility requests/settings URLs are owned
-by the signed AppKit process. Launch at login uses `SMAppService.mainApp` and
-reports both state and errors to the runtime. External release/update URLs are
-opened through `NSWorkspace`, not by GPUI.
+the app is open. Microphone and Accessibility requests plus the two fixed
+System Settings pane links are owned by the signed AppKit process. Launch at
+login uses `SMAppService.mainApp` and reports both state and errors to the
+runtime. The authenticated updater never passes a response, release or download
+URL to AppKit; selection, download and installation remain typed Rust runtime
+operations.
+
+Single-instance redirect, sleep/wake recovery, atomic installed-bundle
+replacement, clean-break data retention and login-item-safe uninstall are
+specified in [gpui-production-lifecycle.md](gpui-production-lifecycle.md).
 
 ## Cargo and platform constraints
 
@@ -63,12 +71,13 @@ Developer ID only for local experiments:
 WRENFLOW_GPUI_SIGN_IDENTITY=- mise run build
 ```
 
-Launch with `open`, never by running the Mach-O directly, so LaunchServices and
-TCC attribute permissions to `me.gulya.wrenflow`:
+Launch with the mise task, never by running the Mach-O directly, so
+LaunchServices and TCC attribute permissions to `me.gulya.wrenflow`. The task
+also sends the exact verified current-line PID the typed show-settings signal:
 
 ```bash
-open build/gpui/Wrenflow.app
-open build/gpui/Wrenflow.app --args --shell-self-test
+mise run run
+mise run run -- --shell-self-test
 ```
 
 The self-test argument opens the normally hidden settings window and shows the
@@ -87,13 +96,11 @@ On 2026-08-09 the production path passed the following checks:
   `@executable_path/../Frameworks`.
 - `mise run run -- --shell-self-test` launched the settings window and
   LaunchServices reported `ApplicationType=Foreground`.
-- A normal `open` launch stayed alive and LaunchServices reported
-  `ApplicationType=UIElement`, proving the menu-bar startup policy.
-- Re-opening that running bundle kept exactly one process and changed
-  LaunchServices to `ApplicationType=Foreground`, proving the reopen callback
-  restores the existing GPUI settings window.
-- A targeted Apple-event Quit shut down the production runtime and shell
-  cleanly.
+- Twenty normal cold launches reported only `ApplicationType=UIElement`, proving
+  a Dock-free menu-bar startup policy.
+- `mise run run` retained exactly one verified PID and the typed SIGUSR2 request
+  recreated a 720×520 settings window over the preserved model/runtime.
+- The bounded exact-bundle quit produced a fresh PID on relaunch.
 
 ## Manual TCC verification
 

@@ -1175,7 +1175,8 @@ mod tests {
     use tempfile::tempdir;
     use tokio::runtime::Builder;
     use wrenflow_domain::model_management::{
-        DownloadProgress, LocalModelState, ModelDownloadListener, ModelInfo, ModelRuntime,
+        DownloadProgress, LocalModelState, ModelDownloadListener, ModelFile, ModelInfo,
+        ModelRuntime,
     };
 
     struct NoopListener;
@@ -1187,27 +1188,85 @@ mod tests {
     }
 
     fn tiny_whisper_model() -> ModelInfo {
+        let asset = |path: &str, sha256: &str, size: u64| ModelFile {
+            path: path.to_string(),
+            sha256: sha256.to_string(),
+            size,
+        };
         ModelInfo {
             id: "whisper-tiny-onnx".to_string(),
             name: "Whisper Tiny".to_string(),
             repo_id: "onnx-community/whisper-tiny-ONNX".to_string(),
+            revision: "ea7c447ab3780e36818661384dea74a8e6b82fc6".to_string(),
             directory_name: "whisper-tiny".to_string(),
             expected_files: vec![
-                "config.json".to_string(),
-                "generation_config.json".to_string(),
-                "preprocessor_config.json".to_string(),
-                "tokenizer.json".to_string(),
-                "tokenizer_config.json".to_string(),
-                "special_tokens_map.json".to_string(),
-                "added_tokens.json".to_string(),
-                "merges.txt".to_string(),
-                "normalizer.json".to_string(),
-                "vocab.json".to_string(),
-                "onnx/encoder_model_int8.onnx".to_string(),
-                "onnx/decoder_model_int8.onnx".to_string(),
-                "onnx/decoder_with_past_model_int8.onnx".to_string(),
+                asset(
+                    "config.json",
+                    "155b5e068d7b21aaf8f555c41f2d043deae41ecaba971354ab696c8d4f1a8478",
+                    1_409,
+                ),
+                asset(
+                    "generation_config.json",
+                    "fc634e902c6a6ea1411c166228a3c1a3ad609de9a39d39ab27824c9797271e20",
+                    3_772,
+                ),
+                asset(
+                    "preprocessor_config.json",
+                    "a6a76d28c93edb273669eb9e0b0636a2bddbb1272c3261e47b7ca6dfdbac1b8d",
+                    339,
+                ),
+                asset(
+                    "tokenizer.json",
+                    "7b469ff15eb7816315aa45eec391f5943d639b9d73d110f5c003df5192fd54e3",
+                    3_930_494,
+                ),
+                asset(
+                    "tokenizer_config.json",
+                    "21a4fc0483c14b87f4e0bbc177a9a357479bfa7c95aaf21ad53d71e9c5afafb9",
+                    282_713,
+                ),
+                asset(
+                    "special_tokens_map.json",
+                    "e67ae3a0aaa99abcd9f187138e12db1f65c16a14761c50ef10eef2c174a7a691",
+                    2_194,
+                ),
+                asset(
+                    "added_tokens.json",
+                    "9715fd2243b6f06a5858b5e32950d2853f73dd5bc201aafcf76f5082a2d8acd1",
+                    34_604,
+                ),
+                asset(
+                    "merges.txt",
+                    "2df2990a395e35e8dfbc7511e08c12d56018d8d04691e0133e5d63b21e154dc6",
+                    493_869,
+                ),
+                asset(
+                    "normalizer.json",
+                    "bf1c507dc8724ca9cf9903640dacfb69dae2f00edee4f21ceba106a7392f26dd",
+                    52_666,
+                ),
+                asset(
+                    "vocab.json",
+                    "50d6a919f0a0601d56a04eb583c780d18553aa388254ba3158eb6a00f13e2c1a",
+                    1_036_584,
+                ),
+                asset(
+                    "onnx/encoder_model_int8.onnx",
+                    "0dcf2b297fcf0b744b36ba44cca118d0b2954d827050625236abf5744b738452",
+                    10_072_838,
+                ),
+                asset(
+                    "onnx/decoder_model_int8.onnx",
+                    "8fe136630a2558c083d63ae2f779fc90caef7bb6d8d1e7c259b6980f5bf2c38f",
+                    109_491_029,
+                ),
+                asset(
+                    "onnx/decoder_with_past_model_int8.onnx",
+                    "8358cff974028a275b1c653a6b3f9f8aa73e823190068f5729a18be714f238f7",
+                    108_264_236,
+                ),
             ],
-            generated_files: vec![],
+            generated_files: vec![".wrenflow-model-ready".to_string()],
             runtime: ModelRuntime::WhisperOnnx,
         }
     }

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "budget_version": "gpui-performance-v1",
+  "metrics": {
+    "idle.cpu.avg_percent": {
+      "value": 2.5,
+      "sample_count": 1800,
+      "evidence": []
+    }
+  }
+}

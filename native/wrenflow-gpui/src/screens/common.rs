@@ -22,6 +22,9 @@ pub enum ScreenIntent {
     ShowClearHistoryConfirmation,
     DismissClearHistoryConfirmation,
     ConfirmClearHistory,
+    ShowResetCurrentDataConfirmation,
+    DismissResetCurrentDataConfirmation,
+    ConfirmResetCurrentData,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -58,6 +61,11 @@ impl ActionPlan {
         self
     }
 
+    pub const fn ghost(mut self) -> Self {
+        self.style = ButtonStyle::Ghost;
+        self
+    }
+
     pub const fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
@@ -74,6 +82,11 @@ pub enum InputKind {
 pub enum ToggleKind {
     SoundEnabled,
     LaunchAtLogin,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SliderKind {
+    MinimumRecordingDuration,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -99,6 +112,16 @@ pub enum ControlPlan {
         label: String,
         value: f32,
         detail: Option<String>,
+    },
+    Slider {
+        id: String,
+        label: String,
+        value: f64,
+        minimum: f64,
+        maximum: f64,
+        step: f64,
+        enabled: bool,
+        kind: SliderKind,
     },
 }
 
@@ -139,6 +162,12 @@ impl TextPlan {
 pub struct CardPlan {
     pub id: String,
     pub title: String,
+    pub title_badge: Option<String>,
+    pub title_inside: bool,
+    pub title_visible: bool,
+    pub dense: bool,
+    pub inline: bool,
+    pub selection: Option<bool>,
     pub lines: Vec<TextPlan>,
     pub controls: Vec<ControlPlan>,
 }
@@ -148,9 +177,47 @@ impl CardPlan {
         Self {
             id: id.into(),
             title: title.into(),
+            title_badge: None,
+            title_inside: false,
+            title_visible: true,
+            dense: false,
+            inline: false,
+            selection: None,
             lines: Vec::new(),
             controls: Vec::new(),
         }
+    }
+
+    pub const fn title_inside(mut self) -> Self {
+        self.title_inside = true;
+        self
+    }
+
+    pub const fn hide_title(mut self) -> Self {
+        self.title_visible = false;
+        self
+    }
+
+    pub const fn dense(mut self) -> Self {
+        self.dense = true;
+        self
+    }
+
+    pub const fn inline(mut self) -> Self {
+        self.inline = true;
+        self.title_inside = true;
+        self
+    }
+
+    pub const fn selectable(mut self, selected: bool) -> Self {
+        self.title_inside = true;
+        self.selection = Some(selected);
+        self
+    }
+
+    pub fn title_badge(mut self, badge: impl Into<String>) -> Self {
+        self.title_badge = Some(badge.into());
+        self
     }
 
     pub fn line(mut self, line: TextPlan) -> Self {
@@ -178,6 +245,8 @@ pub enum BlockPlan {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SectionPlan {
     pub title: Option<String>,
+    pub compact: bool,
+    pub framed: bool,
     pub blocks: Vec<BlockPlan>,
 }
 
@@ -185,6 +254,8 @@ impl SectionPlan {
     pub fn new(title: impl Into<String>, blocks: Vec<BlockPlan>) -> Self {
         Self {
             title: Some(title.into()),
+            compact: false,
+            framed: false,
             blocks,
         }
     }
@@ -192,8 +263,20 @@ impl SectionPlan {
     pub fn untitled(blocks: Vec<BlockPlan>) -> Self {
         Self {
             title: None,
+            compact: false,
+            framed: false,
             blocks,
         }
+    }
+
+    pub const fn compact(mut self) -> Self {
+        self.compact = true;
+        self
+    }
+
+    pub const fn framed(mut self) -> Self {
+        self.framed = true;
+        self
     }
 }
 
@@ -203,6 +286,8 @@ pub struct ScreenPlan {
     pub route: NavigationTarget,
     pub title: String,
     pub subtitle: Option<String>,
+    pub brand_version: Option<String>,
+    pub progress: Option<(usize, usize)>,
     pub sections: Vec<SectionPlan>,
     pub footer_actions: Vec<ActionPlan>,
     pub confirm_clear_history: bool,
@@ -215,6 +300,8 @@ impl ScreenPlan {
             route,
             title: title.into(),
             subtitle: None,
+            brand_version: None,
+            progress: None,
             sections: Vec::new(),
             footer_actions: Vec::new(),
             confirm_clear_history: false,
@@ -227,6 +314,8 @@ impl ScreenPlan {
             route,
             title: title.into(),
             subtitle: None,
+            brand_version: None,
+            progress: None,
             sections: Vec::new(),
             footer_actions: Vec::new(),
             confirm_clear_history: false,

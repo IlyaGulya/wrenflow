@@ -14,6 +14,15 @@ pub const fn default_selected_hotkey_keycode() -> u32 {
     DEFAULT_SELECTED_HOTKEY_KEYCODE
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThemePreference {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
 /// All user-configurable settings. Pure data, no IO.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -25,6 +34,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub last_active_model_id: Option<String>,
     pub sound_enabled: bool,
+    #[serde(default)]
+    pub theme_preference: ThemePreference,
     pub has_completed_setup: bool,
 }
 
@@ -38,6 +49,7 @@ impl Default for AppConfig {
             selected_local_model_id: DEFAULT_SELECTED_LOCAL_MODEL_ID.to_string(),
             last_active_model_id: None,
             sound_enabled: true,
+            theme_preference: ThemePreference::System,
             has_completed_setup: false,
         }
     }
@@ -46,7 +58,7 @@ impl Default for AppConfig {
 #[cfg(test)]
 mod tests {
     use super::{
-        default_selected_hotkey_keycode, AppConfig, DEFAULT_SELECTED_HOTKEY,
+        default_selected_hotkey_keycode, AppConfig, ThemePreference, DEFAULT_SELECTED_HOTKEY,
         DEFAULT_SELECTED_HOTKEY_KEYCODE,
     };
 
@@ -58,5 +70,22 @@ mod tests {
         assert_eq!(default_selected_hotkey_keycode(), 63);
         assert_eq!(DEFAULT_SELECTED_HOTKEY, "63");
         assert_eq!(config.selected_hotkey, "63");
+        assert_eq!(config.theme_preference, ThemePreference::System);
+    }
+
+    #[test]
+    fn theme_preference_uses_stable_current_format_values() {
+        assert_eq!(
+            serde_json::to_string(&ThemePreference::System).unwrap(),
+            "\"system\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ThemePreference::Light).unwrap(),
+            "\"light\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ThemePreference::Dark).unwrap(),
+            "\"dark\""
+        );
     }
 }

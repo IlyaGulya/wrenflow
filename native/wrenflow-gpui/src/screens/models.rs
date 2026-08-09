@@ -10,14 +10,44 @@ use super::common::{
 
 pub(super) fn project(models: &ModelsPresentation) -> ScreenPlan {
     let mut plan = ScreenPlan::application(NavigationTarget::Models, "Models");
-    plan.subtitle = Some(
-        "Select a preferred local transcription model, then download or activate it.".to_string(),
-    );
-    plan.sections = vec![SectionPlan::new(
-        "Local transcription",
-        model_blocks(models),
-    )];
+    plan.sections = vec![
+        SectionPlan::untitled(vec![BlockPlan::Card(model_summary(models))]),
+        SectionPlan::new("Choose model", model_blocks(models))
+            .compact()
+            .framed(),
+    ];
     plan
+}
+
+fn model_summary(models: &ModelsPresentation) -> CardPlan {
+    let mut card = CardPlan::new("models-summary", "Model status").dense();
+    match &models.models {
+        ContentState::Ready(items) => {
+            let preferred = items
+                .iter()
+                .find(|model| model.selected)
+                .map_or("None", |model| model.display_name.as_str());
+            let active = items
+                .iter()
+                .find(|model| model.active)
+                .map_or("None", |model| model.display_name.as_str());
+            let installed = items.iter().filter(|model| model.installed).count();
+            card = card
+                .line(TextPlan::pair("Preferred", preferred))
+                .line(TextPlan::pair("Active", active))
+                .line(TextPlan::pair("Installed", installed.to_string()))
+                .line(TextPlan::muted(
+                    "Selecting a card changes your preferred model. Download, activation, progress, and errors are shown directly inside the selected card.",
+                ));
+        }
+        ContentState::Loading => {
+            card = card.line(TextPlan::muted("Loading model status…"));
+        }
+        ContentState::Empty { detail, .. } | ContentState::Error { detail, .. } => {
+            card = card.line(TextPlan::muted(detail.clone()));
+        }
+    }
+    card
 }
 
 pub(super) fn model_blocks(models: &ModelsPresentation) -> Vec<BlockPlan> {
@@ -64,17 +94,17 @@ pub(super) fn model_blocks(models: &ModelsPresentation) -> Vec<BlockPlan> {
 }
 
 fn model_card(model: &ModelPresentation) -> CardPlan {
-    let title = if model.recommended {
-        format!("{} · Recommended", model.display_name)
-    } else {
-        model.display_name.clone()
-    };
-    let mut card = CardPlan::new(format!("model-{}", model.id), title)
-        .line(TextPlan::body(model.subtitle.clone()))
+    let mut card = CardPlan::new(format!("model-{}", model.id), model.display_name.clone())
+        .dense()
+        .selectable(model.selected)
+        .title_badge(model.runtime_label.clone())
+        .line(TextPlan::muted(model.subtitle.clone()))
         .line(TextPlan::pair("Family", model.family.clone()))
-        .line(TextPlan::pair("Runtime", model.runtime_label.clone()))
         .line(TextPlan::pair("Download", model.download_label.clone()));
 
+    if model.installed {
+        card = card.line(TextPlan::pair("State", "Installed"));
+    }
     if !model.available || !model.runtime_supported {
         let mut line = TextPlan::muted(if !model.available {
             "This model is not available in the current build."
@@ -93,23 +123,43 @@ fn model_card(model: &ModelPresentation) -> CardPlan {
     }
 
     if !model.selected {
-        return card.control(ControlPlan::Actions(vec![ActionPlan::dispatch(
-            format!("select-model-{}", model.id),
-            "Select",
-            AppAction::SelectLocalModel(model.id.clone()),
-        )]));
+        if model.recommended {
+            card = card.line(TextPlan::pair("Recommendation", "Default"));
+        }
+        return card
+            .line(TextPlan::muted(if model.installed {
+                "Installed locally. Select it to make it your preferred model."
+            } else {
+                "Available, but not selected."
+            }))
+            .control(ControlPlan::Actions(vec![ActionPlan::dispatch(
+                format!("select-model-{}", model.id),
+                "Select",
+                AppAction::SelectLocalModel(model.id.clone()),
+            )]));
     }
 
     card = card.line(TextPlan::pair("Preferred", "Selected"));
+    if model.recommended {
+        card = card.line(TextPlan::pair("Recommendation", "Default"));
+    }
+    card = card.line(TextPlan::muted(if model.installed {
+        "Selected as preferred. Use the action below when you want to switch."
+    } else {
+        "Selected as preferred. Download and activate it from this card."
+    }));
     match &model.status {
-        ModelStatusPresentation::NotDownloaded => {
-            card.control(ControlPlan::Actions(vec![ActionPlan::dispatch(
+        ModelStatusPresentation::NotDownloaded => card
+            .line(TextPlan::muted(format!(
+                "{} is not downloaded yet.",
+                model.display_name
+            )))
+            .control(ControlPlan::Actions(vec![ActionPlan::dispatch(
                 format!("download-model-{}", model.id),
-                "Download and activate",
+                "Download & activate",
                 AppAction::ActivateSelectedModel,
             )
-            .primary()]))
-        }
+            .primary()])),
         ModelStatusPresentation::Downloading {
             progress,
             speed_bps,
@@ -207,9 +257,9 @@ mod tests {
         AppAction, CommandStatus, ContentState, ModelPresentation, ModelStatusPresentation,
         ModelsPresentation,
     };
-    use crate::screens::common::{BlockPlan, ControlPlan, ScreenIntent};
+    use crate::screens::common::{BlockPlan, ControlPlan, ScreenIntent, ScreenLayout};
 
-    use super::model_blocks;
+    use super::project;
 
     #[test]
     fn downloading_model_projects_progress_and_cancel_action() {
@@ -236,10 +286,30 @@ mod tests {
             activation: CommandStatus::Idle,
         };
 
-        let blocks = model_blocks(&presentation);
-        let BlockPlan::Card(card) = &blocks[0] else {
+        let plan = project(&presentation);
+        assert_eq!(plan.layout, ScreenLayout::Application);
+        assert_eq!(plan.sections.len(), 2);
+        assert!(plan.sections[0].title.is_none());
+        assert_eq!(plan.sections[1].title.as_deref(), Some("Choose model"));
+        assert!(plan.sections[1].compact);
+        assert!(plan.sections[1].framed);
+        let BlockPlan::Card(summary) = &plan.sections[0].blocks[0] else {
+            panic!("model status should project a source-parity summary card");
+        };
+        assert_eq!(summary.title, "Model status");
+        assert!(!summary.title_inside);
+        let BlockPlan::Card(card) = &plan.sections[1].blocks[0] else {
             panic!("ready model should project a card");
         };
+        assert_eq!(card.selection, Some(true));
+        assert_eq!(card.title_badge.as_deref(), Some("ONNX"));
+        assert_eq!(
+            card.lines
+                .iter()
+                .filter_map(|line| line.label.as_deref())
+                .collect::<Vec<_>>(),
+            vec!["Family", "Download", "Preferred", "Recommendation"]
+        );
         assert!(card.controls.iter().any(|control| matches!(
             control,
             ControlPlan::Progress { value, .. } if (*value - 0.5).abs() < f32::EPSILON
@@ -249,6 +319,45 @@ mod tests {
             ControlPlan::Actions(actions)
                 if actions.iter().any(|action| action.intent
                     == ScreenIntent::Dispatch(AppAction::CancelModelOperation))
+        )));
+    }
+
+    #[test]
+    fn selected_model_keeps_flutter_status_copy_before_its_action() {
+        let presentation = ModelsPresentation {
+            models: ContentState::Ready(vec![ModelPresentation {
+                id: "parakeet".to_string(),
+                display_name: "Parakeet Realtime".to_string(),
+                subtitle: "Fast local dictation".to_string(),
+                download_label: "~400 MB".to_string(),
+                family: "Parakeet".to_string(),
+                runtime_label: "ONNX".to_string(),
+                recommended: true,
+                available: true,
+                runtime_supported: true,
+                installed: false,
+                selected: true,
+                active: false,
+                status: ModelStatusPresentation::NotDownloaded,
+            }]),
+            activation: CommandStatus::Idle,
+        };
+
+        let plan = project(&presentation);
+        let BlockPlan::Card(card) = &plan.sections[1].blocks[0] else {
+            panic!("ready model should project a card");
+        };
+        assert!(card.lines.iter().any(|line| {
+            line.value == "Selected as preferred. Download and activate it from this card."
+        }));
+        assert!(card
+            .lines
+            .iter()
+            .any(|line| line.value == "Parakeet Realtime is not downloaded yet."));
+        assert!(card.controls.iter().any(|control| matches!(
+            control,
+            ControlPlan::Actions(actions)
+                if actions.iter().any(|action| action.label == "Download & activate")
         )));
     }
 }

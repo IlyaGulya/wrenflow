@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use wrenflow_runtime::{RuntimeCommand, SettingsPatch, TranscriptDisposition};
+use wrenflow_runtime::{RuntimeCommand, SettingsPatch, ThemePreference, TranscriptDisposition};
 
 use super::{CommandKey, NavigationTarget};
 
@@ -13,6 +13,7 @@ pub enum AppAction {
     SetSelectedHotkey(String),
     SetSelectedMicrophone(String),
     SetSoundEnabled(bool),
+    SetThemePreference(ThemePreference),
     SetCustomVocabulary(String),
     SetMinimumRecordingDurationMs(f64),
     SetHasCompletedSetup(bool),
@@ -33,7 +34,11 @@ pub enum AppAction {
     OpenAccessibilitySettings,
     SetLaunchAtLogin(bool),
     CheckForUpdates,
-    OpenAvailableUpdate,
+    CheckForBetaUpdates,
+    DownloadAvailableUpdate,
+    InstallReadyUpdate,
+    ExportSupportBundle,
+    ResetCurrentData,
     ClearNotice,
 }
 
@@ -70,7 +75,11 @@ impl AppAction {
             | Self::OpenAccessibilitySettings
             | Self::SetLaunchAtLogin(_)
             | Self::CheckForUpdates
-            | Self::OpenAvailableUpdate
+            | Self::CheckForBetaUpdates
+            | Self::DownloadAvailableUpdate
+            | Self::InstallReadyUpdate
+            | Self::ExportSupportBundle
+            | Self::ResetCurrentData
             | Self::ClearNotice => return Ok(None),
             Self::SelectLocalModel(model_id) => (
                 CommandKey::Settings,
@@ -106,6 +115,10 @@ impl AppAction {
             Self::SetSoundEnabled(enabled) => (
                 CommandKey::Settings,
                 RuntimeCommand::UpdateSettings(SettingsPatch::SoundEnabled(*enabled)),
+            ),
+            Self::SetThemePreference(preference) => (
+                CommandKey::Settings,
+                RuntimeCommand::UpdateSettings(SettingsPatch::ThemePreference(*preference)),
             ),
             Self::SetCustomVocabulary(vocabulary) => (
                 CommandKey::Settings,
@@ -178,5 +191,18 @@ mod tests {
         assert!(AppAction::SetSelectedHotkey("61".to_string())
             .runtime_command()
             .is_ok());
+    }
+
+    #[test]
+    fn theme_preference_crosses_the_typed_settings_boundary() {
+        assert_eq!(
+            AppAction::SetThemePreference(ThemePreference::Dark).runtime_command(),
+            Ok(Some((
+                CommandKey::Settings,
+                RuntimeCommand::UpdateSettings(SettingsPatch::ThemePreference(
+                    ThemePreference::Dark
+                ))
+            )))
+        );
     }
 }

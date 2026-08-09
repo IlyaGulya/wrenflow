@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "fixture_id": "whispercpp-jfk-pcm16-v1",
+  "source": {
+    "repository": "https://github.com/ggml-org/whisper.cpp",
+    "commit": "968eebe77225d25e57a3f981da7c696310f0e881",
+    "path": "samples/jfk.wav"
+  },
+  "sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+  "bytes": 352078,
+  "audio": {
+    "container": "RIFF/WAVE",
+    "encoding": "signed PCM little-endian",
+    "channels": 1,
+    "sample_rate_hz": 16000,
+    "bits_per_sample": 16,
+    "duration_seconds": 11
+  },
+  "use": "Deterministic local-only GPUI performance self-test input; never bundled as user data"
+}

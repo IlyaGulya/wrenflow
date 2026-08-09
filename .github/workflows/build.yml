@@ -30,21 +30,76 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
-    runs-on: macos-latest
+  verify-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: macos-26
     timeout-minutes: 45
     permissions:
-      contents: write
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+      - name: Verify current macOS support contract
+        run: |
+          mise exec -- scripts/verify-macos-support.sh ci current
+          mise exec -- scripts/test-macos-support.sh
+      - name: Check and build untrusted pull request without secrets
+        env:
+          WRENFLOW_GPUI_SIGN_IDENTITY: '-'
+        run: |
+          mise run check
+          mise run build
+      - name: Verify current support bundle
+        run: mise exec -- scripts/verify-macos-support.sh bundle build/gpui/Wrenflow.app
+
+  compatibility-minimum:
+    runs-on: macos-14
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Select Xcode 16.2
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+      - name: Verify minimum macOS support contract
+        run: |
+          mise exec -- scripts/verify-macos-support.sh ci minimum
+          mise exec -- scripts/test-macos-support.sh
+      - name: Test on the minimum supported OS and M1 class
+        run: mise run test
+      - name: Build on the minimum supported OS and M1 class
+        env:
+          WRENFLOW_GPUI_SIGN_IDENTITY: '-'
+        run: mise run build
+      - name: Verify minimum support bundle
+        run: mise exec -- scripts/verify-macos-support.sh bundle build/gpui/Wrenflow.app
+
+  build_release:
+    if: github.event_name != 'pull_request'
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      skip: ${{ steps.skip.outputs.skip }}
+      publish_tag: ${{ steps.version.outputs.tag }}
+      source_commit: ${{ steps.version.outputs.source_commit }}
     env:
       HAS_SIGNING_CERT: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 != '' && secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD != '' && secrets.KEYCHAIN_PASSWORD != '' }}
       HAS_NOTARIZE: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
       RELEASE_TAG: ${{ inputs.release_tag }}
       IS_RELEASE: ${{ inputs.release_tag != '' }}
       IS_BETA: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.release_tag == '' }}
-      IS_PR: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -69,9 +124,19 @@ jobs:
         if: steps.skip.outputs.skip != 'true'
         uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
 
-      - name: Install build tools
+      - name: Install pinned Rust lint components
         if: steps.skip.outputs.skip != 'true'
-        run: brew install create-dmg
+        run: mise run setup-rust-components
+
+      - name: Verify current macOS support contract
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          mise exec -- scripts/verify-macos-support.sh ci current
+          mise exec -- scripts/test-macos-support.sh
+
+      - name: Install checksum-pinned release tools
+        if: steps.skip.outputs.skip != 'true'
+        run: mise run setup-release-tools
 
       - name: Cache Rust
         if: steps.skip.outputs.skip != 'true'
@@ -101,9 +166,16 @@ jobs:
         run: |
           BUILD_NUMBER=$(git rev-list --count HEAD)
           echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+          SOURCE_COMMIT=$(git rev-parse HEAD)
+          echo "source_commit=$SOURCE_COMMIT" >> "$GITHUB_OUTPUT"
 
           if [ "${{ env.IS_RELEASE }}" = "true" ]; then
             TAG="$RELEASE_TAG"
+            TAG_COMMIT=$(git rev-list -n 1 "$TAG")
+            if [ "$TAG_COMMIT" != "$SOURCE_COMMIT" ]; then
+              echo "Release tag $TAG does not resolve to checked-out commit $SOURCE_COMMIT" >&2
+              exit 1
+            fi
           else
             LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
             LATEST_TAG="${LATEST_TAG:-v0.0.0}"
@@ -118,7 +190,7 @@ jobs:
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Require release signing and notarization credentials
-        if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
+        if: steps.skip.outputs.skip != 'true'
         run: |
           if [ "$HAS_SIGNING_CERT" != "true" ]; then
             echo "Published artifacts require the Developer ID certificate, certificate password, and keychain password" >&2
@@ -130,7 +202,7 @@ jobs:
           fi
 
       - name: Import signing certificate
-        if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
+        if: steps.skip.outputs.skip != 'true'
         env:
           CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
@@ -154,37 +226,31 @@ jobs:
           fi
           echo "WRENFLOW_GPUI_SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 
-      - name: Configure ad-hoc signing
-        if: steps.skip.outputs.skip != 'true' && env.IS_PR == 'true'
-        run: echo "WRENFLOW_GPUI_SIGN_IDENTITY=-" >> "$GITHUB_ENV"
-
-      - name: Check and build pull request
-        if: steps.skip.outputs.skip != 'true' && env.IS_PR == 'true'
-        run: |
-          mise run check
-          mise run build
-
       - name: Test and lint publishable build
-        if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
+        if: steps.skip.outputs.skip != 'true'
         run: |
           mise run test
           mise run lint
 
       - name: Build release
-        if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
+        if: steps.skip.outputs.skip != 'true'
         env:
           WRENFLOW_VERSION: ${{ steps.version.outputs.version }}
           WRENFLOW_BUILD_NUMBER: ${{ steps.version.outputs.build_number }}
         run: mise run release
 
+      - name: Verify current support bundle
+        if: steps.skip.outputs.skip != 'true'
+        run: mise exec -- scripts/verify-macos-support.sh bundle build/gpui/Wrenflow.app
+
       - name: Create DMG
-        if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
+        if: steps.skip.outputs.skip != 'true'
         run: |
           APP="build/gpui/Wrenflow.app"
           DMG="build/Wrenflow.dmg"
           mkdir -p build
           rm -f "$DMG"
-          create-dmg \
+          "$PWD/build/tools/create-dmg-1.3.0/create-dmg" \
             --volname "Wrenflow" \
             --window-pos 200 120 \
             --window-size 660 400 \
@@ -200,7 +266,7 @@ jobs:
           fi
 
       - name: Notarize DMG
-        if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
+        if: steps.skip.outputs.skip != 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -208,32 +274,462 @@ jobs:
         run: scripts/notarize-release.sh build/Wrenflow.dmg
 
       - name: Verify signed and notarized artifact
-        if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
+        if: steps.skip.outputs.skip != 'true'
         run: scripts/verify-release-artifact.sh build/gpui/Wrenflow.app build/Wrenflow.dmg --require-notarized
+
+      - name: Finalize provenance and release payload
+        if: steps.skip.outputs.skip != 'true'
+        env:
+          WRENFLOW_RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          WRENFLOW_RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          WRENFLOW_RELEASE_BUILD_NUMBER: ${{ steps.version.outputs.build_number }}
+        run: |
+          mise exec -- scripts/finalize-release-metadata.sh \
+            build/gpui/Wrenflow.app build/Wrenflow.dmg build/supply-chain \
+            build/Wrenflow.dmg.notary-result.json
+          mkdir -p build/release-payload
+          cp build/Wrenflow.dmg build/release-payload/Wrenflow.dmg
+          cp build/supply-chain/Wrenflow.cdx.json build/release-payload/Wrenflow.cdx.json
+          cp build/supply-chain/RustThirdPartyLicenses.txt build/release-payload/RustThirdPartyLicenses.txt
+          cp build/supply-chain/pins.json build/release-payload/pins.json
+          cp build/supply-chain/exceptions.json build/release-payload/exceptions.json
+          cp build/supply-chain/provenance.json build/release-payload/provenance.json
+          cp build/supply-chain/artifact-provenance.json build/release-payload/artifact-provenance.json
+          cp build/supply-chain/release-evidence.json build/release-payload/release-evidence.json
+          cp build/supply-chain/SHA256SUMS build/release-payload/SHA256SUMS
+          (cd build/release-payload && shasum -a 256 -c SHA256SUMS)
+          jq -e '
+            ._type == "https://in-toto.io/Statement/v1" and
+            .predicateType == "https://slsa.dev/provenance/v1" and
+            ([.subject[].name] | sort) == ([
+              "Wrenflow.app/Contents/Frameworks/libWrenflowShell.dylib",
+              "Wrenflow.app/Contents/MacOS/libonnxruntime.dylib",
+              "Wrenflow.app/Contents/MacOS/wrenflow",
+              "Wrenflow.dmg"
+            ] | sort)
+          ' build/release-payload/artifact-provenance.json >/dev/null
+          jq -e '
+            .schema_version == 1 and
+            .source.repository == "IlyaGulya/wrenflow" and
+            (.source.commit | test("^[0-9a-f]{40}$")) and
+            (.workflow.url | startswith("https://github.com/IlyaGulya/wrenflow/actions/runs/")) and
+            .notarization.status == "Accepted" and
+            (.notarization.submission_id | test("^[0-9A-Fa-f-]{36}$")) and
+            .identity.bundle_id == "me.gulya.wrenflow" and
+            .identity.team_id == "T4LV8K9BGV" and
+            (.artifact.sha256 | test("^[0-9a-f]{64}$"))
+          ' build/release-payload/release-evidence.json >/dev/null
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.skip.outputs.skip != 'true'
+        with:
+          name: signed-release-payload
+          path: build/release-payload/
+          if-no-files-found: error
+          retention-days: 21
 
       - name: Clean up keychain
         if: always()
         run: security delete-keychain build.keychain 2>/dev/null || true
 
-      # Release: upload DMG to existing GitHub Release
-      - name: Upload DMG to release
-        if: env.IS_RELEASE == 'true'
-        run: mv build/Wrenflow.dmg Wrenflow.dmg
-      - uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
+  performance_cold:
+    needs: build_release
+    if: needs.build_release.outputs.skip != 'true'
+    runs-on: macos-14
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5]
+    env:
+      SOURCE_COMMIT: ${{ needs.build_release.outputs.source_commit }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.build_release.outputs.source_commit }}
+          persist-credentials: false
+
+      - name: Select Xcode 16.2
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: signed-release-payload
+          path: ${{ runner.temp }}/signed-release-payload
+
+      - name: Verify and extract the exact signed cold-start candidate
+        run: |
+          PAYLOAD="$RUNNER_TEMP/signed-release-payload"
+          (cd "$PAYLOAD" && shasum -a 256 -c SHA256SUMS)
+          DMG_SHA256=$(shasum -a 256 "$PAYLOAD/Wrenflow.dmg" | awk '{print $1}')
+          jq -e --arg source "$SOURCE_COMMIT" --arg digest "$DMG_SHA256" '
+            .schema_version == 1 and
+            .source.commit == $source and
+            .notarization.status == "Accepted" and
+            .identity.bundle_id == "me.gulya.wrenflow" and
+            .identity.team_id == "T4LV8K9BGV" and
+            .artifact == {name: "Wrenflow.dmg", sha256: $digest}
+          ' "$PAYLOAD/release-evidence.json" >/dev/null
+          jq -e --arg digest "$DMG_SHA256" '
+            ._type == "https://in-toto.io/Statement/v1" and
+            .predicateType == "https://slsa.dev/provenance/v1" and
+            any(.subject[]; .name == "Wrenflow.dmg" and .digest.sha256 == $digest)
+          ' "$PAYLOAD/artifact-provenance.json" >/dev/null
+
+          COLD_ROOT=$(mktemp -d "$RUNNER_TEMP/wrenflow-cold-${{ matrix.shard }}.XXXXXX")
+          MOUNT="$COLD_ROOT/mount"
+          APP="$COLD_ROOT/candidate/Wrenflow.app"
+          mkdir -p "$MOUNT" "$(dirname "$APP")"
+          trap 'hdiutil detach "$MOUNT" >/dev/null 2>&1 || true' EXIT
+          hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" "$PAYLOAD/Wrenflow.dmg"
+          ditto "$MOUNT/Wrenflow.app" "$APP"
+          hdiutil detach "$MOUNT"
+          trap - EXIT
+
+          mise exec -- scripts/verify-release-artifact.sh \
+            "$APP" "$PAYLOAD/Wrenflow.dmg" --require-notarized
+          [[ "$(git rev-parse HEAD)" == "$SOURCE_COMMIT" ]]
+          [[ -z "$(git status --porcelain)" ]]
+
+          {
+            echo "PERFORMANCE_APP=$APP"
+            echo "PERFORMANCE_RESULT=$COLD_ROOT/constrained-cold-evidence.json"
+            echo "PERFORMANCE_CANDIDATE_ID=${SOURCE_COMMIT}-${DMG_SHA256}"
+          } >> "$GITHUB_ENV"
+
+      - name: Record one genuine cold start on the fresh constrained runner
+        run: |
+          mise run performance-preflight -- \
+            --output "$RUNNER_TEMP/constrained-cold-preflight-${{ matrix.shard }}.json" \
+            --expect-github-macos14
+          mise exec -- python3 scripts/perf/gpui-performance.py launch \
+            --app "$PERFORMANCE_APP" \
+            --mode cold \
+            --iterations 1 \
+            --cold-confirmed \
+            --fresh-runner-id "gh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-cold-${{ matrix.shard }}" \
+            --output "$PERFORMANCE_RESULT"
+          mise exec -- python3 scripts/perf/gpui-performance.py sanitize \
+            --result "$PERFORMANCE_RESULT"
+          mise exec -- python3 scripts/perf/gpui-performance.py seal \
+            --result "$PERFORMANCE_RESULT" \
+            --candidate-id "$PERFORMANCE_CANDIDATE_ID"
+          mise exec -- jq -e '
+            .sanitized == true and .sealed == true and
+            (.phases | keys) == ["launch_cold"] and
+            (.phases.launch_cold.samples | length) == 1 and
+            .metrics["launch.cold.p95_ms"].sample_count == 1 and
+            (.candidate | has("app_path") | not) and
+            (.candidate | has("executable_path") | not)
+          ' "$PERFORMANCE_RESULT" >/dev/null
+
+      - name: Upload the sealed cold-start shard
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: constrained-cold-${{ needs.build_release.outputs.source_commit }}-${{ matrix.shard }}
+          path: ${{ env.PERFORMANCE_RESULT }}
+          if-no-files-found: error
+          retention-days: 21
+
+  performance_constrained:
+    needs: [build_release, performance_cold]
+    if: needs.build_release.outputs.skip != 'true'
+    runs-on: macos-14
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      SOURCE_COMMIT: ${{ needs.build_release.outputs.source_commit }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.build_release.outputs.source_commit }}
+          persist-credentials: false
+
+      - name: Select Xcode 16.2
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: signed-release-payload
+          path: ${{ runner.temp }}/signed-release-payload
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: constrained-cold-${{ needs.build_release.outputs.source_commit }}-*
+          path: ${{ runner.temp }}/cold-shards
+
+      - name: Verify and extract the exact signed candidate
+        run: |
+          PAYLOAD="$RUNNER_TEMP/signed-release-payload"
+          (cd "$PAYLOAD" && shasum -a 256 -c SHA256SUMS)
+          DMG_SHA256=$(shasum -a 256 "$PAYLOAD/Wrenflow.dmg" | awk '{print $1}')
+          jq -e --arg source "$SOURCE_COMMIT" --arg digest "$DMG_SHA256" '
+            .schema_version == 1 and
+            .source.commit == $source and
+            .notarization.status == "Accepted" and
+            .identity.bundle_id == "me.gulya.wrenflow" and
+            .identity.team_id == "T4LV8K9BGV" and
+            .artifact == {name: "Wrenflow.dmg", sha256: $digest}
+          ' "$PAYLOAD/release-evidence.json" >/dev/null
+          jq -e --arg digest "$DMG_SHA256" '
+            ._type == "https://in-toto.io/Statement/v1" and
+            .predicateType == "https://slsa.dev/provenance/v1" and
+            any(.subject[]; .name == "Wrenflow.dmg" and .digest.sha256 == $digest)
+          ' "$PAYLOAD/artifact-provenance.json" >/dev/null
+
+          PERFORMANCE_ROOT=$(mktemp -d "$RUNNER_TEMP/wrenflow-constrained.XXXXXX")
+          MOUNT="$PERFORMANCE_ROOT/mount"
+          APP="$PERFORMANCE_ROOT/candidate/Wrenflow.app"
+          mkdir -p "$MOUNT" "$(dirname "$APP")"
+          trap 'hdiutil detach "$MOUNT" >/dev/null 2>&1 || true' EXIT
+          hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" "$PAYLOAD/Wrenflow.dmg"
+          ditto "$MOUNT/Wrenflow.app" "$APP"
+          hdiutil detach "$MOUNT"
+          trap - EXIT
+
+          mise exec -- scripts/verify-release-artifact.sh \
+            "$APP" "$PAYLOAD/Wrenflow.dmg" --require-notarized
+          [[ "$(git rev-parse HEAD)" == "$SOURCE_COMMIT" ]]
+          [[ -z "$(git status --porcelain)" ]]
+
+          {
+            echo "PERFORMANCE_ROOT=$PERFORMANCE_ROOT"
+            echo "PERFORMANCE_APP=$APP"
+            echo "PERFORMANCE_FIXTURE=$PERFORMANCE_ROOT/transcription-fixture.wav"
+            echo "PERFORMANCE_DATA_ROOT=$PERFORMANCE_ROOT/self-test-data"
+            echo "PERFORMANCE_RESULT=$PERFORMANCE_ROOT/constrained-evidence.json"
+            echo "PERFORMANCE_REPORT=$PERFORMANCE_ROOT/constrained-verification.json"
+            echo "PERFORMANCE_CANDIDATE_ID=${SOURCE_COMMIT}-${DMG_SHA256}"
+          } >> "$GITHUB_ENV"
+
+      - name: Confirm constrained runner and download the immutable fixture
+        run: |
+          mise run performance-preflight -- \
+            --output "$PERFORMANCE_ROOT/preflight.json" \
+            --expect-github-macos14
+          mise exec -- scripts/perf/download-transcription-fixture.sh "$PERFORMANCE_FIXTURE"
+          mkdir "$PERFORMANCE_DATA_ROOT"
+
+      - name: Measure warm LaunchServices startup
+        run: |
+          mise exec -- python3 scripts/perf/gpui-performance.py launch \
+            --app "$PERFORMANCE_APP" \
+            --mode warm \
+            --iterations 10 \
+            --settle-seconds 1 \
+            --output "$PERFORMANCE_RESULT"
+
+      - name: Measure thirty-minute idle residency
+        run: |
+          mise exec -- python3 scripts/perf/gpui-performance.py launch \
+            --app "$PERFORMANCE_APP" \
+            --mode warm \
+            --iterations 1 \
+            --leave-running \
+            --output "$PERFORMANCE_RESULT"
+          mise run performance-sample -- \
+            --app "$PERFORMANCE_APP" \
+            --phase idle \
+            --duration 1800 \
+            --interval 1 \
+            --fd-interval 5 \
+            --output "$PERFORMANCE_RESULT"
+
+          PID=$(/usr/bin/pgrep -x wrenflow || true)
+          [[ "$PID" =~ ^[0-9]+$ ]]
+          [[ "$(/bin/ps -p "$PID" -o comm=)" == "$PERFORMANCE_APP/Contents/MacOS/wrenflow" ]]
+          /bin/kill -USR1 "$PID"
+          for _ in {1..150}; do
+            /bin/kill -0 "$PID" 2>/dev/null || break
+            /bin/sleep 0.1
+          done
+          if /bin/kill -0 "$PID" 2>/dev/null; then
+            echo "Exact candidate ignored typed SIGUSR1 shutdown after idle sampling" >&2
+            exit 1
+          fi
+
+      - name: Run the signed-app production workload
+        run: |
+          mise run performance-self-test -- \
+            --app "$PERFORMANCE_APP" \
+            --fixture "$PERFORMANCE_FIXTURE" \
+            --data-root "$PERFORMANCE_DATA_ROOT" \
+            --output "$PERFORMANCE_RESULT" \
+            --timeout 2400
+
+      - name: Sanitize, seal, and enforce constrained budgets
+        run: |
+          COLD_SHARDS=("$RUNNER_TEMP"/cold-shards/*/constrained-cold-evidence.json)
+          [[ ${#COLD_SHARDS[@]} -eq 5 ]]
+          mise exec -- python3 scripts/perf/gpui-performance.py merge-cold \
+            --app "$PERFORMANCE_APP" \
+            --result "$PERFORMANCE_RESULT" \
+            --candidate-id "$PERFORMANCE_CANDIDATE_ID" \
+            --shard "${COLD_SHARDS[0]}" \
+            --shard "${COLD_SHARDS[1]}" \
+            --shard "${COLD_SHARDS[2]}" \
+            --shard "${COLD_SHARDS[3]}" \
+            --shard "${COLD_SHARDS[4]}"
+          mise exec -- python3 scripts/perf/gpui-performance.py sanitize \
+            --result "$PERFORMANCE_RESULT"
+          mise exec -- python3 scripts/perf/gpui-performance.py seal \
+            --result "$PERFORMANCE_RESULT" \
+            --candidate-id "$PERFORMANCE_CANDIDATE_ID"
+          mise run performance-verify -- \
+            --profile constrained \
+            --result "$PERFORMANCE_RESULT" \
+            --report "$PERFORMANCE_REPORT"
+          mise exec -- jq -e '
+            .sanitized == true and .sealed == true and
+            (.candidate | has("app_path") | not) and
+            (.candidate | has("executable_path") | not)
+          ' "$PERFORMANCE_RESULT" >/dev/null
+          mise exec -- jq -e '.profile == "constrained" and .passed == true' \
+            "$PERFORMANCE_REPORT" >/dev/null
+
+      - name: Upload sanitized constrained evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: constrained-performance-${{ needs.build_release.outputs.source_commit }}
+          path: |
+            ${{ env.PERFORMANCE_RESULT }}
+            ${{ env.PERFORMANCE_REPORT }}
+          if-no-files-found: error
+          retention-days: 21
+
+  publish:
+    needs: [build_release, performance_constrained]
+    if: needs.build_release.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      IS_RELEASE: ${{ inputs.release_tag != '' }}
+      PUBLISH_TAG: ${{ needs.build_release.outputs.publish_tag }}
+      SOURCE_COMMIT: ${{ needs.build_release.outputs.source_commit }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         if: env.IS_RELEASE == 'true'
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          files: Wrenflow.dmg
+          ref: ${{ needs.build_release.outputs.source_commit }}
+          fetch-depth: 0
+          persist-credentials: false
 
-      # Beta: create pre-release with DMG
-      - name: Create beta pre-release
-        if: steps.skip.outputs.skip != 'true' && env.IS_BETA == 'true'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: signed-release-payload
+          path: release-payload
+
+      - name: Refuse to overwrite staged or published candidate bytes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ steps.version.outputs.tag }}"
-          mv build/Wrenflow.dmg Wrenflow.dmg
-          gh release create "$TAG" Wrenflow.dmg \
-            --title "Wrenflow $TAG" \
+          if [ "$IS_RELEASE" = "true" ]; then
+            if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Stable release tag is not canonical SemVer: $RELEASE_TAG" >&2
+              exit 1
+            fi
+            TAG_COMMIT=$(git rev-list -n 1 "$RELEASE_TAG")
+            if [ "$TAG_COMMIT" != "$SOURCE_COMMIT" ]; then
+              echo "Stable release tag drifted from the built source commit" >&2
+              exit 1
+            fi
+            gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --json tagName,isDraft,isPrerelease,assets > stable-release-before.json
+            if ! jq -e --arg tag "$RELEASE_TAG" '
+              .tagName == $tag and .isDraft == true and .isPrerelease == false and
+              (.assets | length) == 0
+            ' stable-release-before.json >/dev/null; then
+              echo "Stable release must be an empty release-please draft; refusing mutation" >&2
+              exit 1
+            fi
+          elif gh release view "$PUBLISH_TAG" >/dev/null 2>&1; then
+            echo "Beta release $PUBLISH_TAG already exists; refusing replacement" >&2
+            exit 1
+          fi
+
+      - name: Upload exact notarized assets to release-please draft
+        if: env.IS_RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$RELEASE_TAG" release-payload/* \
+            --repo "$GITHUB_REPOSITORY"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease,assets > stable-release-after.json
+          jq -e --arg tag "$RELEASE_TAG" '
+            .tagName == $tag and .isDraft == true and .isPrerelease == false and
+            ([.assets[].name] | sort) == ([
+              "RustThirdPartyLicenses.txt",
+              "SHA256SUMS",
+              "Wrenflow.cdx.json",
+              "Wrenflow.dmg",
+              "artifact-provenance.json",
+              "exceptions.json",
+              "pins.json",
+              "provenance.json",
+              "release-evidence.json"
+            ] | sort)
+          ' stable-release-after.json >/dev/null
+
+      - name: Create beta pre-release
+        if: env.IS_RELEASE != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$PUBLISH_TAG" release-payload/* \
+            --target "$SOURCE_COMMIT" \
+            --title "Wrenflow $PUBLISH_TAG" \
             --prerelease \
             --notes "Beta build from \`main\`. [Latest stable release](https://github.com/${{ github.repository }}/releases/latest)."
+
+  verify_staged_or_published:
+    needs: [build_release, publish]
+    if: needs.build_release.outputs.skip != 'true'
+    runs-on: macos-26
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      PUBLISH_TAG: ${{ needs.build_release.outputs.publish_tag }}
+      SOURCE_COMMIT: ${{ needs.build_release.outputs.source_commit }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.build_release.outputs.source_commit }}
+          persist-credentials: false
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+      - name: Re-download and verify immutable staged or published candidate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p downloaded
+          gh release download "$PUBLISH_TAG" --repo "$GITHUB_REPOSITORY" --dir downloaded
+          (cd downloaded && shasum -a 256 -c SHA256SUMS)
+          SOURCE=$(jq -r '.source.commit' downloaded/release-evidence.json)
+          EVIDENCE_SHA=$(jq -r '.artifact.sha256' downloaded/release-evidence.json)
+          ACTUAL_SHA=$(shasum -a 256 downloaded/Wrenflow.dmg | awk '{print $1}')
+          if [ "$SOURCE" != "$SOURCE_COMMIT" ] || [ "$EVIDENCE_SHA" != "$ACTUAL_SHA" ]; then
+            echo "Staged or published candidate does not match source/evidence" >&2
+            exit 1
+          fi
+          VERIFY_ROOT=$(mktemp -d /tmp/wrenflow-published.XXXXXX)
+          MOUNT="$VERIFY_ROOT/mount"
+          mkdir "$MOUNT"
+          trap 'hdiutil detach "$MOUNT" >/dev/null 2>&1 || true; rm -rf "$VERIFY_ROOT"' EXIT
+          hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" downloaded/Wrenflow.dmg
+          ditto "$MOUNT/Wrenflow.app" "$VERIFY_ROOT/Wrenflow.app"
+          hdiutil detach "$MOUNT"
+          scripts/verify-release-artifact.sh \
+            "$VERIFY_ROOT/Wrenflow.app" downloaded/Wrenflow.dmg --require-notarized

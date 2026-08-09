@@ -1,8 +1,8 @@
 use gpui::{
-    actions, div, point, prelude::FluentBuilder as _, px, AnyElement, App, BoxShadow, Context,
-    Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding,
-    ParentElement, Render, RenderOnce, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Window,
+    actions, div, prelude::FluentBuilder as _, px, svg, AnyElement, App, Context, Entity,
+    EventEmitter, FocusHandle, Focusable, FontWeight, InteractiveElement as _, IntoElement,
+    KeyBinding, ParentElement, Render, RenderOnce, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Window,
 };
 use gpui_component::{
     input::{Input, InputState},
@@ -34,6 +34,7 @@ pub enum ButtonStyle {
     Secondary,
     Danger,
     Ghost,
+    Selected,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,27 +126,39 @@ impl Render for AccessibleButton {
         let focused = self.focus_handle.is_focused(window);
         let (background, foreground, border) = match self.style {
             ButtonStyle::Primary => (
-                tokens.colors.accent,
-                tokens.colors.accent_foreground,
-                tokens.colors.accent,
+                tokens.colors.foreground,
+                tokens.colors.surface,
+                tokens.colors.foreground,
             ),
             ButtonStyle::Secondary => (
-                tokens.colors.surface,
+                tokens.colors.button_surface,
                 tokens.colors.foreground,
                 tokens.colors.border,
             ),
             ButtonStyle::Danger => (
+                tokens.colors.surface.opacity(0.0),
                 tokens.colors.danger,
-                tokens.colors.accent_foreground,
-                tokens.colors.danger,
+                tokens.colors.surface.opacity(0.0),
             ),
             ButtonStyle::Ghost => (
-                tokens.colors.background,
+                tokens.colors.surface.opacity(0.0),
+                tokens.colors.muted_foreground,
+                tokens.colors.surface.opacity(0.0),
+            ),
+            ButtonStyle::Selected => (
+                tokens.colors.selected_surface,
                 tokens.colors.foreground,
-                tokens.colors.background,
+                tokens.colors.surface.opacity(0.0),
             ),
         };
-        let border = if focused {
+        let navigation_icon = navigation_icon(self.id.as_ref());
+        let action_icon = history_action_icon(self.id.as_ref(), self.label.as_ref());
+        let is_navigation = navigation_icon.is_some();
+        let is_icon_only = action_icon.is_some();
+        let is_hotkey_preset = self.id.starts_with("hotkey-preset-");
+        let is_microphone = self.id.starts_with("select-microphone-");
+        let show_focus_ring = focused && !(is_navigation && self.style == ButtonStyle::Selected);
+        let border = if show_focus_ring {
             tokens.colors.focus_ring
         } else {
             border
@@ -160,29 +173,142 @@ impl Render for AccessibleButton {
             .flex()
             .items_center()
             .justify_center()
-            .min_h(px(32.))
-            .px(tokens.spacing.md)
-            .py(tokens.spacing.xs)
-            .rounded(tokens.controls.radius)
-            .border(tokens.controls.focus_width)
+            .when(is_navigation, |this| {
+                this.w_full()
+                    .justify_start()
+                    .gap(tokens.spacing.sm)
+                    .px(px(10.))
+            })
+            .when(is_icon_only, |this| {
+                this.size(px(20.))
+                    .min_h(px(20.))
+                    .p_0()
+                    .border_color(tokens.colors.surface.opacity(0.0))
+                    .bg(tokens.colors.surface.opacity(0.0))
+            })
+            .min_h(px(26.))
+            .px(tokens.spacing.lg)
+            .py(px(5.))
+            .rounded(tokens.controls.button_radius)
+            .border(if show_focus_ring {
+                tokens.controls.focus_width
+            } else {
+                tokens.controls.border_width
+            })
             .border_color(border)
             .bg(background)
-            .text_color(foreground)
-            .when(focused, |this| {
-                this.shadow(vec![BoxShadow {
-                    color: tokens.colors.foreground,
-                    offset: point(px(0.0), px(0.0)),
-                    blur_radius: px(0.0),
-                    spread_radius: tokens.controls.focus_width,
-                }])
+            .when(is_hotkey_preset, |this| {
+                this.w_full()
+                    .justify_start()
+                    .gap(tokens.spacing.md)
+                    .min_h(px(28.))
+                    .px(px(10.))
+                    .py(px(3.))
+                    .rounded(px(7.))
+                    .border_color(tokens.colors.surface.opacity(0.0))
+                    .bg(if self.style == ButtonStyle::Selected {
+                        tokens.colors.subtle_surface
+                    } else {
+                        tokens.colors.surface.opacity(0.0)
+                    })
             })
+            .when(is_microphone, |this| {
+                this.w_full()
+                    .justify_start()
+                    .gap(tokens.spacing.md)
+                    .min_h(px(28.))
+                    .px(px(10.))
+                    .py(px(3.))
+                    .rounded(px(7.))
+                    .border_color(tokens.colors.surface.opacity(0.0))
+                    .bg(if self.style == ButtonStyle::Selected {
+                        tokens.colors.subtle_surface
+                    } else {
+                        tokens.colors.surface.opacity(0.0)
+                    })
+            })
+            .text_size(tokens.typography.body)
+            .text_color(foreground)
             .when(!disabled, |this| {
                 this.cursor_pointer()
                     .on_action(cx.listener(Self::on_press))
                     .on_click(cx.listener(|this, _, _, cx| this.press(cx)))
             })
             .when(disabled, |this| this.opacity(0.5))
-            .child(self.label.clone())
+            .when_some(navigation_icon, |this, icon| {
+                this.child(svg().path(icon).size(px(11.)).text_color(
+                    if self.style == ButtonStyle::Selected {
+                        tokens.colors.foreground
+                    } else {
+                        tokens.colors.tertiary_foreground
+                    },
+                ))
+            })
+            .when_some(action_icon, |this, icon| {
+                this.child(
+                    svg()
+                        .path(icon)
+                        .size(px(12.))
+                        .text_color(tokens.colors.tertiary_foreground),
+                )
+            })
+            .when(is_hotkey_preset, |this| {
+                this.child(if self.style == ButtonStyle::Selected {
+                    svg()
+                        .path("icons/circle-check.svg")
+                        .size(px(13.))
+                        .text_color(tokens.colors.foreground)
+                        .into_any_element()
+                } else {
+                    div()
+                        .size(px(13.))
+                        .rounded(px(13.))
+                        .border(tokens.controls.border_width)
+                        .border_color(tokens.colors.tertiary_foreground)
+                        .into_any_element()
+                })
+            })
+            .when(is_microphone, |this| {
+                this.child(if self.style == ButtonStyle::Selected {
+                    svg()
+                        .path("icons/circle-check.svg")
+                        .size(px(13.))
+                        .text_color(tokens.colors.foreground)
+                        .into_any_element()
+                } else {
+                    div()
+                        .size(px(13.))
+                        .rounded(px(13.))
+                        .border(tokens.controls.border_width)
+                        .border_color(tokens.colors.tertiary_foreground)
+                        .into_any_element()
+                })
+            })
+            .when(!is_icon_only, |this| this.child(self.label.clone()))
+    }
+}
+
+fn navigation_icon(id: &str) -> Option<&'static str> {
+    match id {
+        "nav-general" => Some("icons/settings.svg"),
+        "nav-models" => Some("icons/bot.svg"),
+        "nav-history" => Some("icons/calendar.svg"),
+        "nav-about" => Some("icons/info.svg"),
+        _ => None,
+    }
+}
+
+fn history_action_icon(id: &str, label: &str) -> Option<&'static str> {
+    if id.starts_with("delete-history-") {
+        Some("icons/close.svg")
+    } else if id.starts_with("toggle-history-") {
+        Some(if label == "Hide details" {
+            "icons/chevron-up.svg"
+        } else {
+            "icons/chevron-down.svg"
+        })
+    } else {
+        None
     }
 }
 
@@ -287,7 +413,7 @@ impl Render for AccessibleSwitch {
         let border_color = if focused {
             tokens.colors.focus_ring
         } else {
-            tokens.colors.border
+            tokens.colors.surface.opacity(0.0)
         };
         let focus_handle = self.focus_handle.clone().tab_stop(!self.disabled);
         let disabled = self.disabled;
@@ -298,20 +424,19 @@ impl Render for AccessibleSwitch {
             .track_focus(&focus_handle)
             .flex()
             .items_center()
-            .gap(tokens.spacing.sm)
-            .p(tokens.spacing.xs)
-            .rounded(tokens.controls.radius)
-            .border(tokens.controls.focus_width)
-            .border_color(border_color)
-            .text_color(tokens.colors.foreground)
-            .when(focused, |this| {
-                this.shadow(vec![BoxShadow {
-                    color: tokens.colors.foreground,
-                    offset: point(px(0.0), px(0.0)),
-                    blur_radius: px(0.0),
-                    spread_radius: tokens.controls.focus_width,
-                }])
+            .justify_between()
+            .w_full()
+            .min_h(tokens.controls.switch_height)
+            .gap(tokens.spacing.lg)
+            .rounded(tokens.controls.button_radius)
+            .border(if focused {
+                tokens.controls.focus_width
+            } else {
+                tokens.controls.border_width
             })
+            .border_color(border_color)
+            .text_size(tokens.typography.body)
+            .text_color(tokens.colors.foreground)
             .when(!disabled, |this| {
                 this.cursor_pointer()
                     .on_action(cx.listener(Self::on_activate))
@@ -326,14 +451,14 @@ impl Render for AccessibleSwitch {
                     .when(self.checked, |this| this.justify_end())
                     .w(tokens.controls.switch_width)
                     .h(tokens.controls.switch_height)
-                    .p(px(3.))
+                    .p(px(2.))
                     .rounded(tokens.controls.switch_height)
                     .bg(track_color)
                     .child(
                         div()
                             .size(tokens.controls.switch_thumb)
                             .rounded(tokens.controls.switch_thumb)
-                            .bg(tokens.colors.accent_foreground),
+                            .bg(tokens.colors.surface),
                     ),
             )
     }
@@ -406,6 +531,12 @@ pub fn progress_semantics(
 #[derive(IntoElement)]
 pub struct Card {
     title: Option<SharedString>,
+    title_badge: Option<SharedString>,
+    title_inside: bool,
+    title_visible: bool,
+    dense: bool,
+    inline: bool,
+    selection: Option<bool>,
     children: Vec<AnyElement>,
 }
 
@@ -419,12 +550,48 @@ impl Card {
     pub fn new() -> Self {
         Self {
             title: None,
+            title_badge: None,
+            title_inside: false,
+            title_visible: true,
+            dense: false,
+            inline: false,
+            selection: None,
             children: Vec::new(),
         }
     }
 
     pub fn title(mut self, title: impl Into<SharedString>) -> Self {
         self.title = Some(title.into());
+        self
+    }
+
+    pub fn title_badge(mut self, title_badge: Option<impl Into<SharedString>>) -> Self {
+        self.title_badge = title_badge.map(Into::into);
+        self
+    }
+
+    pub const fn title_inside(mut self, title_inside: bool) -> Self {
+        self.title_inside = title_inside;
+        self
+    }
+
+    pub const fn title_visible(mut self, title_visible: bool) -> Self {
+        self.title_visible = title_visible;
+        self
+    }
+
+    pub const fn dense(mut self, dense: bool) -> Self {
+        self.dense = dense;
+        self
+    }
+
+    pub const fn inline(mut self, inline: bool) -> Self {
+        self.inline = inline;
+        self
+    }
+
+    pub const fn selection(mut self, selection: Option<bool>) -> Self {
+        self.selection = selection;
         self
     }
 }
@@ -438,20 +605,103 @@ impl ParentElement for Card {
 impl RenderOnce for Card {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = WrenflowTheme::current(cx).tokens;
+        let selection = self.selection;
+        let selected = selection == Some(true);
+        let dense = self.dense;
+        let inline = self.inline;
+        let visible_title = self.title_visible.then_some(self.title).flatten();
+        let inside_title = self.title_inside.then(|| visible_title.clone()).flatten();
+        let outside_title = (!self.title_inside).then_some(visible_title).flatten();
+        let title_badge = self.title_badge;
+        let surface = div()
+            .flex()
+            .when(!inline, |this| this.flex_col())
+            .when(inline, |this| this.items_center())
+            .w_full()
+            .min_w(px(0.0))
+            .gap(if dense {
+                tokens.spacing.sm
+            } else {
+                tokens.spacing.md
+            })
+            .p(tokens.spacing.lg)
+            .rounded(tokens.controls.radius)
+            .border(tokens.controls.border_width)
+            .border_color(if selected {
+                tokens.colors.selected_border
+            } else {
+                tokens.colors.border
+            })
+            .bg(if selected {
+                tokens.colors.subtle_surface
+            } else {
+                tokens.colors.surface
+            })
+            .when_some(inside_title, |this, title| {
+                this.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .when(inline, |this| this.flex_1().min_w(px(0.)))
+                        .gap(px(10.))
+                        .when_some(selection, |this, selected| {
+                            this.child(if selected {
+                                svg()
+                                    .path("icons/circle-check.svg")
+                                    .size(px(15.))
+                                    .text_color(tokens.colors.accent)
+                                    .into_any_element()
+                            } else {
+                                div()
+                                    .size(px(15.))
+                                    .rounded(px(15.))
+                                    .border(tokens.controls.border_width)
+                                    .border_color(tokens.colors.tertiary_foreground)
+                                    .into_any_element()
+                            })
+                        })
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .text_size(tokens.typography.body)
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(title),
+                        )
+                        .when_some(title_badge, |this, badge| {
+                            this.child(
+                                div()
+                                    .px(tokens.spacing.sm)
+                                    .py(tokens.spacing.xxs)
+                                    .flex_none()
+                                    .rounded(px(8.))
+                                    .border(tokens.controls.border_width)
+                                    .border_color(tokens.colors.border)
+                                    .font_family("Menlo")
+                                    .text_size(tokens.typography.meta)
+                                    .text_color(tokens.colors.muted_foreground)
+                                    .child(badge),
+                            )
+                        }),
+                )
+            })
+            .children(self.children);
         div()
             .flex()
             .flex_col()
+            .w_full()
             .min_w(px(0.0))
-            .gap(tokens.spacing.md)
-            .p(tokens.spacing.lg)
-            .rounded(tokens.controls.radius)
-            .border_1()
-            .border_color(tokens.colors.border)
-            .bg(tokens.colors.surface)
-            .when_some(self.title, |this, title| {
-                this.child(div().text_size(tokens.typography.title).child(title))
+            .gap(tokens.spacing.xs)
+            .when_some(outside_title, |this, title| {
+                this.child(
+                    div()
+                        .pl(tokens.spacing.xs)
+                        .text_size(tokens.typography.navigation)
+                        .text_color(tokens.colors.muted_foreground)
+                        .child(title),
+                )
             })
-            .children(self.children)
+            .child(surface)
     }
 }
 
@@ -525,7 +775,8 @@ impl RenderOnce for StatusSurface {
             .child(
                 div()
                     .min_w(px(0.0))
-                    .text_size(tokens.typography.title)
+                    .text_size(tokens.typography.body)
+                    .font_weight(FontWeight::MEDIUM)
                     .text_color(color)
                     .child(self.title),
             )
@@ -533,6 +784,7 @@ impl RenderOnce for StatusSurface {
                 this.child(
                     div()
                         .min_w(px(0.0))
+                        .text_size(tokens.typography.caption)
                         .text_color(tokens.colors.muted_foreground)
                         .child(detail),
                 )
@@ -593,10 +845,15 @@ impl RenderOnce for DialogSurface {
             .gap(tokens.spacing.lg)
             .p(tokens.spacing.xl)
             .rounded(tokens.controls.radius)
-            .border_1()
+            .border(tokens.controls.border_width)
             .border_color(tokens.colors.border)
             .bg(tokens.colors.surface)
-            .child(div().text_size(tokens.typography.title).child(self.title))
+            .child(
+                div()
+                    .text_size(tokens.typography.title)
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(self.title),
+            )
             .child(self.body)
             .child(
                 div()

@@ -15,12 +15,20 @@ This project uses [release-please](https://github.com/googleapis/release-please)
 
 1. Every `feat:` or `fix:` commit pushed to `main` updates the open **Release PR**
 2. Release-please auto-generates `CHANGELOG.md` from conventional commit messages
-3. **When you're ready to release**: merge the Release PR
+3. **When you're ready to stage the final candidate**: merge the Release PR
 4. On merge, release-please automatically:
    - Updates `CHANGELOG.md`, the root `Cargo.toml`, and the isolated GPUI `Cargo.toml` with the new version
    - Creates a git tag (e.g., `v0.3.0`)
-   - Creates a GitHub Release
-5. When `release_created` is true, Release Please explicitly calls the reusable **Build** workflow. That workflow tests, lints, signs, notarizes, verifies and uploads the DMG. The explicit call is required because releases created with the default `GITHUB_TOKEN` do not trigger another workflow.
+   - Creates a draft GitHub Release
+5. When `release_created` is true, Release Please explicitly calls the reusable
+   **Build** workflow. That workflow tests, lints, signs, notarizes, verifies and
+   uploads the exact DMG to the empty draft, retaining the Actions payload for
+   21 days. It does not publish stable.
+6. After the draft bytes pass the external production matrix and recorded
+   go/no-go, manually dispatch **Promote Verified Stable Draft** with the exact
+   tag, approved DMG SHA-256 and confirmation. It re-downloads/verifies the
+   staged payload and only changes draft/latest metadata; it never rebuilds or
+   replaces assets.
 
 ## Key Files
 
@@ -30,6 +38,8 @@ This project uses [release-please](https://github.com/googleapis/release-please)
 | `.release-please-manifest.json` | Tracks current released version |
 | `CHANGELOG.md` | Generated changelog (updated by release-please PR) |
 | `.github/workflows/release-please.yml` | GitHub Actions workflow |
+| `.github/workflows/promote-stable.yml` | Manual exact-byte stable promotion |
+| `docs/production-release-runbook.md` | Cohort, go/no-go and promotion procedure |
 
 ## Version Sources
 
@@ -70,11 +80,11 @@ Best practice: make all your code changes first, wait for the PR to stabilize, t
 **Option B: Edit after merge**
 
 After merging the release PR:
-1. The GitHub Release is created automatically
-2. Edit the release notes on the GitHub Release page directly
+1. The draft GitHub Release is created automatically
+2. Edit the draft notes before final go/no-go; do not alter staged assets
 3. `CHANGELOG.md` in the repo keeps the auto-generated version (good enough for git history)
 
-### Step 3: Merge the Release PR
+### Step 3: Merge the Release PR to stage a draft
 
 ```bash
 gh pr merge <PR_NUMBER> --squash
@@ -82,16 +92,31 @@ gh pr merge <PR_NUMBER> --squash
 
 Or merge via GitHub UI. Both squash-merge and merge commits work.
 
-### Step 4: Verify
+### Step 4: Verify the staged candidate
 
 After merge:
-1. Check that the tag was created: `gh release list --limit 1`
+1. Check that the tag and draft were created: `gh release view <tag> --json isDraft,tagName`
 2. Inspect the same Release Please workflow run and confirm its
-   `build-stable-release` reusable-workflow job started
+   `build-staged-stable-release` reusable-workflow job started
 3. Wait for that job to complete — it runs tests/lints, creates a Developer ID
    signed DMG, requires explicit `Accepted` notarization, staples and validates
    it, and passes Gatekeeper verification before upload
-4. Verify the DMG is attached to the release: `gh release view <tag>`
+4. Verify the DMG is attached while `isDraft` remains true. Download the exact
+   payload and complete `.9.8`–`.9.11`; do not rebuild it.
+
+### Step 5: Promote the exact bytes after go/no-go
+
+```bash
+gh workflow run promote-stable.yml \
+  -f release_tag=<tag> \
+  -f expected_dmg_sha256=<64-lowercase-hex> \
+  -f confirmation=PROMOTE_VERIFIED_STABLE
+```
+
+The job targets the `stable-production` GitHub Environment. Required reviewers
+add a hold when configured, but their presence must be verified rather than
+assumed. After success, verify `isDraft == false`, `isPrerelease == false`,
+`releases/latest` resolves to the tag, and the public DMG hash still matches.
 
 ## Writing Good Commit Messages
 

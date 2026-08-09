@@ -4,11 +4,16 @@ use gpui::{Context, Task};
 use tokio::runtime::Handle as AsyncRuntimeHandle;
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
-use wrenflow_runtime::{CommandOutcome, RuntimeHandle};
+use wrenflow_runtime::{
+    diagnostics::{
+        emit_diagnostic, DiagnosticCategory, DiagnosticCode, DiagnosticEvent, DiagnosticLevel,
+    },
+    CommandOutcome, RuntimeHandle,
+};
 
 use super::{
     effect, AppAction, AppMutation, AppPresentation, AppReducer, CommandKey, NavigationTarget,
-    ShellRequest, ShellRequestReceiver, UpdatePresentation,
+    ShellRequest, ShellRequestReceiver,
 };
 
 /// GPUI does not need the shell overlay's 50 Hz sample rate. The AppKit overlay
@@ -75,6 +80,8 @@ pub struct AppModel {
     next_command_token: u64,
     shell_requests: effect::ShellRequestSender,
     shell_request_receiver: Option<ShellRequestReceiver>,
+    performance_runtime: RuntimeHandle,
+    async_runtime: AsyncRuntimeHandle,
     _subscriptions: Vec<Task<()>>,
 }
 
@@ -99,11 +106,11 @@ impl AppModel {
             request_rx,
             completion_tx,
         );
-        let audio_levels = spawn_audio_level_sampler(async_runtime, runtime.clone());
+        let audio_levels = spawn_audio_level_sampler(async_runtime.clone(), runtime.clone());
         let subscriptions = vec![
             subscribe_snapshots(runtime.clone(), cx),
             subscribe_audio_level(audio_levels, cx),
-            subscribe_events(runtime, cx),
+            subscribe_events(runtime.clone(), cx),
             subscribe_completions(completion_rx, cx),
         ];
 
@@ -114,6 +121,8 @@ impl AppModel {
             next_command_token: 1,
             shell_requests,
             shell_request_receiver: Some(shell_request_receiver),
+            performance_runtime: runtime,
+            async_runtime,
             _subscriptions: subscriptions,
         }
     }
@@ -153,26 +162,28 @@ impl AppModel {
                 self.request_shell(ShellRequest::SetLaunchAtLogin(enabled), cx);
             }
             AppAction::CheckForUpdates => {
-                self.request_shell(ShellRequest::CheckForUpdates, cx);
+                self.request_shell(
+                    ShellRequest::CheckForUpdates(wrenflow_runtime::update::UpdateChannel::Stable),
+                    cx,
+                );
             }
-            AppAction::OpenAvailableUpdate => {
-                if let UpdatePresentation::Available { download_url, .. } =
-                    &self.presentation.about.update
-                {
-                    self.request_shell(
-                        ShellRequest::OpenUrl {
-                            url: download_url.clone(),
-                        },
-                        cx,
-                    );
-                } else {
-                    self.apply(
-                        AppMutation::ActionRejected(
-                            "no downloadable update is currently available".to_string(),
-                        ),
-                        cx,
-                    );
-                }
+            AppAction::CheckForBetaUpdates => {
+                self.request_shell(
+                    ShellRequest::CheckForUpdates(wrenflow_runtime::update::UpdateChannel::Beta),
+                    cx,
+                );
+            }
+            AppAction::DownloadAvailableUpdate => {
+                self.request_shell(ShellRequest::DownloadAvailableUpdate, cx);
+            }
+            AppAction::InstallReadyUpdate => {
+                self.request_shell(ShellRequest::InstallReadyUpdate, cx);
+            }
+            AppAction::ExportSupportBundle => {
+                self.request_shell(ShellRequest::ExportSupportBundle, cx);
+            }
+            AppAction::ResetCurrentData => {
+                self.request_shell(ShellRequest::ResetCurrentData, cx);
             }
             action => match action.runtime_command() {
                 Ok(Some((key, command))) => {
@@ -205,6 +216,22 @@ impl AppModel {
     /// AppKit owner. Screens never receive a shell handle.
     pub fn take_shell_requests(&mut self) -> Option<ShellRequestReceiver> {
         self.shell_request_receiver.take()
+    }
+
+    /// Start the opaque signed-app performance workload. No `AppAction` or
+    /// screen receives this request type, and every terminal result enters the
+    /// ordinary typed quit path so runtime cleanup remains production-identical.
+    pub fn start_performance_self_test(
+        &self,
+        request: wrenflow_runtime::performance::PerformanceSelfTestRequest,
+    ) {
+        let runtime = self.performance_runtime.clone();
+        self.async_runtime.spawn(async move {
+            let _ = runtime.run_performance_self_test(request).await;
+            let _ = runtime
+                .request(wrenflow_runtime::RuntimeCommand::RequestQuit)
+                .await;
+        });
     }
 
     fn request_shell(&mut self, request: ShellRequest, cx: &mut Context<Self>) {
@@ -351,8 +378,12 @@ fn subscribe_events(runtime: RuntimeHandle, cx: &Context<AppModel>) -> Task<()> 
                     break;
                 }
             }
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
-                eprintln!("GPUI app model lagged by {count} runtime events");
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                emit_diagnostic(DiagnosticEvent::new(
+                    DiagnosticCategory::Bridge,
+                    DiagnosticLevel::Error,
+                    DiagnosticCode::AppModelLagged,
+                ));
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }

@@ -1,0 +1,21 @@
+{
+  "revision": 1,
+  "screens": {
+    "about": {
+      "changedPixelPercent": 12.1,
+      "meanAbsoluteError": 0.032
+    },
+    "general": {
+      "changedPixelPercent": 9.0,
+      "meanAbsoluteError": 0.026
+    },
+    "history": {
+      "changedPixelPercent": 5.3,
+      "meanAbsoluteError": 0.011
+    },
+    "models": {
+      "changedPixelPercent": 15.7,
+      "meanAbsoluteError": 0.04
+    }
+  }
+}

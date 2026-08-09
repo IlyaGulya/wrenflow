@@ -120,7 +120,7 @@ Users need to decide:
 
 Current UI only says "download model".
 
-### 4. Local and legacy cloud settings are mixed
+### 4. Local and retired cloud settings were mixed
 
 This is architectural debt and should be treated as part of the redesign, not cleanup for later.
 
@@ -345,27 +345,30 @@ Use these meanings:
 
 Do not persist a raw backend choice such as `whisper_cpp` as the main user selection. Backend resolution should stay platform-specific.
 
-### Required cleanup in `AppSettings`
+### Historical pre-clean-break settings proposal
 
-Split configuration into:
+The following was a Flutter-era proposal, not a current GPUI data contract. It
+would have split configuration into:
 
 - user preferences
 - local model choice
-- legacy migration fields
+- retired cloud-provider fields
 
-Recommended immediate action:
+The clean-break GPUI implementation instead starts from the current-format
+`gpui-v1` model settings and never imports those retired fields. Historical
+intent was:
 
-- mark `apiKey`, `apiBaseUrl`, `transcriptionProvider`, and old `transcriptionModel` as legacy
+- keep `apiKey`, `apiBaseUrl`, `transcriptionProvider`, and old `transcriptionModel` outside local model selection
 - stop surfacing them in any local transcription UX
 - never use them as the source of truth for the selected local model
 
-### Migration rule
+### Current clean-break rule
 
-On first launch after the redesign:
+On first GPUI launch:
 
-- if no new local model setting exists, default to `parakeet-tdt-0.6b-v3-onnx`
-- preserve legacy keys for one migration window if needed
-- do not read legacy model names to drive runtime selection
+- if no current-format local model setting exists, default to `parakeet-tdt-0.6b-v3-onnx`
+- do not read, preserve, or rewrite pre-GPUI model settings
+- never use retired model names to drive runtime selection
 
 ## Actor and Signal Architecture
 
@@ -650,7 +653,7 @@ It should stop hard-coding text like:
 
 ### Phase 2
 
-- delete legacy Groq-backed local-model keys after the migration window closes
+- keep retired Groq-backed keys outside the GPUI current-format namespace
 - uninstall support
 - performance telemetry
 - energy VAD gate
@@ -668,9 +671,9 @@ It should stop hard-coding text like:
 
 - add model catalog structs in `wrenflow-domain`
 - add local model setting keys in `settings_provider`
-- stop using legacy model fields for local runtime selection
+- keep retired model fields outside local runtime selection
 - split user model selection from backend resolution
-- migrate default selection to `parakeet-tdt-0.6b-v3-onnx`
+- default a new current-format selection to `parakeet-tdt-0.6b-v3-onnx`
 
 ### Phase B: Signals and actor
 
@@ -692,7 +695,7 @@ It should stop hard-coding text like:
 - add `whisper-large-v3-turbo` descriptor
 - add `whisper-large-v3` descriptor
 - implement load, prewarm, transcribe, unload
-- make backend resolution pluggable so non-macOS ports do not require a later settings migration
+- make backend resolution pluggable so non-macOS ports do not require later settings-schema churn
 
 ### Phase E: Performance polish
 
@@ -702,16 +705,16 @@ It should stop hard-coding text like:
 - add silence gate
 - measure real-world latency in release builds on Apple Silicon
 
-## Required Legacy Cleanup
+## Historical provider cleanup boundary
 
 This is mandatory for the redesign.
 
 Actions:
 
 - remove Groq wording from local model UX
-- mark old cloud fields as legacy in code
+- keep old cloud fields outside GPUI current-format code
 - do not mix remote provider naming with local model identity
-- delete or ignore legacy cloud keys in the local model path after migration completes
+- never import retired cloud keys into the local model path
 
 Recommended rule:
 

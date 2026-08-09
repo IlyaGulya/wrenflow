@@ -1,0 +1,54 @@
+name: GPUI performance runner probe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/performance-preflight.yml
+      - docs/gpui-performance-budgets.md
+      - mise.toml
+      - scripts/perf/**
+      - scripts/test-gpui-performance.sh
+      - scripts/fixtures/performance/**
+      - support/performance/**
+
+concurrency:
+  group: performance-preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  github-macos14-constrained-probe:
+    runs-on: macos-14
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Select support-floor Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+      - name: Capture actual constrained runner and xctrace inventory
+        run: |
+          mise run performance-preflight -- \
+            --expect-github-macos14 \
+            --output "$RUNNER_TEMP/wrenflow-performance-runner.json"
+      - name: Verify immutable transcription fixture input
+        run: |
+          scripts/perf/download-transcription-fixture.sh \
+            "$RUNNER_TEMP/wrenflow-performance-fixture.wav"
+      - name: Test fail-closed performance harness
+        run: mise run test-performance-harness
+      - name: Upload sanitized runner evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gpui-performance-macos14-runner
+          path: ${{ runner.temp }}/wrenflow-performance-runner.json
+          if-no-files-found: error
+          retention-days: 14

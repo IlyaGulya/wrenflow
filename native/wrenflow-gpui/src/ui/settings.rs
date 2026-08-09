@@ -1,12 +1,13 @@
 use std::collections::BTreeSet;
 
 use gpui::{
-    div, prelude::FluentBuilder as _, AnyElement, App, ElementId, InteractiveElement as _,
-    IntoElement, ParentElement as _, RenderOnce, SharedString, Styled as _, Window,
+    div, prelude::FluentBuilder as _, px, svg, AnyElement, App, ElementId, FontWeight,
+    InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce, SharedString,
+    Styled as _, Window,
 };
 use gpui_component::scroll::ScrollableElement as _;
 
-use super::{ControlSemantics, SemanticRole, WrenflowTheme};
+use super::{asset_paths, ControlSemantics, SemanticRole, WrenflowTheme};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChoiceOption {
@@ -223,6 +224,7 @@ pub struct NavigationSidebar {
     id: SharedString,
     title: SharedString,
     items: Vec<AnyElement>,
+    footer: Vec<AnyElement>,
     compact: bool,
 }
 
@@ -232,6 +234,7 @@ impl NavigationSidebar {
             id: id.into(),
             title: title.into(),
             items: Vec::new(),
+            footer: Vec::new(),
             compact: false,
         }
     }
@@ -244,6 +247,11 @@ impl NavigationSidebar {
     pub fn items(mut self, items: impl IntoIterator<Item = impl IntoElement>) -> Self {
         self.items
             .extend(items.into_iter().map(IntoElement::into_any_element));
+        self
+    }
+
+    pub fn footer(mut self, footer: impl IntoElement) -> Self {
+        self.footer.push(footer.into_any_element());
         self
     }
 
@@ -267,29 +275,94 @@ impl NavigationSidebar {
 impl RenderOnce for NavigationSidebar {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = WrenflowTheme::current(cx).tokens;
+        if self.compact {
+            return div()
+                .id(self.id)
+                .flex()
+                .w_full()
+                .flex_wrap()
+                .items_center()
+                .gap(tokens.spacing.xs)
+                .px(tokens.spacing.lg)
+                .py(tokens.spacing.md)
+                .border_b_1()
+                .border_color(tokens.colors.border)
+                .bg(tokens.colors.background)
+                .child(
+                    div()
+                        .mr(tokens.spacing.md)
+                        .text_size(tokens.typography.body)
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(self.title),
+                )
+                .children(self.items)
+                .children(self.footer);
+        }
+
         div()
             .id(self.id)
             .flex()
-            .when(!self.compact, |this| {
-                this.flex_col()
-                    .w(tokens.controls.sidebar_width)
-                    .h_full()
-                    .border_r_1()
-            })
-            .when(self.compact, |this| {
-                this.w_full().flex_wrap().items_center().border_b_1()
-            })
-            .gap(tokens.spacing.sm)
-            .p(tokens.spacing.md)
+            .flex_col()
+            .w(tokens.controls.sidebar_width)
+            .h_full()
+            .border_r_1()
             .border_color(tokens.colors.border)
-            .bg(tokens.colors.surface)
+            .bg(tokens.colors.background)
             .child(
                 div()
-                    .text_size(tokens.typography.title)
-                    .when(self.compact, |this| this.w_full())
-                    .child(self.title),
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .pt(px(28.))
+                    .child(
+                        svg()
+                            .path(asset_paths::TRAY_BIRD)
+                            .size(px(64.))
+                            .text_color(tokens.colors.foreground)
+                            .opacity(0.6),
+                    )
+                    .child(div().h(tokens.spacing.md))
+                    .child(
+                        div()
+                            .text_size(tokens.typography.body)
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(self.title),
+                    )
+                    .child(div().h(tokens.spacing.xxs))
+                    .child(
+                        div()
+                            .font_family("Menlo")
+                            .text_size(tokens.typography.meta)
+                            .text_color(tokens.colors.tertiary_foreground)
+                            .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
+                    ),
             )
-            .children(self.items)
+            .child(
+                div()
+                    .h(px(1.))
+                    .mx(tokens.spacing.xl)
+                    .mt(tokens.spacing.lg)
+                    .mb(tokens.spacing.md)
+                    .bg(tokens.colors.border),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .gap(tokens.spacing.xxs)
+                    .px(tokens.spacing.lg)
+                    .children(self.items),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(tokens.spacing.xs)
+                    .px(tokens.spacing.lg)
+                    .pb(tokens.spacing.lg)
+                    .children(self.footer),
+            )
     }
 }
 

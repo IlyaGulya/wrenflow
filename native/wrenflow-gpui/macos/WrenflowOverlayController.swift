@@ -20,6 +20,9 @@ final class WrenflowOverlayController {
     private var errorPanel: NSPanel?
     private var errorDismissTimer: Timer?
     private var lastAnnouncedPhase: WrenflowOverlayPhase?
+    private var targetDisplayID: CGDirectDisplayID?
+    private var screenParametersObserver: NSObjectProtocol?
+    private var activeSpaceObserver: NSObjectProtocol?
     private let state = WrenflowOverlayState()
     private let onAction: (String) -> Void
 
@@ -29,6 +32,8 @@ final class WrenflowOverlayController {
 
     func show(phase: WrenflowOverlayPhase, audioLevel: Float) {
         dispatchPrecondition(condition: .onQueue(.main))
+        installDisplayObservers()
+        targetDisplayID = Self.displayID(for: Self.activeScreen())
         state.phase = phase
         state.audioLevel = phase == .recording ? audioLevel : 0
         if lastAnnouncedPhase != phase {
@@ -63,6 +68,8 @@ final class WrenflowOverlayController {
 
     func showError(message: String, actionLabel: String?, actionID: String?) {
         dispatchPrecondition(condition: .onQueue(.main))
+        installDisplayObservers()
+        guard let screen = targetScreenForShow() else { return }
         errorPanel?.orderOut(nil)
         errorPanel = nil
         errorDismissTimer?.invalidate()
@@ -90,12 +97,10 @@ final class WrenflowOverlayController {
         )
         hosting.frame = NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight)
         panel.contentView = hosting
-        if let screen = NSScreen.main {
-            panel.setFrameOrigin(NSPoint(
-                x: screen.frame.midX - panelWidth / 2,
-                y: screen.visibleFrame.maxY - panelHeight - 8
-            ))
-        }
+        panel.setFrameOrigin(NSPoint(
+            x: screen.visibleFrame.midX - panelWidth / 2,
+            y: screen.visibleFrame.maxY - panelHeight - 8
+        ))
         panel.alphaValue = 0
         panel.orderFrontRegardless()
         if shouldReduceMotion {
@@ -123,6 +128,15 @@ final class WrenflowOverlayController {
         transcribingPanel = nil
         errorPanel = nil
         lastAnnouncedPhase = nil
+        if let screenParametersObserver {
+            NotificationCenter.default.removeObserver(screenParametersObserver)
+        }
+        if let activeSpaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(activeSpaceObserver)
+        }
+        screenParametersObserver = nil
+        activeSpaceObserver = nil
+        targetDisplayID = nil
     }
 
     private var shouldReduceMotion: Bool {
@@ -141,7 +155,7 @@ final class WrenflowOverlayController {
     }
 
     private static func makePanel(width: CGFloat, height: CGFloat) -> NSPanel {
-        let panel = NSPanel(
+        let panel = WrenflowPassivePanel(
             contentRect: NSRect(x: 0, y: 0, width: width, height: height),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -170,48 +184,54 @@ final class WrenflowOverlayController {
         )
         let content = rootView
             .frame(width: width, height: height)
-            .background(Color(white: 0.96))
+            .foregroundStyle(Color.primary)
+            .background(Color(nsColor: .windowBackgroundColor))
             .clipShape(shape)
-            .overlay(shape.stroke(Color.black.opacity(0.08), lineWidth: 0.5))
-            .environment(\.colorScheme, .light)
+            .overlay(shape.stroke(
+                Color(nsColor: .separatorColor),
+                lineWidth: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 1 : 0.5
+            ))
         let hosting = NSHostingView(rootView: content)
         hosting.frame = NSRect(x: 0, y: 0, width: width, height: height)
         hosting.autoresizingMask = [.width, .height]
         return hosting
     }
 
-    private var screenHasNotch: Bool {
-        guard let screen = NSScreen.main else { return false }
+    private static func screenHasNotch(_ screen: NSScreen) -> Bool {
         return screen.safeAreaInsets.top > 0
     }
 
-    private var notchWidth: CGFloat {
-        guard screenHasNotch,
-              let screen = NSScreen.main,
+    private static func notchWidth(_ screen: NSScreen) -> CGFloat {
+        guard screenHasNotch(screen),
               let leftArea = screen.auxiliaryTopLeftArea,
               let rightArea = screen.auxiliaryTopRightArea else { return 0 }
         return screen.frame.width - leftArea.width - rightArea.width
     }
 
-    private var notchOverlap: CGFloat {
-        guard let screen = NSScreen.main else { return 0 }
+    private static func notchOverlap(_ screen: NSScreen) -> CGFloat {
         return screen.frame.maxY - screen.visibleFrame.maxY
     }
 
     private func showRecordingPanel() {
-        let hasNotch = screenHasNotch
-        let width: CGFloat = hasNotch ? max(notchWidth, 120) : 120
-        let overlap = hasNotch ? notchOverlap : 0
+        guard let screen = targetScreenForShow() else { return }
+        let hasNotch = Self.screenHasNotch(screen)
+        let width: CGFloat = hasNotch ? max(Self.notchWidth(screen), 120) : 120
+        let overlap = hasNotch ? Self.notchOverlap(screen) : 0
         let height: CGFloat = 32 + overlap
-        guard let screen = NSScreen.main else { return }
         let visibleFrame = NSRect(
-            x: screen.frame.midX - width / 2,
-            y: screen.frame.maxY - height,
+            x: screen.visibleFrame.midX - width / 2,
+            y: hasNotch ? screen.frame.maxY - height : screen.visibleFrame.maxY - height - 8,
             width: width,
             height: height
         )
 
         if let panel = recordingPanel {
+            panel.contentView = Self.contentView(
+                width: width,
+                height: height,
+                cornerRadius: hasNotch ? 18 : 12,
+                rootView: WrenflowRecordingOverlayView(state: state).padding(.top, overlap)
+            )
             panel.setFrame(visibleFrame, display: true)
             panel.alphaValue = 1
             panel.orderFrontRegardless()
@@ -243,13 +263,15 @@ final class WrenflowOverlayController {
     }
 
     private func hideRecordingPanel() {
-        guard let panel = recordingPanel, let screen = NSScreen.main else { return }
+        guard let panel = recordingPanel else { return }
+        let screen = panel.screen ?? targetScreen()
         let frame = panel.frame
         recordingPanel = nil
-        if shouldReduceMotion {
+        if shouldReduceMotion || screen == nil {
             panel.orderOut(nil)
             return
         }
+        guard let screen else { return }
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.09
             panel.animator().setFrameOrigin(NSPoint(x: frame.minX, y: screen.frame.maxY))
@@ -257,22 +279,29 @@ final class WrenflowOverlayController {
     }
 
     private func showTranscribingPanel() {
-        guard transcribingPanel == nil, let screen = NSScreen.main else { return }
-        let hasNotch = screenHasNotch
-        let overlap = hasNotch ? notchOverlap : 0
+        guard let screen = targetScreenForShow() else { return }
+        let hasNotch = Self.screenHasNotch(screen)
+        let overlap = hasNotch ? Self.notchOverlap(screen) : 0
         let width: CGFloat = 44
         let height: CGFloat = 22 + overlap
-        let panel = Self.makePanel(width: width, height: height)
+        let panel = transcribingPanel ?? Self.makePanel(width: width, height: height)
         panel.contentView = Self.contentView(
             width: width,
             height: height,
             cornerRadius: hasNotch ? 14 : 11,
             rootView: WrenflowOverlayDotsView().padding(.top, overlap)
         )
-        panel.setFrameOrigin(NSPoint(
-            x: screen.frame.midX - width / 2,
-            y: screen.frame.maxY - height
-        ))
+        panel.setFrame(NSRect(
+            x: screen.visibleFrame.midX - width / 2,
+            y: hasNotch ? screen.frame.maxY - height : screen.visibleFrame.maxY - height - 8,
+            width: width,
+            height: height
+        ), display: true)
+        if transcribingPanel != nil {
+            panel.alphaValue = 1
+            panel.orderFrontRegardless()
+            return
+        }
         panel.alphaValue = 0
         panel.orderFrontRegardless()
         if shouldReduceMotion {
@@ -299,6 +328,71 @@ final class WrenflowOverlayController {
         }, completionHandler: { panel.orderOut(nil) })
     }
 
+    private func installDisplayObservers() {
+        guard screenParametersObserver == nil, activeSpaceObserver == nil else { return }
+        screenParametersObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.displayEnvironmentDidChange()
+        }
+        activeSpaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.displayEnvironmentDidChange()
+        }
+    }
+
+    private func displayEnvironmentDidChange() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard recordingPanel != nil || transcribingPanel != nil || errorPanel != nil else { return }
+        if targetScreen() == nil {
+            targetDisplayID = Self.displayID(for: Self.activeScreen())
+        }
+        if recordingPanel != nil {
+            showRecordingPanel()
+        }
+        if transcribingPanel != nil {
+            showTranscribingPanel()
+        }
+        if let panel = errorPanel, let screen = targetScreen() ?? Self.activeScreen() {
+            panel.setFrameOrigin(NSPoint(
+                x: screen.visibleFrame.midX - panel.frame.width / 2,
+                y: screen.visibleFrame.maxY - panel.frame.height - 8
+            ))
+        }
+    }
+
+    private func targetScreenForShow() -> NSScreen? {
+        guard let screen = Self.activeScreen() else { return nil }
+        targetDisplayID = Self.displayID(for: screen)
+        return screen
+    }
+
+    private func targetScreen() -> NSScreen? {
+        guard let targetDisplayID else { return nil }
+        return NSScreen.screens.first { Self.displayID(for: $0) == targetDisplayID }
+    }
+
+    private static func activeScreen() -> NSScreen? {
+        let mouseLocation = NSEvent.mouseLocation
+        return NSScreen.screens.first {
+            NSMouseInRect(mouseLocation, $0.frame, false)
+        } ?? NSApp.keyWindow?.screen
+            ?? NSApp.mainWindow?.screen
+            ?? NSScreen.screens.first
+    }
+
+    private static func displayID(for screen: NSScreen?) -> CGDirectDisplayID? {
+        guard let screen,
+              let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
+                as? NSNumber else { return nil }
+        return CGDirectDisplayID(number.uint32Value)
+    }
+
     private func dismissError() {
         guard let panel = errorPanel else { return }
         errorPanel = nil
@@ -311,6 +405,11 @@ final class WrenflowOverlayController {
             panel.animator().alphaValue = 0
         }, completionHandler: { panel.orderOut(nil) })
     }
+}
+
+private final class WrenflowPassivePanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
 }
 
 private struct WrenflowRecordingOverlayView: View {
@@ -344,7 +443,7 @@ private struct WrenflowOverlayDotsView: View {
         HStack(spacing: 4) {
             ForEach(0..<3, id: \.self) { index in
                 Circle()
-                    .fill(Color(white: 0.15).opacity(activeDot == index ? 0.7 : 0.15))
+                    .fill(Color.primary.opacity(activeDot == index ? 0.7 : 0.15))
                     .frame(width: 4.5, height: 4.5)
                     .animation(reduceMotion ? nil : .easeInOut(duration: 0.4), value: activeDot)
             }
@@ -375,7 +474,7 @@ private struct WrenflowOverlayWaveformView: View {
             ForEach(0..<Self.multipliers.count, id: \.self) { index in
                 let amplitude = min(CGFloat(audioLevel) * Self.multipliers[index], 1)
                 Capsule()
-                    .fill(Color(white: 0.15).opacity(0.6))
+                    .fill(Color.primary.opacity(0.6))
                     .frame(width: 3, height: 2 + 18 * amplitude)
                     .animation(
                         reduceMotion ? nil : .interpolatingSpring(stiffness: 600, damping: 28),

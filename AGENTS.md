@@ -9,7 +9,8 @@ scripts — always use `mise run <task>` or `mise exec -- <cmd>`.
 
 ## Launching
 
-`mise run run` builds and opens the signed `.app` through LaunchServices. Never
+`mise run run` builds and opens the signed `.app` through LaunchServices, then
+sends the exact verified current-line PID a typed show-settings signal. Never
 run the Mach-O directly: TCC evaluates the responsible process and the terminal
 does not carry Wrenflow's microphone identity. See
 [docs/tcc-debugging.md](docs/tcc-debugging.md).
@@ -24,8 +25,9 @@ does not carry Wrenflow's microphone identity. See
 - **ONNX Runtime**: `load-dynamic` — dylib fetched by `scripts/download-ort.sh`, copied and codesigned by the app bundle script.
 - **CGEvent paste**: Replaces enigo (TSM crash). Uses `core-graphics` for Cmd+V.
 - **Global hotkey**: the Swift shell owns a listen-only `CGEventTap`; presses and release durations enter the typed `AppAction` boundary.
-- **One long-lived settings window**: the Swift/AppKit shell shows, focuses and
-  hides the existing GPUI window. Closing it returns the app to accessory mode.
+- **Long-lived model/runtime, recreated window**: closing removes the GPUI
+  window and returns the app to accessory mode. Reopen creates a route-sized
+  window over the preserved `AppModel` and runtime.
 - **Native overlays**: recording, transcribing and actionable error panels are
   SwiftUI-backed `NSPanel`s at `screenSaver` level, called through the narrow
   Rust/Swift FFI in `native/wrenflow-gpui/src/shell.rs`.
@@ -35,12 +37,18 @@ does not carry Wrenflow's microphone identity. See
   script copies and signs them into the app bundle.
 - **Audio**: Recordings saved as OGG/Opus (~15KB vs ~300KB WAV). Transcription runs from memory buffer, WAV write is parallel.
 - **Paths**: Use `dirs` crate for platform data directories (history.sqlite, recordings/).
-- **LSUIElement**: the app starts as a menu-bar accessory. The AppKit shell switches activation policy when showing or hiding the GPUI window.
+- **Dock-free lifecycle**: `LSUIElement=true`; ready startup/hide stays accessory
+  and showing a GPUI window temporarily switches to regular policy. Plain Finder
+  reopen of an already-running windowless app is not a show-window contract;
+  the tray is canonical and `mise run run` uses the typed current-line signal.
 - **No sandbox**: Required for accessibility + global hotkeys.
 
 ## Releases
 
-See [release skill](.agents/skills/release/SKILL.md) for the full release workflow. Quick version: merge the release-please PR to cut a release.
+See [release skill](.agents/skills/release/SKILL.md) for the full release
+workflow. Quick version: merging the release-please PR stages a signed/notarized
+draft; only the explicit exact-byte promotion workflow publishes stable after
+go/no-go.
 
 ## Code Signing
 

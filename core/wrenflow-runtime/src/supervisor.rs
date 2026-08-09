@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
-use wrenflow_core::{merge_legacy_preferences, ConfigStore};
+use wrenflow_core::{ConfigError, ConfigStore};
 use wrenflow_domain::config::{AppConfig, DEFAULT_SELECTED_MICROPHONE_ID};
 use wrenflow_domain::model_management::all_local_model_catalog_entries;
 use wrenflow_domain::pipeline::PipelineState;
@@ -20,7 +20,8 @@ use crate::state::{
 };
 use crate::store::RuntimeStore;
 use crate::{
-    history, history::HistoryHandle, model, model::ModelHandle, pipeline, pipeline::PipelineHandle,
+    history, history::HistoryHandle, model, model::ModelHandle, performance, pipeline,
+    pipeline::PipelineHandle,
 };
 
 const COMMAND_CHANNEL_CAPACITY: usize = 64;
@@ -31,17 +32,38 @@ pub struct RuntimeBootstrap {
     pub initial_config: AppConfig,
     pub runtime_capabilities: RuntimeCapabilities,
     pub shell_capabilities: ShellCapabilities,
+    pub recovery: crate::recovery::RecoverySnapshot,
 }
 
 #[derive(Clone)]
 pub struct RuntimeHandle {
     commands: mpsc::Sender<RuntimeRequest>,
+    performance: mpsc::Sender<performance::PerformanceRuntimeRequest>,
     snapshot: watch::Receiver<Arc<RuntimeSnapshot>>,
     audio_level: watch::Receiver<f32>,
     events: broadcast::Sender<RuntimeEventEnvelope>,
 }
 
 impl RuntimeHandle {
+    /// Enter the private signed-app workload. Only a request prepared before
+    /// production diagnostics/runtime startup can cross this boundary.
+    pub async fn run_performance_self_test(
+        &self,
+        request: performance::PerformanceSelfTestRequest,
+    ) -> Result<(), RuntimeError> {
+        let (completion, result) = oneshot::channel();
+        self.performance
+            .send(performance::PerformanceRuntimeRequest {
+                request,
+                completion,
+            })
+            .await
+            .map_err(|_| RuntimeError::ServiceClosed("performance_self_test"))?;
+        result
+            .await
+            .map_err(|_| RuntimeError::ServiceClosed("performance_self_test"))?
+    }
+
     /// Enqueue a command without waiting for the subsystem result.
     pub async fn send(&self, command: RuntimeCommand) -> Result<(), RuntimeError> {
         self.commands
@@ -110,7 +132,19 @@ pub struct RuntimeInstance {
 impl RuntimeInstance {
     pub async fn shutdown(self) -> Result<(), RuntimeError> {
         self.handle.request(RuntimeCommand::Shutdown).await?;
-        self.join.wait().await
+        self.join.wait().await?;
+        crate::diagnostics::emit_diagnostic(crate::diagnostics::DiagnosticEvent::new(
+            crate::diagnostics::DiagnosticCategory::Lifecycle,
+            crate::diagnostics::DiagnosticLevel::Info,
+            crate::diagnostics::DiagnosticCode::Shutdown,
+        ));
+        crate::recovery::mark_production_launch_clean().map_err(|error| {
+            RuntimeError::ServiceFailed {
+                service: "recovery",
+                message: error.to_string(),
+            }
+        })?;
+        Ok(())
     }
 }
 
@@ -122,26 +156,59 @@ pub fn start_runtime(bootstrap: RuntimeBootstrap) -> Result<RuntimeInstance, Run
 /// Start the concrete desktop runtime with persistent settings and history.
 pub fn start_production_runtime() -> Result<RuntimeInstance, RuntimeError> {
     crate::logging::install();
-    let settings_store = Arc::new(ConfigStore::default_for("Wrenflow"));
-    let config = merge_legacy_preferences(settings_store.load_or_default());
-    settings_store
-        .save(&config)
-        .map_err(|error| RuntimeError::ServiceFailed {
-            service: "settings",
+    let recovery = crate::recovery::begin_production_recovery().map_err(|error| {
+        RuntimeError::ServiceFailed {
+            service: "recovery",
             message: error.to_string(),
-        })?;
+        }
+    })?;
+    if recovery.safe_mode() {
+        return start_runtime_inner(
+            RuntimeBootstrap {
+                recovery,
+                ..RuntimeBootstrap::default()
+            },
+            ProductionOptions::default(),
+        );
+    }
+    let paths = crate::data_paths::current_data_paths();
+    let settings_store = Arc::new(ConfigStore::new(paths.config));
+    let config = match settings_store.load() {
+        Ok(config) => config,
+        Err(ConfigError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            let config = AppConfig::default();
+            settings_store
+                .save(&config)
+                .map_err(|error| settings_startup_error(error.to_string()))?;
+            config
+        }
+        Err(error) => {
+            log::error!("Current GPUI config recovery required: {error}");
+            return Err(settings_startup_error(format!(
+                "{error}. The original data was not overwritten; inspect the quarantine and use the explicit GPUI data reset flow if recovery is not required"
+            )));
+        }
+    };
     start_runtime_inner(
         RuntimeBootstrap {
             initial_config: config,
             runtime_capabilities: capabilities::detect_runtime_capabilities(),
+            recovery,
             ..RuntimeBootstrap::default()
         },
         ProductionOptions {
             settings_store: Some(settings_store),
-            history_path: Some(history::default_history_path()),
+            history_path: Some(paths.history),
             platform_services: true,
         },
     )
+}
+
+fn settings_startup_error(message: String) -> RuntimeError {
+    RuntimeError::ServiceFailed {
+        service: "settings",
+        message,
+    }
 }
 
 #[derive(Default)]
@@ -195,6 +262,13 @@ fn start_runtime_inner(
         .as_ref()
         .map(|runtime| runtime.handle.clone());
     let pipeline_join = pipeline_runtime.map(|runtime| runtime.join);
+    let (performance_tx, performance_rx) = performance::channel();
+    let performance_join = performance::start(
+        performance_rx,
+        model_handle.clone(),
+        history_handle.clone(),
+        store.clone(),
+    );
 
     let task = tokio::spawn(async move {
         RuntimeSupervisor {
@@ -207,6 +281,7 @@ fn start_runtime_inner(
             model_join,
             pipeline: pipeline_handle,
             pipeline_join,
+            performance_join: Some(performance_join),
             platform_services: options.platform_services,
         }
         .run()
@@ -216,6 +291,7 @@ fn start_runtime_inner(
     Ok(RuntimeInstance {
         handle: RuntimeHandle {
             commands: command_tx,
+            performance: performance_tx,
             snapshot: snapshot_rx,
             audio_level: audio_level_rx,
             events: event_tx,
@@ -262,7 +338,9 @@ pub(crate) fn initial_snapshot(bootstrap: &RuntimeBootstrap) -> RuntimeSnapshot 
                 ..LaunchAtLoginSnapshot::default()
             },
             update_status: UpdateStatus::default(),
+            support_bundle_status: crate::SupportBundleStatus::default(),
         },
+        recovery: bootstrap.recovery.clone(),
         transcript_disposition: TranscriptDisposition::DisplayOnly,
         permission_lost_count: 0,
     }
@@ -278,6 +356,7 @@ struct RuntimeSupervisor {
     model_join: Option<JoinHandle<()>>,
     pipeline: Option<PipelineHandle>,
     pipeline_join: Option<JoinHandle<()>>,
+    performance_join: Option<JoinHandle<()>>,
     platform_services: bool,
 }
 
@@ -296,6 +375,12 @@ impl RuntimeSupervisor {
 
         if let Some(pipeline) = &self.pipeline {
             pipeline.shutdown().await;
+        }
+        if let Some(join) = self.performance_join.take() {
+            if !join.is_finished() {
+                join.abort();
+            }
+            let _ = join.await;
         }
         if let Some(models) = &self.models {
             models.shutdown().await;
@@ -321,6 +406,7 @@ impl RuntimeSupervisor {
     }
 
     async fn apply(&mut self, command: RuntimeCommand) -> Result<CommandOutcome, RuntimeError> {
+        diagnose_command(&command);
         let command = match command {
             RuntimeCommand::DeleteHistoryEntry { id } => {
                 let history = self
@@ -399,11 +485,43 @@ impl RuntimeSupervisor {
             return Err(RuntimeError::SubsystemUnavailable(subsystem));
         }
 
-        let persist_settings = matches!(&command, RuntimeCommand::UpdateSettings(_));
+        if let RuntimeCommand::UpdateSettings(patch) = &command {
+            let mut candidate = (*self.store.snapshot()).clone();
+            if !apply_settings_patch(&mut candidate, patch.clone()) {
+                return Ok(CommandOutcome::NoChange {
+                    revision: candidate.revision,
+                });
+            }
+            if let Some(settings_store) = &self.settings_store {
+                if let Err(error) = settings_store.save(&candidate.settings) {
+                    let message = format!("Failed to persist settings atomically: {error}");
+                    crate::diagnostics::emit_diagnostic(crate::diagnostics::DiagnosticEvent::new(
+                        crate::diagnostics::DiagnosticCategory::Lifecycle,
+                        crate::diagnostics::DiagnosticLevel::Error,
+                        crate::diagnostics::DiagnosticCode::SettingsWriteFailed,
+                    ));
+                    log::error!("{message}");
+                    self.store.emit(RuntimeEvent::PipelineError {
+                        message: message.clone(),
+                        action: None,
+                    });
+                    return Err(RuntimeError::ServiceFailed {
+                        service: "settings",
+                        message,
+                    });
+                }
+            }
+            let update = self
+                .store
+                .update(|state| apply_settings_patch(state, patch.clone()))?;
+            return Ok(CommandOutcome::Applied {
+                revision: update.revision,
+            });
+        }
         let mut shutting_down = false;
         let mut emit_quit = false;
         let update = self.store.update(|state| match command {
-            RuntimeCommand::UpdateSettings(patch) => apply_settings_patch(state, patch),
+            RuntimeCommand::UpdateSettings(_) => unreachable!("handled before match"),
             RuntimeCommand::AdvanceOnboarding => advance_onboarding(state),
             RuntimeCommand::RetreatOnboarding => retreat_onboarding(state),
             RuntimeCommand::SetTranscriptDisposition(disposition) => {
@@ -428,6 +546,14 @@ impl RuntimeSupervisor {
                     false
                 } else {
                     state.shell.update_status = status;
+                    true
+                }
+            }
+            RuntimeCommand::ReportSupportBundleStatus(status) => {
+                if state.shell.support_bundle_status == status {
+                    false
+                } else {
+                    state.shell.support_bundle_status = status;
                     true
                 }
             }
@@ -470,18 +596,6 @@ impl RuntimeSupervisor {
         if emit_quit {
             self.store.emit(RuntimeEvent::QuitRequested);
         }
-        if persist_settings && update.changed {
-            if let Some(store) = &self.settings_store {
-                let snapshot = self.store.snapshot();
-                store
-                    .save(&snapshot.settings)
-                    .map_err(|error| RuntimeError::ServiceFailed {
-                        service: "settings",
-                        message: error.to_string(),
-                    })?;
-            }
-        }
-
         if shutting_down {
             Ok(CommandOutcome::ShuttingDown {
                 revision: update.revision,
@@ -495,6 +609,60 @@ impl RuntimeSupervisor {
                 revision: update.revision,
             })
         }
+    }
+}
+
+fn diagnose_command(command: &RuntimeCommand) {
+    use crate::diagnostics::{emit_diagnostic, DiagnosticEvent, DiagnosticLevel as Level};
+
+    if let Some((category, code)) = diagnostic_marker_for_command(command) {
+        emit_diagnostic(DiagnosticEvent::new(category, Level::Info, code));
+    }
+}
+
+fn diagnostic_marker_for_command(
+    command: &RuntimeCommand,
+) -> Option<(
+    crate::diagnostics::DiagnosticCategory,
+    crate::diagnostics::DiagnosticCode,
+)> {
+    use crate::diagnostics::{DiagnosticCategory as Category, DiagnosticCode as Code};
+
+    match command {
+        RuntimeCommand::ReportPermissions(_) => {
+            Some((Category::Permissions, Code::PermissionStateObserved))
+        }
+        RuntimeCommand::ReportLaunchAtLogin(_) => {
+            Some((Category::Lifecycle, Code::LaunchAtLoginObserved))
+        }
+        RuntimeCommand::HotkeyPressed => Some((Category::Hotkey, Code::HotkeyPressed)),
+        RuntimeCommand::HotkeyReleased { .. } => Some((Category::Hotkey, Code::HotkeyReleased)),
+        RuntimeCommand::ActivateSelectedModel => {
+            Some((Category::Models, Code::ModelActivationRequested))
+        }
+        RuntimeCommand::CancelModelOperation => {
+            Some((Category::Models, Code::ModelCancellationRequested))
+        }
+        RuntimeCommand::DeleteHistoryEntry { .. } => {
+            Some((Category::History, Code::HistoryDeleteRequested))
+        }
+        RuntimeCommand::ClearHistory => Some((Category::History, Code::HistoryClearRequested)),
+        RuntimeCommand::ReportUpdateStatus(_) => {
+            Some((Category::Updates, Code::UpdateStatusObserved))
+        }
+        RuntimeCommand::ReportSupportBundleStatus(_) => {
+            Some((Category::Lifecycle, Code::SupportBundleStatusObserved))
+        }
+        RuntimeCommand::ReportShellCapabilities(_) => {
+            Some((Category::Bridge, Code::ShellCapabilitiesObserved))
+        }
+        RuntimeCommand::UpdateSettings(_)
+        | RuntimeCommand::ReloadAudioDevices
+        | RuntimeCommand::AdvanceOnboarding
+        | RuntimeCommand::RetreatOnboarding
+        | RuntimeCommand::SetTranscriptDisposition(_)
+        | RuntimeCommand::RequestQuit
+        | RuntimeCommand::Shutdown => None,
     }
 }
 
@@ -539,6 +707,14 @@ fn apply_settings_patch(state: &mut RuntimeSnapshot, patch: SettingsPatch) -> bo
                 false
             } else {
                 state.settings.sound_enabled = value;
+                true
+            }
+        }
+        SettingsPatch::ThemePreference(value) => {
+            if state.settings.theme_preference == value {
+                false
+            } else {
+                state.settings.theme_preference = value;
                 true
             }
         }
@@ -733,4 +909,173 @@ fn retreat_onboarding(state: &mut RuntimeSnapshot) -> bool {
     };
     state.session = AppSessionState::Onboarding { step: previous };
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn operational_commands_map_to_closed_markers_without_payloads() {
+        use crate::diagnostics::{DiagnosticCategory as Category, DiagnosticCode as Code};
+
+        let cases = [
+            (
+                RuntimeCommand::ReportPermissions(PermissionsSnapshot::default()),
+                (Category::Permissions, Code::PermissionStateObserved),
+            ),
+            (
+                RuntimeCommand::ReportLaunchAtLogin(LaunchAtLoginSnapshot {
+                    error_message: Some("private localized failure".to_string()),
+                    ..LaunchAtLoginSnapshot::default()
+                }),
+                (Category::Lifecycle, Code::LaunchAtLoginObserved),
+            ),
+            (
+                RuntimeCommand::HotkeyPressed,
+                (Category::Hotkey, Code::HotkeyPressed),
+            ),
+            (
+                RuntimeCommand::HotkeyReleased {
+                    duration: Duration::from_millis(275),
+                },
+                (Category::Hotkey, Code::HotkeyReleased),
+            ),
+            (
+                RuntimeCommand::ActivateSelectedModel,
+                (Category::Models, Code::ModelActivationRequested),
+            ),
+            (
+                RuntimeCommand::CancelModelOperation,
+                (Category::Models, Code::ModelCancellationRequested),
+            ),
+            (
+                RuntimeCommand::DeleteHistoryEntry {
+                    id: "private-history-id".to_string(),
+                },
+                (Category::History, Code::HistoryDeleteRequested),
+            ),
+            (
+                RuntimeCommand::ClearHistory,
+                (Category::History, Code::HistoryClearRequested),
+            ),
+            (
+                RuntimeCommand::ReportUpdateStatus(UpdateStatus::Error {
+                    code: crate::update::UpdateFailureCode::Offline,
+                    retryable: true,
+                    retry_after_seconds: None,
+                }),
+                (Category::Updates, Code::UpdateStatusObserved),
+            ),
+            (
+                RuntimeCommand::ReportSupportBundleStatus(crate::SupportBundleStatus::Error {
+                    code: crate::support::SupportBundleFailureCode::StorageUnavailable,
+                }),
+                (Category::Lifecycle, Code::SupportBundleStatusObserved),
+            ),
+            (
+                RuntimeCommand::ReportShellCapabilities(ShellCapabilities::default()),
+                (Category::Bridge, Code::ShellCapabilitiesObserved),
+            ),
+        ];
+        for (command, expected) in cases {
+            assert_eq!(diagnostic_marker_for_command(&command), Some(expected));
+        }
+        assert_eq!(
+            diagnostic_marker_for_command(&RuntimeCommand::UpdateSettings(
+                SettingsPatch::CustomVocabulary("private vocabulary".to_string())
+            )),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_settings_write_does_not_publish_unpersisted_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let occupied = dir.path().join("occupied");
+        std::fs::write(&occupied, b"not-a-directory").unwrap();
+        let settings_store = Arc::new(ConfigStore::new(occupied.join("config.json")));
+        let runtime = start_runtime_inner(
+            RuntimeBootstrap::default(),
+            ProductionOptions {
+                settings_store: Some(settings_store),
+                history_path: None,
+                platform_services: false,
+            },
+        )
+        .unwrap();
+        let mut events = runtime.handle.subscribe_events();
+
+        let result = runtime
+            .handle
+            .request(RuntimeCommand::UpdateSettings(SettingsPatch::SoundEnabled(
+                false,
+            )))
+            .await;
+        assert!(matches!(
+            result,
+            Err(RuntimeError::ServiceFailed {
+                service: "settings",
+                ..
+            })
+        ));
+        assert!(runtime.handle.snapshot().settings.sound_enabled);
+        assert_eq!(runtime.handle.snapshot().revision, 0);
+        assert!(matches!(
+            events.recv().await.unwrap().event,
+            RuntimeEvent::PipelineError { .. }
+        ));
+
+        runtime.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn successful_settings_write_is_durable_before_acknowledgement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let settings_store = Arc::new(ConfigStore::new(path.clone()));
+        let runtime = start_runtime_inner(
+            RuntimeBootstrap::default(),
+            ProductionOptions {
+                settings_store: Some(settings_store),
+                history_path: None,
+                platform_services: false,
+            },
+        )
+        .unwrap();
+
+        let outcome = runtime
+            .handle
+            .request(RuntimeCommand::UpdateSettings(SettingsPatch::SoundEnabled(
+                false,
+            )))
+            .await
+            .unwrap();
+        assert!(matches!(outcome, CommandOutcome::Applied { .. }));
+        assert!(!ConfigStore::new(path.clone()).load().unwrap().sound_enabled);
+        assert!(!runtime.handle.snapshot().settings.sound_enabled);
+
+        let outcome = runtime
+            .handle
+            .request(RuntimeCommand::UpdateSettings(
+                SettingsPatch::ThemePreference(wrenflow_domain::config::ThemePreference::Light),
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(outcome, CommandOutcome::Applied { .. }));
+        assert_eq!(
+            ConfigStore::new(path.clone())
+                .load()
+                .unwrap()
+                .theme_preference,
+            wrenflow_domain::config::ThemePreference::Light
+        );
+        assert_eq!(
+            runtime.handle.snapshot().settings.theme_preference,
+            wrenflow_domain::config::ThemePreference::Light
+        );
+
+        runtime.shutdown().await.unwrap();
+    }
 }

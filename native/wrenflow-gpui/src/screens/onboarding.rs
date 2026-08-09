@@ -153,10 +153,8 @@ fn ready_plan(presentation: &AppPresentation, onboarding: &OnboardingPresentatio
     );
 
     let mut plan = ScreenPlan::centered(NavigationTarget::Onboarding, title);
-    plan.subtitle = Some(format!(
-        "{subtitle} Step {} of {}.",
-        onboarding.step_number, onboarding.step_count
-    ));
+    plan.subtitle = Some(subtitle.to_string());
+    plan.progress = Some((onboarding.step_number, onboarding.step_count));
     plan.sections = sections;
     if onboarding.can_go_back {
         plan.footer_actions.push(
@@ -178,7 +176,6 @@ fn ready_plan(presentation: &AppPresentation, onboarding: &OnboardingPresentatio
                 AppAction::AdvanceOnboarding
             },
         )
-        .primary()
         .enabled(onboarding.can_continue && !command_pending),
     );
     plan
@@ -332,7 +329,7 @@ fn permission_action(kind: PermissionKind, open_settings: bool) -> ActionPlan {
             AppAction::OpenAccessibilitySettings,
         ),
     };
-    ActionPlan::dispatch(id, label, action).primary()
+    ActionPlan::dispatch(id, label, action)
 }
 
 fn status_plan(route: NavigationTarget, title: &str, kind: StatusKind, detail: &str) -> ScreenPlan {

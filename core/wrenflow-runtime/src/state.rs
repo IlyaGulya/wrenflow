@@ -4,6 +4,10 @@ use wrenflow_domain::history::HistoryEntry;
 use wrenflow_domain::model_management::LocalModelCatalogEntry;
 use wrenflow_domain::pipeline::PipelineState;
 
+use crate::recovery::RecoverySnapshot;
+use crate::support::SupportBundleFailureCode;
+use crate::update::{UpdateChannel, UpdateFailureCode};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimePhase {
     Starting,
@@ -159,16 +163,49 @@ pub enum UpdateStatus {
     Unsupported,
     #[default]
     Idle,
-    Checking,
-    UpToDate,
+    Checking {
+        channel: UpdateChannel,
+    },
+    UpToDate {
+        channel: UpdateChannel,
+    },
     Available {
         latest_version: String,
-        release_url: String,
-        download_url: String,
+        channel: UpdateChannel,
         published_at_iso: Option<String>,
+        size_bytes: u64,
+    },
+    Downloading {
+        latest_version: String,
+        total_bytes: u64,
+    },
+    ReadyToInstall {
+        latest_version: String,
+    },
+    Installing {
+        latest_version: String,
+    },
+    RecoveryRequired {
+        code: UpdateFailureCode,
     },
     Error {
-        message: String,
+        code: UpdateFailureCode,
+        retryable: bool,
+        retry_after_seconds: Option<u64>,
+    },
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum SupportBundleStatus {
+    #[default]
+    Idle,
+    Exporting,
+    Ready {
+        suggested_filename: String,
+        size_bytes: u64,
+    },
+    Error {
+        code: SupportBundleFailureCode,
     },
 }
 
@@ -177,6 +214,7 @@ pub struct ShellFacts {
     pub capabilities: ShellCapabilities,
     pub launch_at_login: LaunchAtLoginSnapshot,
     pub update_status: UpdateStatus,
+    pub support_bundle_status: SupportBundleStatus,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -202,6 +240,7 @@ pub struct RuntimeSnapshot {
     pub audio_devices: AudioDevicesSnapshot,
     pub runtime_capabilities: RuntimeCapabilities,
     pub shell: ShellFacts,
+    pub recovery: RecoverySnapshot,
     pub transcript_disposition: TranscriptDisposition,
     pub(crate) permission_lost_count: u8,
 }

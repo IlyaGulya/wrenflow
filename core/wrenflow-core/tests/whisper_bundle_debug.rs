@@ -8,7 +8,7 @@ use tokio::runtime::Builder;
 use wrenflow_core::model_downloader;
 use wrenflow_core::model_management::{
     whisper_large_v3_turbo_model, DownloadProgress, LocalModelState, ModelDownloadListener,
-    ModelInfo, ModelRuntime,
+    ModelFile, ModelInfo, ModelRuntime,
 };
 use wrenflow_core::transcription_local::LocalTranscriptionEngine;
 use wrenflow_core::{history::HistoryEntry, HistoryStore};
@@ -29,27 +29,85 @@ impl ModelDownloadListener for NoopListener {
 }
 
 fn lite_whisper_large_v3_turbo_model() -> ModelInfo {
+    let asset = |path: &str, sha256: &str, size: u64| ModelFile {
+        path: path.to_string(),
+        sha256: sha256.to_string(),
+        size,
+    };
     ModelInfo {
         id: "lite-whisper-large-v3-turbo-onnx".to_string(),
         name: "Lite Whisper Large V3 Turbo".to_string(),
         repo_id: "onnx-community/lite-whisper-large-v3-turbo-ONNX".to_string(),
+        revision: "877432e56f7047ae4fabd2e13befdca14b3f973e".to_string(),
         directory_name: "lite-whisper-large-v3-turbo".to_string(),
         expected_files: vec![
-            "config.json".to_string(),
-            "generation_config.json".to_string(),
-            "preprocessor_config.json".to_string(),
-            "tokenizer.json".to_string(),
-            "tokenizer_config.json".to_string(),
-            "special_tokens_map.json".to_string(),
-            "added_tokens.json".to_string(),
-            "merges.txt".to_string(),
-            "normalizer.json".to_string(),
-            "vocab.json".to_string(),
-            "onnx/encoder_model_int8.onnx".to_string(),
-            "onnx/decoder_model_int8.onnx".to_string(),
-            "onnx/decoder_with_past_model_int8.onnx".to_string(),
+            asset(
+                "config.json",
+                "73150a2df5d1c001badec467d3542751ca92cfe8c3dc5d55cf7c48908b555dfe",
+                5_034,
+            ),
+            asset(
+                "generation_config.json",
+                "2a54bd60198b1875d413d986547cd419936ae7f719c1b70cfd969cca0d7295ba",
+                253,
+            ),
+            asset(
+                "preprocessor_config.json",
+                "7ccc62c6f2765af1f3b46c00c9b5894426835a05021c8b9c01eecb6dfb542711",
+                340,
+            ),
+            asset(
+                "tokenizer.json",
+                "5c1bf30c9e716e1477bedef846b01be0013daecb89e9e3ef7ab89b23c178df1b",
+                3_930_645,
+            ),
+            asset(
+                "tokenizer_config.json",
+                "3c75940dfce3a294fca7041a5faff011677f1b68fa85e47511bb8cf6dccaded6",
+                282_873,
+            ),
+            asset(
+                "special_tokens_map.json",
+                "baea4ea09372eb4fca86b4e4346139fd73cb807d5087e9de0948e971739c3e74",
+                2_186,
+            ),
+            asset(
+                "added_tokens.json",
+                "3c51f66c4c21f9e126970078f11ae77a78c74aee8df606ee9daba86e467108e0",
+                34_648,
+            ),
+            asset(
+                "merges.txt",
+                "2df2990a395e35e8dfbc7511e08c12d56018d8d04691e0133e5d63b21e154dc6",
+                493_869,
+            ),
+            asset(
+                "normalizer.json",
+                "bf1c507dc8724ca9cf9903640dacfb69dae2f00edee4f21ceba106a7392f26dd",
+                52_666,
+            ),
+            asset(
+                "vocab.json",
+                "6788c80b082e9b0d1393147d3a3e62ba19285ac0c82ace8e5ef00f37ead58971",
+                835_528,
+            ),
+            asset(
+                "onnx/encoder_model_int8.onnx",
+                "6ae0c159ff825a7c6ae063e1f587fc5b71f897c33fc57fd9ea84f9c98d084d13",
+                383_783_309,
+            ),
+            asset(
+                "onnx/decoder_model_int8.onnx",
+                "933f05ea4171d5f17402e5b71cebc22f3fd3a4a8f99486119ba36ec51716d443",
+                437_927_549,
+            ),
+            asset(
+                "onnx/decoder_with_past_model_int8.onnx",
+                "d7d2222b05959c7f9ab3b0231e7462e0ca13a887919b9fc0e5c70f04956c32bc",
+                424_758_658,
+            ),
         ],
-        generated_files: vec![],
+        generated_files: vec![".wrenflow-model-ready".to_string()],
         runtime: ModelRuntime::WhisperOnnx,
     }
 }

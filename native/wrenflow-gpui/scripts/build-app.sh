@@ -3,6 +3,8 @@ set -euo pipefail
 
 CRATE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REPO_DIR="$(cd "$CRATE_DIR/../.." && pwd)"
+# shellcheck disable=SC1091
+source "$REPO_DIR/support/macos.env"
 TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_DIR/build/gpui-production-target}"
 CARGO_HOME="${CARGO_HOME:-$REPO_DIR/build/gpui-production-cargo-home}"
 FINAL_APP_DIR="$REPO_DIR/build/gpui/Wrenflow.app"
@@ -10,6 +12,16 @@ SIGN_IDENTITY="${WRENFLOW_GPUI_SIGN_IDENTITY:-Developer ID Application: Ilya Gul
 MANIFEST_VERSION="$(sed -n 's/^version = "\([^"]*\)".*$/\1/p' "$CRATE_DIR/Cargo.toml" | head -1)"
 VERSION="${WRENFLOW_VERSION:-$MANIFEST_VERSION}"
 BUILD_NUMBER="${WRENFLOW_BUILD_NUMBER:-$VERSION}"
+
+if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "$WRENFLOW_MACOS_ARCH" ]]; then
+    echo "Production bundles require an Apple Silicon macOS host; got $(uname -s)/$(uname -m)" >&2
+    exit 1
+fi
+if [[ -n "${MACOSX_DEPLOYMENT_TARGET:-}" && "$MACOSX_DEPLOYMENT_TARGET" != "$WRENFLOW_MACOS_MIN" ]]; then
+    echo "MACOSX_DEPLOYMENT_TARGET must be $WRENFLOW_MACOS_MIN for the production bundle" >&2
+    exit 1
+fi
+export MACOSX_DEPLOYMENT_TARGET="$WRENFLOW_MACOS_MIN"
 
 if [[ -z "$VERSION" ]]; then
     echo "Could not determine Wrenflow version from $CRATE_DIR/Cargo.toml" >&2
@@ -19,6 +31,7 @@ fi
 export CARGO_HOME CARGO_TARGET_DIR
 cargo build \
     --manifest-path "$CRATE_DIR/Cargo.toml" \
+    --target "$WRENFLOW_RUST_TARGET" \
     --release \
     --locked \
     --config 'source.crates-io.registry="sparse+https://index.crates.io/"'
@@ -36,24 +49,33 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 LICENSES_DIR="$RESOURCES_DIR/ThirdPartyLicenses"
-mkdir -p "$MACOS_DIR" "$FRAMEWORKS_DIR" "$RESOURCES_DIR" "$LICENSES_DIR"
+SUPPLY_CHAIN_DIR="$RESOURCES_DIR/SupplyChain"
+mkdir -p "$MACOS_DIR" "$FRAMEWORKS_DIR" "$RESOURCES_DIR" "$LICENSES_DIR" "$SUPPLY_CHAIN_DIR"
 
-cp "$TARGET_DIR/release/wrenflow-gpui" "$MACOS_DIR/wrenflow"
+cp "$TARGET_DIR/$WRENFLOW_RUST_TARGET/release/wrenflow-gpui" "$MACOS_DIR/wrenflow"
 cp "$CRATE_DIR/macos/Info.plist" "$CONTENTS_DIR/Info.plist"
 plutil -replace CFBundleShortVersionString -string "$VERSION" "$CONTENTS_DIR/Info.plist"
 plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "$CONTENTS_DIR/Info.plist"
 cp "$REPO_DIR/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 cp "$REPO_DIR/Resources/ThirdPartyNotices.txt" "$RESOURCES_DIR/ThirdPartyNotices.txt"
-
-GPUI_LICENSE="$(find "$CARGO_HOME/registry/src" -path '*/gpui-0.2.2/LICENSE-APACHE' -type f -print -quit)"
-if [[ -z "$GPUI_LICENSE" ]]; then
-    echo "GPUI Apache-2.0 license was not found in the locked Cargo source cache" >&2
-    exit 1
-fi
-cp "$GPUI_LICENSE" "$LICENSES_DIR/GPUI-Apache-2.0.txt"
+SUPPLY_CHAIN_SOURCE="$REPO_DIR/build/supply-chain"
+for metadata in Wrenflow.cdx.json RustThirdPartyLicenses.txt pins.json exceptions.json provenance.json SHA256SUMS; do
+    if [[ ! -f "$SUPPLY_CHAIN_SOURCE/$metadata" ]]; then
+        echo "Supply-chain metadata is missing: $SUPPLY_CHAIN_SOURCE/$metadata" >&2
+        echo "Run 'mise run supply-chain-metadata' before packaging." >&2
+        exit 1
+    fi
+done
+cp "$SUPPLY_CHAIN_SOURCE/RustThirdPartyLicenses.txt" "$RESOURCES_DIR/RustThirdPartyLicenses.txt"
+cp "$SUPPLY_CHAIN_SOURCE/RustThirdPartyLicenses.txt" "$SUPPLY_CHAIN_DIR/RustThirdPartyLicenses.txt"
+cp "$SUPPLY_CHAIN_SOURCE/Wrenflow.cdx.json" "$SUPPLY_CHAIN_DIR/Wrenflow.cdx.json"
+cp "$SUPPLY_CHAIN_SOURCE/pins.json" "$SUPPLY_CHAIN_DIR/pins.json"
+cp "$SUPPLY_CHAIN_SOURCE/exceptions.json" "$SUPPLY_CHAIN_DIR/exceptions.json"
+cp "$SUPPLY_CHAIN_SOURCE/provenance.json" "$SUPPLY_CHAIN_DIR/provenance.json"
+cp "$SUPPLY_CHAIN_SOURCE/SHA256SUMS" "$SUPPLY_CHAIN_DIR/SHA256SUMS"
 
 shopt -s nullglob
-swift_libraries=("$TARGET_DIR"/release/build/wrenflow-gpui-*/out/libWrenflowShell.dylib)
+swift_libraries=("$TARGET_DIR"/"$WRENFLOW_RUST_TARGET"/release/build/wrenflow-gpui-*/out/libWrenflowShell.dylib)
 if (( ${#swift_libraries[@]} == 0 )); then
     echo "Swift shell dylib was not produced by build.rs" >&2
     exit 1

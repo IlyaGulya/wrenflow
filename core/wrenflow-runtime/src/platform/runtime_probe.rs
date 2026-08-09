@@ -50,15 +50,15 @@ pub(crate) fn onnx_runtime_available() -> bool {
 }
 
 pub(crate) fn model_storage_writable() -> bool {
-    let Some(base) = dirs::data_local_dir() else {
-        return false;
-    };
-    probe_writable_dir(&base.join("wrenflow/models"), ".write-probe")
+    probe_writable_dir(
+        &crate::data_paths::current_data_paths().models,
+        ".write-probe",
+    )
 }
 
 pub(crate) fn history_storage_writable() -> bool {
-    let Some(base) = dirs::data_local_dir() else {
-        return false;
-    };
-    probe_writable_dir(&base.join("wrenflow"), ".history-write-probe")
+    probe_writable_dir(
+        &crate::data_paths::current_data_paths().root,
+        ".history-write-probe",
+    )
 }

@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "exceptions": [
+    {
+      "ids": ["RUSTSEC-2024-0436"],
+      "owner": "Ilya Gulya",
+      "expires": "2026-12-31",
+      "scope": "paste 1.0.15 via tokenizers/parakeet-rs",
+      "release_impact": "Informational unmaintained advisory only; any vulnerability advisory blocks release."
+    },
+    {
+      "ids": ["RUSTSEC-2024-0384", "RUSTSEC-2025-0052", "RUSTSEC-2025-0134", "RUSTSEC-2026-0173", "RUSTSEC-2026-0192", "RUSTSEC-2026-0206"],
+      "owner": "Ilya Gulya",
+      "expires": "2026-12-31",
+      "scope": "Exact-pinned GPUI 0.2.2 and gpui-component 0.5.1 transitive graph",
+      "release_impact": "Unmaintained advisories only. Re-evaluate on every GPUI pin update; any vulnerability or unsound advisory blocks release."
+    },
+    {
+      "ids": ["MODEL-LICENSE-WHISPER-ONNX-001"],
+      "owner": "Ilya Gulya",
+      "expires": "2026-10-31",
+      "scope": "onnx-community Whisper conversion does not repeat upstream license metadata",
+      "release_impact": "Approved only while bytes remain pinned to the stated conversion revision of the MIT-licensed OpenAI model; a source/revision change blocks release."
+    }
+  ]
+}

@@ -50,7 +50,10 @@ The compatibility-adapter step separates the two migrations:
 - `.6` ports presentation against a stable Rust API;
 - `.7` deletes the compatibility adapter, generated Dart and Flutter packaging.
 
-## Current architecture, verified in code
+## Historical extraction baseline
+
+The following graph records the retired pre-GPUI state used to make the
+extraction decision. It is not the current production graph.
 
 ```mermaid
 flowchart LR
@@ -414,7 +417,6 @@ pub enum ShellCommand {
     RequestAccessibilityPermission,
     OpenPermissionSettings(PermissionKind),
     SetLaunchAtLogin(bool),
-    OpenUrl(url::Url),
     Quit,
 }
 
@@ -435,24 +437,21 @@ Accepted implementation after `.1`:
    points, Developer ID signing and LaunchServices startup without an Xcode host.
 2. Extract the existing SwiftUI/AppKit panel controller into the GPUI shell
    without changing its `screenSaver`, all-Spaces, non-activating and error-action
-   semantics. Keep the Flutter `MethodChannel` implementation untouched as the
-   rollback path until `.7`; do not use MethodChannel from the GPUI process.
+   semantics. The retired Flutter `MethodChannel` is historical context only;
+   the GPUI product has no compatibility or rollback path.
 3. Do not add a `wrenflow-macos` Rust crate or duplicate AppKit ownership through
-   `objc2` in the first migration. Reconsider that only after Flutter deletion if
-   the Swift ABI becomes a maintenance cost.
-4. Package the GPUI app with the proven Cargo + bundle-script path. XcodeGen
-   remains only for the parallel Flutter target. If extracted SwiftUI sources
-   cannot link through the proven Swift-object path, `.4` may package them as a
-   signed private dylib, but must not introduce a second application event loop.
+   `objc2`; reconsider only if the narrow Swift ABI becomes a maintenance cost.
+4. Package the GPUI app with Cargo plus the bundle script and its signed private
+   Swift dylib. XcodeGen and the former Flutter target are not product paths.
 
 Permissions should be observed by the shell and reported once per change or
 poll tick to runtime. GPUI reads only the runtime permission snapshot for
 presentation. This removes the current AppKit -> Dart -> Rust -> Dart loop.
 
-Updates should move into Rust runtime (`reqwest` is already a workspace
-dependency) unless the release spike identifies a platform updater that must be
-shell-owned. Shell only opens a release/download URL or invokes the selected
-native updater.
+Updates are owned by the Rust runtime. Authenticated metadata selects only the
+pinned bundle/support/architecture artifact, verifies checksum and signature,
+then enters the atomic current-line installer. The shell exposes no arbitrary
+URL opener and never opens a release or download page.
 
 ## Component-library decision
 
@@ -709,7 +708,7 @@ runtime snapshots/events for:
 - this ADR is updated from `proposed` to `accepted` with the actual crate and
   dependency names/revisions;
 - ownership, command/snapshot/event contracts, GPUI entity boundaries, Tokio
-  lifetime, AppKit boundary, rollout/rollback and deletion sequence are agreed;
+  lifetime, AppKit boundary, clean-break rollout and deletion sequence are agreed;
 - `.3` estimate is recalculated from the spike and extraction slices;
 - open architecture questions below are resolved or assigned explicit tasks.
 
@@ -724,11 +723,11 @@ runtime snapshots/events for:
 - settings, models, permissions, devices, pipeline, history, update, hotkey,
   paste and app-session invariants are represented by snapshots/events and
   covered by runtime tests;
-- Flutter remains operational through the adapter or any deliberate deviation
-  is documented and accepted;
+- the retired Flutter adapter is absent from the production runtime and GPUI
+  remains the only application target;
 - runtime starts and shuts down cleanly under a test harness without Flutter;
-- `mise run lint-rust`, `mise run test-rust`, the new runtime tests and relevant
-  Flutter parity tests pass.
+- `mise run lint-rust`, `mise run test-rust`, runtime contract tests and GPUI
+  parity tests pass.
 
 ## Ratified spike decisions
 
@@ -738,11 +737,11 @@ runtime snapshots/events for:
 2. Dependencies are exact-pinned to GPUI 0.2.2, gpui-component 0.5.1 and
    gpui-component-assets 0.5.1. `.5` owns the accessibility wrapper work.
 3. Cargo plus the Swift-object `build.rs` and bundle scripts are the GPUI build
-   orchestrator. `.4` owns the extracted SwiftUI link proof; XcodeGen is not part
-   of the GPUI target and remains available only for Flutter rollback.
-4. Update checking moves to the Rust runtime using `reqwest`; the shell only
-   opens the selected release/download URL. A signed automatic updater is a
-   separate future product decision, not migration scope.
+   orchestrator. XcodeGen and the retired application target are not product
+   paths.
+4. The Rust runtime owns authenticated, URL-free current-line updating. The
+   shell owns no release/download URL surface; recovery is reset or reinstall,
+   never downgrade or cross-line rollback.
 5. The unreceived `StartRecording`, `StopRecording` and `BootstrapAppSession`
    commands and the unconsumed `PlaySound`/`PasteComplete` signals are treated as
    dead compatibility surface. `.3` removes them after adapter scenario tests

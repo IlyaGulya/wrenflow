@@ -14,7 +14,7 @@ pub use presentation::{
     HistoryItemPresentation, HistoryPresentation, LaunchAtLoginPresentation,
     MicrophoneOptionPresentation, ModelPresentation, ModelStatusPresentation, ModelsPresentation,
     OnboardingPresentation, PermissionPresentation, PermissionRecoveryPresentation,
-    PermissionsPresentation, SettingsPresentation, TranscriptionTestPhase,
-    TranscriptionTestPresentation, UpdatePresentation,
+    PermissionsPresentation, RecoveryPresentation, SettingsPresentation, SupportBundlePresentation,
+    TranscriptionTestPhase, TranscriptionTestPresentation, UpdatePresentation,
 };
 pub use reducer::{AppMutation, AppReducer, CommandKey, CommandStatus, Notice, NoticeKind};

@@ -537,11 +537,10 @@ fn error_state(message: String) -> ModelOperationState {
 }
 
 pub(crate) fn model_dir_for(model_id: &str) -> Option<PathBuf> {
-    let base = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
     let model = local_model_by_id(model_id)?;
     Some(
-        base.join("wrenflow")
-            .join("models")
+        crate::data_paths::current_data_paths()
+            .models
             .join(model.directory_name),
     )
 }
