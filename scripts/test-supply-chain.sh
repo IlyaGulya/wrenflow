@@ -19,6 +19,14 @@ if sed -n '/^\[tasks\.supply-chain-audit\]$/,/^\[tasks\./p; /^\[tasks\.supply-ch
     echo "Supply-chain tasks must not override the globally pinned CLI environment" >&2
     exit 1
 fi
+grep -Fq 'cargo-cyclonedx cyclonedx \' "$REPO_DIR/scripts/generate-supply-chain.sh"
+grep -Fq 'cargo-about generate \' "$REPO_DIR/scripts/generate-supply-chain.sh"
+grep -Fq 'cargo-deny --locked check' "$REPO_DIR/mise.toml"
+if rg -n 'cargo (about|cyclonedx|deny)( |$)' \
+    "$REPO_DIR/mise.toml" "$REPO_DIR/scripts/generate-supply-chain.sh"; then
+    echo "Supply-chain tooling must invoke the pinned plugin binaries directly" >&2
+    exit 1
+fi
 
 for required in \
     "$REPO_DIR/supply-chain/pins.json" \

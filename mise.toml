@@ -294,8 +294,8 @@ run = "pinact run"
 [tasks.supply-chain-audit]
 description = "Reject vulnerable, unapproved-license, wildcard-source and unlocked Rust dependencies"
 run = """
-cargo deny --locked check advisories licenses bans sources
-cargo deny --manifest-path native/wrenflow-gpui/Cargo.toml --locked check advisories licenses bans sources
+cargo-deny --locked check advisories licenses bans sources
+cargo-deny --manifest-path native/wrenflow-gpui/Cargo.toml --locked check advisories licenses bans sources
 """
 
 [tasks.supply-chain-fetch]

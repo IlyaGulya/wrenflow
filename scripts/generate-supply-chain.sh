@@ -26,7 +26,7 @@ ORT_VERSION="$(jq -r '.onnx_runtime.version' "$REPO_DIR/supply-chain/pins.json")
 ORT_URL="$(jq -r '.onnx_runtime.url' "$REPO_DIR/supply-chain/pins.json")"
 ORT_DYLIB_SHA="$(jq -r '.onnx_runtime.dylib_sha256' "$REPO_DIR/supply-chain/pins.json")"
 
-cargo cyclonedx \
+cargo-cyclonedx cyclonedx \
     --manifest-path "$APP_MANIFEST" \
     --format json \
     --spec-version 1.5 \
@@ -88,7 +88,7 @@ jq -S \
     "$OUTPUT_DIR/Wrenflow.cdx.json" >"$OUTPUT_DIR/Wrenflow.cdx.json.sanitized"
 mv "$OUTPUT_DIR/Wrenflow.cdx.json.sanitized" "$OUTPUT_DIR/Wrenflow.cdx.json"
 
-cargo about generate \
+cargo-about generate \
     --config "$REPO_DIR/about.toml" \
     --manifest-path "$APP_MANIFEST" \
     --workspace \
