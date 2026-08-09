@@ -17,6 +17,10 @@ mise exec -- python3 -m py_compile "$HARNESS"
 mise exec -- jq -e '
   .schema_version == 1 and
   .budget_version == "gpui-performance-v1" and
+  (.required_instruments_templates | length) == 7 and
+  .supporting_instruments_templates == ["Power Profiler"] and
+  ((.required_instruments_templates - .supporting_instruments_templates) | length) == 7 and
+  ((.supporting_instruments_templates - .required_instruments_templates) | length) == 1 and
   ([.budgets[].comparison] | all(. == "<=" or . == ">=" or . == "==")) and
   ([.budgets[] | select(.metric == "cycles.completed.count" or .metric == "history.rows.count") | .comparison] | all(. == "==")) and
   ([.evidence_policy.constrained_noninteractive[], .evidence_policy.post_event_tap_synthetic[], .evidence_policy.physical_interactive[]] | length) == (.budgets | length) and
@@ -64,6 +68,30 @@ import runpy, sys
 module = runpy.run_path(sys.argv[1])
 assert module["parse_memory"]("38M-") == 38
 assert module["parse_memory"]("1.5G+") == 1536
+assert module["REQUIRED_TEMPLATES"].isdisjoint(module["SUPPORTING_TEMPLATES"])
+assert len(module["REQUIRED_TEMPLATES"]) == 7
+assert module["SUPPORTING_TEMPLATES"] == {"Power Profiler"}
+' "$HARNESS"
+
+mise exec -- python3 -c '
+import runpy, sys
+module = runpy.run_path(sys.argv[1])
+base = {
+    "host": {
+        "missing_required_templates": [],
+        "missing_supporting_templates": ["Power Profiler"],
+        "evidence_eligibility": {},
+    },
+    "candidate": {}, "source": {}, "phases": {},
+}
+failures = module["check_provenance"](base, "fixture")
+assert not any("missing Instruments templates" in failure for failure in failures)
+base["host"]["missing_required_templates"] = ["Time Profiler"]
+failures = module["check_provenance"](base, "fixture")
+assert any(
+    "missing Instruments templates" in failure and "Time Profiler" in failure
+    for failure in failures
+)
 ' "$HARNESS"
 
 mise exec -- python3 -c '
@@ -325,6 +353,7 @@ mise exec -- jq -e '
   .schema_version == 1 and
   (.host.architecture == "arm64") and
   (.host.missing_required_templates == []) and
+  ((.host.missing_supporting_templates - ["Power Profiler"]) == []) and
   (.host | has("platform_UUID") | not) and
   (.host | has("serial_number") | not)
 ' "$TEST_ROOT/preflight.json" >/dev/null

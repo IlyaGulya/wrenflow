@@ -6,6 +6,9 @@ rust = "1.94.1"
 resvg = "0.47.0"
 jq = "1.8.1"
 ripgrep = "14.1.1"
+"cargo:cargo-about" = "0.9.1"
+"cargo:cargo-cyclonedx" = "0.5.9"
+"cargo:cargo-deny" = "0.20.2"
 
 # ── Tasks ──────────────────────────────────────────────────────
 

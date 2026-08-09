@@ -56,10 +56,10 @@ REQUIRED_TEMPLATES = {
     "Animation Hitches",
     "Audio System Trace",
     "Leaks",
-    "Power Profiler",
     "System Trace",
     "Time Profiler",
 }
+SUPPORTING_TEMPLATES = {"Power Profiler"}
 PHASES = {
     "idle",
     "idle_10m",
@@ -244,6 +244,8 @@ def collect_host() -> dict[str, Any]:
         and chip in {"Apple M1", "Apple M1 Max"}
         and os_major in {14, 26}
     )
+    missing_required_templates = sorted(REQUIRED_TEMPLATES - set(templates))
+    missing_supporting_templates = sorted(SUPPORTING_TEMPLATES - set(templates))
     xcode = run(["/usr/bin/xcodebuild", "-version"], check=False).splitlines()
     return {
         "os_version": os_version,
@@ -257,7 +259,8 @@ def collect_host() -> dict[str, Any]:
         "xcode_build": xcode[1] if len(xcode) > 1 else "unknown",
         "xctrace_version": run(["/usr/bin/xcrun", "xctrace", "version"]),
         "xctrace_templates": templates,
-        "missing_required_templates": sorted(REQUIRED_TEMPLATES - set(templates)),
+        "missing_required_templates": missing_required_templates,
+        "missing_supporting_templates": missing_supporting_templates,
         "power": collect_power(),
         "github": {
             "actions": github_actions,

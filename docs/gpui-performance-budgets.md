@@ -306,14 +306,19 @@ mise run performance-trace -- \
   "$WRENFLOW_PERF_APP" "Allocations" 600 \
   "$WRENFLOW_PERF_DIR/cycles-allocations.trace"
 mise run performance-trace -- \
-  "$WRENFLOW_PERF_APP" "Power Profiler" 1800 \
-  "$WRENFLOW_PERF_DIR/idle-power.trace"
+  "$WRENFLOW_PERF_APP" "System Trace" 600 \
+  "$WRENFLOW_PERF_DIR/cycles-system.trace"
 ```
 
-Capture the eight contract templates named in the budget file across the
-matching workload. Xcode's command-line reference confirms that `xctrace`
-records and exports Instruments trace files; use `mise exec -- xcrun xctrace
-export --input <trace> --toc` to record the table schema before an XPath export.
+Capture the seven required contract templates named in the budget file across
+the matching workload. `Power Profiler` is supporting attribution only: Xcode
+16.2 on the pinned macOS 14 runner does not expose that template, so capture it
+when the installed Xcode provides it, but never use its presence or absence to
+satisfy a numeric energy budget. The energy gates remain the Activity Monitor
+Energy Impact proxy sampled by the harness. Xcode's command-line reference
+confirms that `xctrace` records and exports Instruments trace files; use
+`mise exec -- xcrun xctrace export --input <trace> --toc` to record the table
+schema before an XPath export.
 Template schemas vary with Xcode, so derived numeric values are entered with
 the trace hash instead of scraping an unstable guessed XPath:
 

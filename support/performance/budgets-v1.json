@@ -29,9 +29,11 @@
     "Animation Hitches",
     "Audio System Trace",
     "Leaks",
-    "Power Profiler",
     "System Trace",
     "Time Profiler"
+  ],
+  "supporting_instruments_templates": [
+    "Power Profiler"
   ],
   "evidence_policy": {
     "constrained_noninteractive": [

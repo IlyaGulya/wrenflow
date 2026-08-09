@@ -4,6 +4,17 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 METADATA_DIR="$REPO_DIR/build/supply-chain"
 
+GLOBAL_TOOLS="$(sed -n '/^\[tools\]$/,/^\[/p' "$REPO_DIR/mise.toml")"
+for pinned_tool in \
+    '"cargo:cargo-about" = "0.9.1"' \
+    '"cargo:cargo-cyclonedx" = "0.5.9"' \
+    '"cargo:cargo-deny" = "0.20.2"'; do
+    grep -Fq "$pinned_tool" <<<"$GLOBAL_TOOLS" || {
+        echo "Supply-chain CLI must be globally pinned before the parallel test DAG: $pinned_tool" >&2
+        exit 1
+    }
+done
+
 for required in \
     "$REPO_DIR/supply-chain/pins.json" \
     "$REPO_DIR/supply-chain/exceptions.json" \
