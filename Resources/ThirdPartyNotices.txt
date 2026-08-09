@@ -1,0 +1,18 @@
+Wrenflow third-party notices
+============================
+
+Wrenflow bundles the following runtime components:
+
+- GPUI 0.2.2, Copyright Zed Industries, licensed under Apache-2.0.
+- gpui-component 0.5.1 and gpui-component-assets 0.5.1,
+  Copyright Longbridge, licensed under Apache-2.0.
+- ONNX Runtime 1.24.2, Copyright Microsoft Corporation, licensed under MIT.
+
+The complete shared Apache-2.0 license is installed as
+ThirdPartyLicenses/GPUI-Apache-2.0.txt. ONNX Runtime's complete license and its
+upstream dependency notices are installed as
+ThirdPartyLicenses/ONNX-Runtime-LICENSE.txt and
+ThirdPartyLicenses/ONNX-Runtime-ThirdPartyNotices.txt.
+
+These notices apply only to the named third-party components. Wrenflow's own
+license remains in the repository LICENSE file.

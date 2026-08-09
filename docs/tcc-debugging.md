@@ -1,6 +1,9 @@
 # macOS TCC Debugging
 
-macOS TCC checks entitlements on the **responsible process**, not just the requesting process. When launching via terminal (`flutter run`), the terminal becomes responsible — TCC requires `com.apple.security.device.audio-input` on the terminal too, which it doesn't have. Microphone permission dialog never appears.
+macOS TCC checks entitlements on the **responsible process**, not just the
+requesting process. When Wrenflow's Mach-O is launched directly from a terminal,
+the terminal can become responsible and does not carry Wrenflow's microphone
+identity. The permission dialog may therefore never appear.
 
 **Always launch via `mise run run`** (uses `open`, app is its own responsible process).
 

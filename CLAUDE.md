@@ -4,30 +4,39 @@ Menu bar speech-to-text app. Hold key → record → release → transcribe loca
 
 ## Tooling
 
-All tools managed by **mise**. NEVER run bare `flutter`/`cargo`/`xcodegen` — always `mise run <task>` or `mise exec -- <cmd>`.
+All tools are managed by **mise**. Never run bare `cargo`, `swiftc`, or packaging
+scripts — always use `mise run <task>` or `mise exec -- <cmd>`.
 
 ## Launching
 
-`mise run run` builds + opens .app via `open`. NEVER use `flutter run` — TCC checks entitlements on the terminal (responsible process), blocking microphone access. See [docs/tcc-debugging.md](docs/tcc-debugging.md) for details.
+`mise run run` builds and opens the signed `.app` through LaunchServices. Never
+run the Mach-O directly: TCC evaluates the responsible process and the terminal
+does not carry Wrenflow's microphone identity. See
+[docs/tcc-debugging.md](docs/tcc-debugging.md).
 
 ## Non-Obvious Architecture
 
-- **Single Flutter engine**: Settings (with History/About tabs) in main window via `ActiveScreen` (none/settings) — no multi-window. Rinf signals work everywhere.
-- **ONNX Runtime**: `load-dynamic` — dylib fetched by `scripts/download-ort.sh`, codesigned in XcodeGen post-build.
+- **Single GPUI window**: `AppScreens` renders onboarding, Settings, Models,
+  History and About from immutable `AppPresentation` values.
+- **Typed UI boundary**: screens dispatch `AppAction` into `AppModel`; runtime
+  IO crosses `RuntimeCommand`, snapshots and events.
+- **ONNX Runtime**: `load-dynamic` — dylib fetched by `scripts/download-ort.sh`, copied and codesigned by the app bundle script.
 - **CGEvent paste**: Replaces enigo (TSM crash). Uses `core-graphics` for Cmd+V.
-- **raw-input**: Replaces rdev. CGEventTap hotkeys, keycode changeable at runtime.
-- **No imperative windows**: `WindowSynchronizer` drives show/hide from state. Tray can also show/focus window directly.
-- **Native overlays**: Recording overlay + error toasts are native NSPanels at screenSaver level, driven via `dev.gulya.wrenflow/overlay` platform channel. NOT Flutter widgets (main window is hidden during recording).
-- **Icons built from SVG**: `mise run icons` — `AppIcon-Dock.svg` (dock), `AppIcon-Source.svg` (settings), `logo-bird.svg` (tray) via resvg. PNGs gitignored.
-- **Info.plist generated**: XcodeGen generates from `project.yml` `info:` section. Don't edit Info.plist directly.
+- **Global hotkey**: the Swift shell owns a listen-only `CGEventTap`; presses and release durations enter the typed `AppAction` boundary.
+- **One long-lived settings window**: the AppKit shell shows, focuses and hides the existing GPUI window.
+- **Native overlays**: recording, transcribing and actionable error panels are SwiftUI-backed `NSPanel`s at `screenSaver` level behind the narrow Rust/Swift FFI.
+- **Icons built from SVG**: `mise run icons` generates `Resources/AppIcon.icns` from `AppIcon-Dock.svg`.
+- **Bundle metadata**: `native/wrenflow-gpui/macos/Info.plist` and `Wrenflow.entitlements` are copied and signed by the bundle script.
 - **Audio**: Recordings saved as OGG/Opus (~15KB vs ~300KB WAV). Transcription runs from memory buffer, WAV write is parallel.
 - **Paths**: Use `dirs` crate for platform data directories (history.sqlite, recordings/).
-- **LSUIElement**: App starts as menu bar accessory (no dock icon). `dev.gulya.wrenflow/app_policy` channel toggles dock visibility when showing/hiding windows.
+- **LSUIElement**: the app starts as a menu-bar accessory. The AppKit shell switches activation policy when showing or hiding the GPUI window.
 - **No sandbox**: Required for accessibility + global hotkeys.
 
 ## Releases
 
-See [release skill](.claude/skills/release/SKILL.md) for the full release workflow. Quick version: merge the release-please PR to cut a release.
+See the canonical [release skill](.agents/skills/release/SKILL.md) for the full
+Rust/GPUI release workflow. Quick version: merge the release-please PR to cut a
+release.
 
 ## Code Signing
 

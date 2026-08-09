@@ -6,16 +6,16 @@ the app architecture evolves.
 ## Sources Of Truth
 
 - Rust owns durable product state.
-- Flutter renders snapshots and sends user intent commands.
+- GPUI renders immutable `AppPresentation` projections and sends typed
+  `AppAction` intents.
 - Shell adapters expose platform capabilities and imperative OS actions.
 
-The main Rust-owned snapshots/FSMs are:
+The main Rust-owned snapshots/FSMs are exposed through `RuntimeSnapshot`:
 
-- `SettingsSnapshot`
-- `LocalModelsSnapshot`
-- `PermissionsSnapshot`
-- `AppSessionSnapshot`
-- `RuntimeCapabilitiesSnapshot`
+- settings and app-session state
+- local-model catalog, operation and active-model state
+- permissions and runtime/shell capabilities
+- history, pipeline and audio-device state
 
 ## Onboarding And Session
 

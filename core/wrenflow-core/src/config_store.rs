@@ -66,10 +66,7 @@ fn legacy_preferences_path() -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-fn legacy_string(
-    dict: &plist::Dictionary,
-    key: &str,
-) -> Option<String> {
+fn legacy_string(dict: &plist::Dictionary, key: &str) -> Option<String> {
     dict.get(key)?.as_string().map(ToOwned::to_owned)
 }
 
@@ -86,7 +83,7 @@ fn legacy_f64(dict: &plist::Dictionary, key: &str) -> Option<f64> {
 }
 
 #[cfg(target_os = "macos")]
-pub fn merge_legacy_preferences(mut config: AppConfig) -> AppConfig {
+pub fn merge_legacy_preferences(config: AppConfig) -> AppConfig {
     let Some(path) = legacy_preferences_path() else {
         return config;
     };
@@ -97,6 +94,14 @@ pub fn merge_legacy_preferences(mut config: AppConfig) -> AppConfig {
         return config;
     };
 
+    merge_legacy_preferences_from_dict(config, dict)
+}
+
+#[cfg(target_os = "macos")]
+fn merge_legacy_preferences_from_dict(
+    mut config: AppConfig,
+    dict: &plist::Dictionary,
+) -> AppConfig {
     if !config.has_completed_setup {
         if let Some(has_completed_setup) = legacy_bool(dict, "flutter.has_completed_setup") {
             if has_completed_setup {
@@ -106,9 +111,7 @@ pub fn merge_legacy_preferences(mut config: AppConfig) -> AppConfig {
     }
 
     if config.selected_hotkey == DEFAULT_SELECTED_HOTKEY {
-        if let Some(selected_hotkey) =
-            legacy_string(dict, "flutter.settings_selected_hotkey")
-        {
+        if let Some(selected_hotkey) = legacy_string(dict, "flutter.settings_selected_hotkey") {
             if !selected_hotkey.is_empty() {
                 config.selected_hotkey = selected_hotkey;
             }
@@ -136,9 +139,7 @@ pub fn merge_legacy_preferences(mut config: AppConfig) -> AppConfig {
     }
 
     if config.custom_vocabulary.is_empty() {
-        if let Some(custom_vocabulary) =
-            legacy_string(dict, "flutter.settings_custom_vocabulary")
-        {
+        if let Some(custom_vocabulary) = legacy_string(dict, "flutter.settings_custom_vocabulary") {
             if !custom_vocabulary.is_empty() {
                 config.custom_vocabulary = custom_vocabulary;
             }
@@ -211,7 +212,10 @@ mod tests {
         let loaded = store.load().unwrap();
         assert!(loaded.sound_enabled);
         assert_eq!(loaded.selected_hotkey, DEFAULT_SELECTED_HOTKEY);
-        assert_eq!(loaded.selected_local_model_id, DEFAULT_SELECTED_LOCAL_MODEL_ID);
+        assert_eq!(
+            loaded.selected_local_model_id,
+            DEFAULT_SELECTED_LOCAL_MODEL_ID
+        );
     }
 
     #[test]
@@ -221,6 +225,89 @@ mod tests {
         assert_eq!(
             config.minimum_recording_duration_ms,
             DEFAULT_MINIMUM_RECORDING_DURATION_MS
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn legacy_preferences_fill_missing_defaults() {
+        let mut dict = plist::Dictionary::new();
+        dict.insert("flutter.has_completed_setup".into(), true.into());
+        dict.insert("flutter.settings_selected_hotkey".into(), "54".into());
+        dict.insert(
+            "flutter.settings_selected_local_model_id".into(),
+            "whisper-large-v3-turbo-onnx".into(),
+        );
+        dict.insert(
+            "flutter.settings_selected_microphone_id".into(),
+            "usb-mic".into(),
+        );
+        dict.insert("flutter.settings_custom_vocabulary".into(), "OpenAI".into());
+        dict.insert(
+            "flutter.settings_minimum_recording_duration_ms".into(),
+            450.into(),
+        );
+        dict.insert("flutter.settings_sound_enabled".into(), false.into());
+
+        let merged = merge_legacy_preferences_from_dict(AppConfig::default(), &dict);
+
+        assert!(merged.has_completed_setup);
+        assert_eq!(merged.selected_hotkey, "54");
+        assert_eq!(
+            merged.selected_local_model_id,
+            "whisper-large-v3-turbo-onnx"
+        );
+        assert_eq!(merged.selected_microphone_id, "usb-mic");
+        assert_eq!(merged.custom_vocabulary, "OpenAI");
+        assert_eq!(merged.minimum_recording_duration_ms, 450.0);
+        assert!(!merged.sound_enabled);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn legacy_preferences_do_not_override_non_default_config() {
+        let mut dict = plist::Dictionary::new();
+        dict.insert("flutter.has_completed_setup".into(), true.into());
+        dict.insert("flutter.settings_selected_hotkey".into(), "54".into());
+        dict.insert(
+            "flutter.settings_selected_local_model_id".into(),
+            "whisper-large-v3-turbo-onnx".into(),
+        );
+        dict.insert(
+            "flutter.settings_selected_microphone_id".into(),
+            "usb-mic".into(),
+        );
+        dict.insert("flutter.settings_custom_vocabulary".into(), "legacy".into());
+        dict.insert(
+            "flutter.settings_minimum_recording_duration_ms".into(),
+            450.into(),
+        );
+        dict.insert("flutter.settings_sound_enabled".into(), false.into());
+
+        let config = AppConfig {
+            // A persisted pre-migration choice remains authoritative even when
+            // the clean-install default changes.
+            selected_hotkey: "61".to_string(),
+            selected_local_model_id: "user-picked-model".to_string(),
+            selected_microphone_id: "built-in".to_string(),
+            custom_vocabulary: "current".to_string(),
+            minimum_recording_duration_ms: 600.0,
+            sound_enabled: false,
+            has_completed_setup: true,
+            last_active_model_id: Some("parakeet-tdt-0.6b-v3-onnx".to_string()),
+        };
+
+        let merged = merge_legacy_preferences_from_dict(config, &dict);
+
+        assert_eq!(merged.selected_hotkey, "61");
+        assert_eq!(merged.selected_local_model_id, "user-picked-model");
+        assert_eq!(merged.selected_microphone_id, "built-in");
+        assert_eq!(merged.custom_vocabulary, "current");
+        assert_eq!(merged.minimum_recording_duration_ms, 600.0);
+        assert!(!merged.sound_enabled);
+        assert_eq!(
+            merged.last_active_model_id.as_deref(),
+            Some("parakeet-tdt-0.6b-v3-onnx")
         );
     }
 }

@@ -1,0 +1,18 @@
+[package]
+name = "wrenflow-gpui-macos-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+build = "build.rs"
+
+# Keep this throwaway target independent from the production Cargo workspace.
+[workspace]
+
+[dependencies]
+# `runtime_shaders` keeps the spike reproducible on Xcode 26 installations that
+# have not downloaded Apple's optional Metal Toolchain component. Release CI can
+# omit it after installing that component and embed a precompiled metallib.
+gpui = { version = "=0.2.2", default-features = false, features = ["font-kit", "runtime_shaders"] }
+
+[profile.release]
+strip = "symbols"

@@ -13,14 +13,14 @@ This project uses [release-please](https://github.com/googleapis/release-please)
 
 ## How It Works
 
-1. Every `feat:` or `fix:` commit pushed to `main` updates a **Release PR** (currently PR #3)
+1. Every `feat:` or `fix:` commit pushed to `main` updates the open **Release PR**
 2. Release-please auto-generates `CHANGELOG.md` from conventional commit messages
 3. **When you're ready to release**: merge the Release PR
 4. On merge, release-please automatically:
-   - Updates `CHANGELOG.md`, `Cargo.toml`, `pubspec.yaml` with new version
+   - Updates `CHANGELOG.md`, the root `Cargo.toml`, and the isolated GPUI `Cargo.toml` with the new version
    - Creates a git tag (e.g., `v0.3.0`)
    - Creates a GitHub Release
-5. The GitHub Release triggers the **Build** workflow which creates a signed, notarized DMG
+5. When `release_created` is true, Release Please explicitly calls the reusable **Build** workflow. That workflow tests, lints, signs, notarizes, verifies and uploads the DMG. The explicit call is required because releases created with the default `GITHUB_TOKEN` do not trigger another workflow.
 
 ## Key Files
 
@@ -33,16 +33,19 @@ This project uses [release-please](https://github.com/googleapis/release-please)
 
 ## Version Sources
 
-Version is managed in two places, both updated by release-please via `x-release-please-version` annotation:
-- `Cargo.toml` — `version = "X.Y.Z" # x-release-please-version`
-- `pubspec.yaml` — `version: X.Y.Z # x-release-please-version`
+Version is managed in two places, both updated by release-please via the
+`x-release-please-version` annotation:
+
+- `Cargo.toml` — root workspace version
+- `native/wrenflow-gpui/Cargo.toml` — isolated GPUI workspace version
 
 ## Cutting a Release
 
 ### Step 1: Check the Release PR
 
 ```bash
-gh pr view 3
+gh pr list --state open --search "release in:title"
+gh pr view <PR_NUMBER>
 ```
 
 The Release PR body contains the auto-generated changelog preview.
@@ -83,8 +86,11 @@ Or merge via GitHub UI. Both squash-merge and merge commits work.
 
 After merge:
 1. Check that the tag was created: `gh release list --limit 1`
-2. Check that the Build workflow triggered: `gh run list --limit 3`
-3. Wait for Build to complete — it creates a signed, notarized DMG
+2. Inspect the same Release Please workflow run and confirm its
+   `build-stable-release` reusable-workflow job started
+3. Wait for that job to complete — it runs tests/lints, creates a Developer ID
+   signed DMG, requires explicit `Accepted` notarization, staples and validates
+   it, and passes Gatekeeper verification before upload
 4. Verify the DMG is attached to the release: `gh release view <tag>`
 
 ## Writing Good Commit Messages
@@ -100,7 +106,7 @@ perf: prewarm model to eliminate first-transcription delay
 # Bad — internal implementation detail
 feat: add audio actor with cpal capture and level signals
 fix: resolve ONNX duplicate symbol linker error with load-dynamic
-refactor: remove desktop_multi_window, single Flutter engine
+refactor: move window state synchronization into AppModel
 ```
 
 For internal changes that shouldn't appear in changelog, use hidden types:

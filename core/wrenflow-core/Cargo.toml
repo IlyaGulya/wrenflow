@@ -14,7 +14,7 @@ rusqlite.workspace = true
 thiserror.workspace = true
 log.workspace = true
 ndarray = "0.17"
-ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "api-24", "load-dynamic"] }
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "api-24", "load-dynamic", "coreml"] }
 parakeet-rs = { workspace = true, features = ["load-dynamic"] }
 tokio-stream = "0.1"
 cpal.workspace = true

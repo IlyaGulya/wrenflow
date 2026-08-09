@@ -2,6 +2,10 @@
 
 Date: 2026-05-14
 
+Status: historical design record. Flutter/Rinf paths describe the pre-GPUI
+baseline; the shipping implementation now lives in `core/wrenflow-runtime` and
+`native/wrenflow-gpui`.
+
 ## Goal
 
 Redesign Wrenflow's local transcription model subsystem so that:

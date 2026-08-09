@@ -1,6 +1,13 @@
-# Rust Crates
+# Native desktop application
 
-This folder contains Rust crates. Entry point of the Rust logic is the `hub` library crate. These crates are integrated and compiled into the Flutter app by the [Rinf](https://rinf.cunarist.org) framework.
+`wrenflow-gpui` is the production macOS application and owns the GPUI window
+plus its thin AppKit shell. It is intentionally an isolated Cargo workspace;
+shared product behavior lives in `core/wrenflow-runtime` and the root workspace
+contains only the domain, core, and runtime crates.
 
-- Do NOT change the name of the `hub` crate. Compilation presets expect the entry library crate to be located at `native/hub`.
-- You CAN name crates other than `hub` as you want.
+Build and verify it through the repository tasks:
+
+```sh
+mise run check
+mise run build
+```

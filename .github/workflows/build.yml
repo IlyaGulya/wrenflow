@@ -5,11 +5,28 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Stable release tag created by release-please
+        required: true
+        type: string
+    secrets:
+      DEVELOPER_ID_CERTIFICATE_BASE64:
+        required: false
+      DEVELOPER_ID_CERTIFICATE_PASSWORD:
+        required: false
+      KEYCHAIN_PASSWORD:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+      APPLE_APP_PASSWORD:
+        required: false
 
 concurrency:
-  group: build-${{ github.ref }}
+  group: build-${{ inputs.release_tag || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -22,10 +39,11 @@ jobs:
     permissions:
       contents: write
     env:
-      HAS_SIGNING_CERT: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 != '' }}
-      HAS_NOTARIZE: ${{ secrets.APPLE_ID != '' }}
-      IS_RELEASE: ${{ github.event_name == 'release' }}
-      IS_BETA: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      HAS_SIGNING_CERT: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 != '' && secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD != '' && secrets.KEYCHAIN_PASSWORD != '' }}
+      HAS_NOTARIZE: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      IS_RELEASE: ${{ inputs.release_tag != '' }}
+      IS_BETA: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.release_tag == '' }}
       IS_PR: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -59,7 +77,9 @@ jobs:
         if: steps.skip.outputs.skip != 'true'
         uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
         with:
-          workspaces: ". -> target"
+          workspaces: |
+            . -> target
+            native/wrenflow-gpui -> target
           cache-on-failure: "true"
           prefix-key: "v3-rust"
 
@@ -83,7 +103,7 @@ jobs:
           echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
 
           if [ "${{ env.IS_RELEASE }}" = "true" ]; then
-            TAG="${{ github.event.release.tag_name }}"
+            TAG="$RELEASE_TAG"
           else
             LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
             LATEST_TAG="${LATEST_TAG:-v0.0.0}"
@@ -95,9 +115,22 @@ jobs:
             TAG="v${MAJOR}.${NEXT_MINOR}.0-beta.${COMMITS_SINCE}"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Require release signing and notarization credentials
+        if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
+        run: |
+          if [ "$HAS_SIGNING_CERT" != "true" ]; then
+            echo "Published artifacts require the Developer ID certificate, certificate password, and keychain password" >&2
+            exit 1
+          fi
+          if [ "$HAS_NOTARIZE" != "true" ]; then
+            echo "Published artifacts require APPLE_ID, APPLE_TEAM_ID, and APPLE_APP_PASSWORD" >&2
+            exit 1
+          fi
 
       - name: Import signing certificate
-        if: steps.skip.outputs.skip != 'true' && env.HAS_SIGNING_CERT == 'true' && env.IS_PR != 'true'
+        if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
         env:
           CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
@@ -115,22 +148,39 @@ jobs:
           security list-keychains -d user -s build.keychain login.keychain
           rm certificate.p12
           IDENTITY=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          echo "WRENFLOW_CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          if [ "$IDENTITY" != "Developer ID Application: Ilya Gulya (T4LV8K9BGV)" ]; then
+            echo "Expected Wrenflow Developer ID identity was not imported; got: ${IDENTITY:-none}" >&2
+            exit 1
+          fi
+          echo "WRENFLOW_GPUI_SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 
-      # PR: debug build only (verbose for full xcodebuild output)
-      - name: Build (PR check)
+      - name: Configure ad-hoc signing
         if: steps.skip.outputs.skip != 'true' && env.IS_PR == 'true'
-        run: mise run build -- -v
+        run: echo "WRENFLOW_GPUI_SIGN_IDENTITY=-" >> "$GITHUB_ENV"
 
-      # Push to main / release: release build + DMG (verbose for diagnostics)
+      - name: Check and build pull request
+        if: steps.skip.outputs.skip != 'true' && env.IS_PR == 'true'
+        run: |
+          mise run check
+          mise run build
+
+      - name: Test and lint publishable build
+        if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
+        run: |
+          mise run test
+          mise run lint
+
       - name: Build release
         if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
-        run: mise run release -- -v
+        env:
+          WRENFLOW_VERSION: ${{ steps.version.outputs.version }}
+          WRENFLOW_BUILD_NUMBER: ${{ steps.version.outputs.build_number }}
+        run: mise run release
 
       - name: Create DMG
         if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
         run: |
-          APP="build/macos/Build/Products/Release/wrenflow.app"
+          APP="build/gpui/Wrenflow.app"
           DMG="build/Wrenflow.dmg"
           mkdir -p build
           rm -f "$DMG"
@@ -139,43 +189,27 @@ jobs:
             --window-pos 200 120 \
             --window-size 660 400 \
             --icon-size 128 \
-            --icon "wrenflow.app" 180 170 \
-            --hide-extension "wrenflow.app" \
+            --icon "Wrenflow.app" 180 170 \
+            --hide-extension "Wrenflow.app" \
             --app-drop-link 480 170 \
             --no-internet-enable \
-            "$DMG" "$APP" || true
+            "$DMG" "$APP"
 
-          if [ -n "$WRENFLOW_CODESIGN_IDENTITY" ] && [ "$WRENFLOW_CODESIGN_IDENTITY" != "-" ]; then
-            codesign --force --sign "$WRENFLOW_CODESIGN_IDENTITY" --timestamp "$DMG"
+          if [ -n "$WRENFLOW_GPUI_SIGN_IDENTITY" ] && [ "$WRENFLOW_GPUI_SIGN_IDENTITY" != "-" ]; then
+            codesign --force --sign "$WRENFLOW_GPUI_SIGN_IDENTITY" --timestamp "$DMG"
           fi
 
       - name: Notarize DMG
-        if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true' && env.HAS_NOTARIZE == 'true'
+        if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: |
-          SUBMIT_OUT=$(xcrun notarytool submit build/Wrenflow.dmg \
-            --apple-id "$APPLE_ID" \
-            --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_PASSWORD" \
-            --wait --timeout 600 2>&1) || true
-          echo "$SUBMIT_OUT"
-          SUBMISSION_ID=$(echo "$SUBMIT_OUT" | grep "  id:" | head -1 | awk '{print $2}')
-          if echo "$SUBMIT_OUT" | grep -q "status: Invalid"; then
-            echo "Notarization failed. Fetching log..."
-            xcrun notarytool log "$SUBMISSION_ID" \
-              --apple-id "$APPLE_ID" \
-              --team-id "$APPLE_TEAM_ID" \
-              --password "$APPLE_APP_PASSWORD"
-            exit 1
-          fi
-          xcrun stapler staple build/Wrenflow.dmg
+        run: scripts/notarize-release.sh build/Wrenflow.dmg
 
-      - name: Verify codesign
+      - name: Verify signed and notarized artifact
         if: steps.skip.outputs.skip != 'true' && env.IS_PR != 'true'
-        run: codesign --verify --deep --strict "build/macos/Build/Products/Release/wrenflow.app" || true
+        run: scripts/verify-release-artifact.sh build/gpui/Wrenflow.app build/Wrenflow.dmg --require-notarized
 
       - name: Clean up keychain
         if: always()
@@ -188,7 +222,7 @@ jobs:
       - uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
         if: env.IS_RELEASE == 'true'
         with:
-          tag_name: ${{ github.event.release.tag_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
           files: Wrenflow.dmg
 
       # Beta: create pre-release with DMG

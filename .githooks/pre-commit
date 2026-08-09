@@ -3,43 +3,31 @@ set -euo pipefail
 
 FAILED=0
 
-# ── Rust clippy (lib targets only — tests may use unwrap) ──
-STAGED_RS=$(git diff --cached --name-only --diff-filter=ACM | grep '\.rs$' || true)
-if [ -n "$STAGED_RS" ]; then
-  echo "Running cargo clippy..."
-  if ! cargo clippy --workspace --lib -- -D warnings 2>&1; then
+# Rust, Swift, manifests and the task graph can affect either Cargo workspace.
+# The aggregate mise tasks cover both the root workspace and the isolated GPUI
+# workspace through the repository's managed task graph.
+STAGED_BUILD_INPUTS=$(
+  git diff --cached --name-only --diff-filter=ACMRD |
+    grep -E '(^|/)(Cargo\.toml|Cargo\.lock|build\.rs)$|\.(rs|swift)$|^mise\.toml$' || true
+)
+if [ -n "$STAGED_BUILD_INPUTS" ]; then
+  echo "Running root and GPUI checks through mise..."
+  if ! mise run check; then
+    FAILED=1
+  fi
+
+  echo "Running root, GPUI and workflow linters through mise..."
+  if ! mise run lint; then
     FAILED=1
   fi
 fi
 
-# ── Flutter analyze (exclude vendor/) ──
-STAGED_DART=$(git diff --cached --name-only --diff-filter=ACM | grep '\.dart$' | grep -v '^vendor/' || true)
-if [ -n "$STAGED_DART" ]; then
-  echo "Running flutter analyze..."
-  if ! flutter analyze --no-pub 2>&1 | grep -v "vendor/" | grep -q "No issues found"; then
-    # Check for actual errors/warnings in our code
-    ISSUES=$(flutter analyze --no-pub 2>&1 | grep -v "vendor/" | grep -c "error\|warning" || true)
-    if [ "$ISSUES" -gt 0 ]; then
-      FAILED=1
-    fi
-  fi
-fi
-
-# ── GitHub Actions workflow linters ──
-STAGED_WORKFLOWS=$(git diff --cached --name-only --diff-filter=ACM | grep '^\.github/workflows/' || true)
-if [ -n "$STAGED_WORKFLOWS" ]; then
-  if command -v actionlint &>/dev/null; then
-    echo "Running actionlint..."
-    if ! actionlint $STAGED_WORKFLOWS; then
-      FAILED=1
-    fi
-  fi
-
-  if command -v ghalint &>/dev/null; then
-    echo "Running ghalint..."
-    if ! ghalint run; then
-      FAILED=1
-    fi
+# Workflow-only commits do not need to compile both Cargo workspaces.
+STAGED_WORKFLOWS=$(git diff --cached --name-only --diff-filter=ACMRD | grep '^\.github/workflows/' || true)
+if [ -n "$STAGED_WORKFLOWS" ] && [ -z "$STAGED_BUILD_INPUTS" ]; then
+  echo "Running workflow linters through mise..."
+  if ! mise run lint-workflows; then
+    FAILED=1
   fi
 fi
 

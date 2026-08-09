@@ -3,8 +3,9 @@ resolver = "3"
 members = [
     "core/wrenflow-domain",
     "core/wrenflow-core",
-    "native/*",
+    "core/wrenflow-runtime",
 ]
+exclude = ["native/wrenflow-gpui"]
 
 [workspace.package]
 version = "0.3.0" # x-release-please-version
@@ -24,6 +25,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 rusqlite = { version = "0.32", features = ["bundled"] }
 thiserror = "2"
 log = "0.4"
-parakeet-rs = "0.3"
+parakeet-rs = "=0.3.4"
 cpal = "0.15"
 dirs = "6"

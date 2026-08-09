@@ -20,7 +20,6 @@ pub enum PipelineState {
     Initializing,
     Recording,
     Transcribing { showing_indicator: bool },
-    Pasting,
     Error { message: String },
 }
 
@@ -34,7 +33,7 @@ impl PipelineState {
     }
 
     pub fn can_start_recording(&self) -> bool {
-        matches!(self, Self::Idle | Self::Pasting | Self::Error { .. })
+        matches!(self, Self::Idle | Self::Error { .. })
     }
 
     pub fn status_text(&self) -> &str {
@@ -43,7 +42,6 @@ impl PipelineState {
             Self::Starting | Self::Initializing => "Starting...",
             Self::Recording => "Recording...",
             Self::Transcribing { .. } => "Transcribing...",
-            Self::Pasting => "Copied to clipboard!",
             Self::Error { .. } => "Error",
         }
     }
@@ -55,7 +53,6 @@ impl PipelineState {
             Self::Initializing => "initializing",
             Self::Recording => "recording",
             Self::Transcribing { .. } => "transcribing",
-            Self::Pasting => "pasting",
             Self::Error { .. } => "error",
         }
     }
@@ -132,6 +129,10 @@ impl PipelineEngine {
 
     pub fn update_config(&mut self, config: AppConfig) {
         self.config = config;
+    }
+
+    pub fn custom_vocabulary(&self) -> &str {
+        &self.config.custom_vocabulary
     }
 
     /// Transition to a new state, notifying the listener.
@@ -262,16 +263,6 @@ impl PipelineEngine {
         );
     }
 
-    /// Called after error/pasting auto-dismiss timeout (3s).
-    pub fn on_dismiss_timeout(&mut self, listener: &dyn PipelineListener) {
-        if matches!(
-            self.state,
-            PipelineState::Pasting | PipelineState::Error { .. }
-        ) {
-            self.transition(PipelineState::Idle, listener);
-        }
-    }
-
     fn finish_pipeline(&mut self, transcript: String, listener: &dyn PipelineListener) {
         if let Some(start) = self.pipeline_start {
             let total_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -287,6 +278,9 @@ impl PipelineEngine {
             self.metrics
                 .set_string("pipeline.outcome", "success".to_string());
             listener.on_transcript_ready(transcript.clone());
+            // Pasting belongs to the platform/runtime side-effect boundary. The
+            // domain run is complete once it publishes the transcript, and the
+            // runtime reports paste success or failure as a separate event.
             self.transition(PipelineState::Idle, listener);
         }
 
@@ -378,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn basic_flow() {
+    fn successful_flow_returns_idle_and_can_restart_immediately() {
         let (mut engine, listener) = make_engine();
         assert_eq!(engine.state(), &PipelineState::Idle);
 
@@ -405,7 +399,7 @@ mod tests {
             },
             &*listener,
         );
-        assert_eq!(engine.state(), &PipelineState::Pasting);
+        assert_eq!(engine.state(), &PipelineState::Idle);
 
         // Check paste happened
         let pasted = listener.pasted.lock().unwrap();
@@ -415,6 +409,18 @@ mod tests {
         let history = listener.history.lock().unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].transcript, "hello world");
+        drop(history);
+        drop(pasted);
+
+        // Paste is synchronous in the runtime actor, so Idle makes the next
+        // queued hotkey press immediately eligible for a new pipeline run.
+        assert!(engine.handle_hotkey_down(&*listener));
+        assert_eq!(engine.state(), &PipelineState::Starting);
+
+        let transitions = listener.transitions.lock().unwrap();
+        assert!(transitions
+            .windows(2)
+            .any(|pair| pair[0].1 == "transcribing" && pair[1].1 == "idle"));
     }
 
     #[test]

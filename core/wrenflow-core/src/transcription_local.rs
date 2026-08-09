@@ -4,6 +4,7 @@ use crate::transcription_whisper::WhisperTranscriptionEngine;
 use parakeet_rs::Transcriber;
 use std::path::Path;
 use thiserror::Error;
+use wrenflow_domain::audio::{trim_for_whisper_dictation, TARGET_SAMPLE_RATE};
 use wrenflow_domain::model_management::{ModelInfo, ModelRuntime};
 
 pub use wrenflow_domain::transcription::local::ModelState;
@@ -19,8 +20,8 @@ pub enum LocalTranscriptionError {
 }
 
 enum LocalBackend {
-    Parakeet(parakeet_rs::ParakeetTDT),
-    Whisper(WhisperTranscriptionEngine),
+    Parakeet(Box<parakeet_rs::ParakeetTDT>),
+    Whisper(Box<WhisperTranscriptionEngine>),
 }
 
 pub struct LocalTranscriptionEngine {
@@ -72,12 +73,12 @@ impl LocalTranscriptionEngine {
             ModelRuntime::ParakeetOnnx => {
                 let model = parakeet_rs::ParakeetTDT::from_pretrained(model_dir, None)
                     .map_err(|e| LocalTranscriptionError::TranscriptionFailed(e.to_string()))?;
-                LocalBackend::Parakeet(model)
+                LocalBackend::Parakeet(Box::new(model))
             }
             ModelRuntime::WhisperOnnx => {
                 let engine = WhisperTranscriptionEngine::from_model_dir(model_dir)
                     .map_err(|e| LocalTranscriptionError::TranscriptionFailed(e.to_string()))?;
-                LocalBackend::Whisper(engine)
+                LocalBackend::Whisper(Box::new(engine))
             }
         };
 
@@ -111,23 +112,36 @@ impl LocalTranscriptionEngine {
         Ok(())
     }
 
-    pub fn transcribe(&mut self, samples: &[f32]) -> Result<String, LocalTranscriptionError> {
-        if samples.len() < 16_000 {
-            return Err(LocalTranscriptionError::AudioTooShort);
-        }
-
+    pub fn transcribe(
+        &mut self,
+        samples: &[f32],
+        custom_vocabulary: Option<&str>,
+    ) -> Result<String, LocalTranscriptionError> {
         match self
             .backend
             .as_mut()
             .ok_or(LocalTranscriptionError::ModelNotLoaded)?
         {
-            LocalBackend::Parakeet(model) => model
-                .transcribe_samples(samples.to_vec(), 16_000, 1, None)
-                .map(|result| result.text)
-                .map_err(|e| LocalTranscriptionError::TranscriptionFailed(e.to_string())),
-            LocalBackend::Whisper(engine) => engine
-                .transcribe(samples)
-                .map_err(|e| LocalTranscriptionError::TranscriptionFailed(e.to_string())),
+            LocalBackend::Parakeet(model) => {
+                if samples.len() < TARGET_SAMPLE_RATE as usize {
+                    return Err(LocalTranscriptionError::AudioTooShort);
+                }
+
+                model
+                    .transcribe_samples(samples.to_vec(), TARGET_SAMPLE_RATE, 1, None)
+                    .map(|result| result.text)
+                    .map_err(|e| LocalTranscriptionError::TranscriptionFailed(e.to_string()))
+            }
+            LocalBackend::Whisper(engine) => {
+                let trimmed = trim_for_whisper_dictation(samples, TARGET_SAMPLE_RATE);
+                if trimmed.is_empty() {
+                    return Ok(String::new());
+                }
+
+                engine
+                    .transcribe(&trimmed, custom_vocabulary)
+                    .map_err(|e| LocalTranscriptionError::TranscriptionFailed(e.to_string()))
+            }
         }
     }
 
@@ -144,6 +158,16 @@ impl LocalTranscriptionEngine {
             LocalBackend::Whisper(_) => Err(LocalTranscriptionError::TranscriptionFailed(
                 "Whisper file transcription path is not used in Wrenflow".to_string(),
             )),
+        }
+    }
+}
+
+impl LocalTranscriptionError {
+    pub fn user_message(&self) -> String {
+        match self {
+            LocalTranscriptionError::ModelNotLoaded => "The active model is unavailable. Open Settings -> Models and activate a model again.".to_string(),
+            LocalTranscriptionError::TranscriptionFailed(message) => message.clone(),
+            LocalTranscriptionError::AudioTooShort => self.to_string(),
         }
     }
 }

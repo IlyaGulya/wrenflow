@@ -3,128 +3,90 @@ ruby.compile = false
 
 [tools]
 rust = "1.94.1"
-flutter = "3.41.6"
-ruby = "3.4.9"
-"cargo:rinf_cli" = "8.10.0"
-"gem:cocoapods" = "1.16.2"
-xcodegen = "2.45.3"
 resvg = "0.47.0"
 
 # ── Tasks ──────────────────────────────────────────────────────
 
 [tasks.setup]
-description = "Install all tools and dependencies"
+description = "Install Rust tooling and fetch both locked Cargo workspaces"
 run = """
 mise install
-flutter pub get
-rinf gen
+cargo fetch --locked
+CARGO_HOME="$PWD/build/gpui-production-cargo-home" cargo fetch \
+  --manifest-path native/wrenflow-gpui/Cargo.toml \
+  --locked \
+  --config 'source.crates-io.registry="sparse+https://index.crates.io/"'
 """
-
-[tasks.xcodegen]
-description = "Generate Xcode project + workspace stub from project.yml"
-dir = "macos"
-run = """
-xcodegen generate --spec project.yml
-mkdir -p Runner.xcworkspace
-[ -f Runner.xcworkspace/contents.xcworkspacedata ] || cat > Runner.xcworkspace/contents.xcworkspacedata << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<Workspace version = "1.0">
-  <FileRef location = "self:"/>
-</Workspace>
-EOF
-"""
-
-[tasks.gen]
-description = "Generate Dart bindings from Rust signals"
-run = "rinf gen"
-
-[tasks.gen-watch]
-description = "Watch and regenerate Dart bindings on changes"
-run = "rinf gen --watch"
 
 [tasks.download-ort]
 description = "Download ONNX Runtime dylib if missing"
 run = "scripts/download-ort.sh"
 
 [tasks.icons]
-description = "Generate Flutter app icons from Resources/AppIcon-Source.png"
-run = "scripts/generate-flutter-icons.sh"
+description = "Regenerate the production macOS app icon"
+run = "scripts/generate-app-icon.sh"
 
 [tasks.build]
-description = "Build macOS debug app"
-depends = ["gen", "xcodegen", "download-ort", "icons"]
-run = "flutter build macos --debug"
+description = "Build and sign the production GPUI macOS app bundle"
+depends = ["download-ort"]
+run = "CARGO_HOME=\"$PWD/build/gpui-production-cargo-home\" CARGO_TARGET_DIR=\"$PWD/build/gpui-production-target\" native/wrenflow-gpui/scripts/build-app.sh"
 
 [tasks.release]
-description = "Build macOS release app"
-depends = ["gen", "xcodegen", "download-ort", "icons"]
-run = "flutter build macos --release"
+description = "Build the signed, hardened production app bundle"
+depends = ["build"]
+run = "codesign --verify --deep --strict build/gpui/Wrenflow.app"
 
 [tasks.release-install]
 description = "Build release app, replace installed app, and relaunch it"
 depends = ["release"]
-run = """
-set -euo pipefail
+run = "native/wrenflow-gpui/scripts/install-app.sh"
 
-APP_NAME="wrenflow.app"
-BUNDLE_ID="me.gulya.wrenflow"
-SOURCE_APP="build/macos/Build/Products/Release/$APP_NAME"
+[tasks.hardening-bundle]
+description = "Verify the signed production app bundle and print its identity"
+run = "scripts/macos-hardening-matrix.sh check-bundle"
 
-if [ ! -d "$SOURCE_APP" ]; then
-  echo "Release app not found at $SOURCE_APP" >&2
-  exit 1
-fi
+[tasks.hardening-notarized]
+description = "Verify a notarized release DMG and its signed app"
+run = "scripts/macos-hardening-matrix.sh check-notarized"
 
-TARGET_APP=""
-for candidate in "/Applications/$APP_NAME" "$HOME/Applications/$APP_NAME"; do
-  if [ -d "$candidate" ]; then
-    TARGET_APP="$candidate"
-    break
-  fi
-done
+[tasks.hardening-lifecycle]
+description = "Launch the exact GPUI bundle and report its LaunchServices identity"
+run = "scripts/macos-hardening-matrix.sh launch-lifecycle"
 
-if [ -z "$TARGET_APP" ]; then
-  TARGET_APP="/Applications/$APP_NAME"
-fi
+[tasks.hardening-accessibility]
+description = "Run the signed app and verify the real AppKit accessibility tree bridge"
+depends = ["build"]
+run = "native/wrenflow-gpui/scripts/accessibility-self-test.sh"
 
-echo "Installing $SOURCE_APP -> $TARGET_APP"
+[tasks.hardening-tcc-status]
+description = "Read current-user Wrenflow TCC rows without changing consent"
+run = "scripts/macos-hardening-matrix.sh tcc-status"
 
-osascript -e 'tell application id "'"$BUNDLE_ID"'" to quit' >/dev/null 2>&1 || true
-pkill -x wrenflow >/dev/null 2>&1 || true
-
-for _ in $(seq 1 50); do
-  if ! pgrep -x wrenflow >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.1
-done
-
-rm -rf "$TARGET_APP"
-mkdir -p "$(dirname "$TARGET_APP")"
-ditto "$SOURCE_APP" "$TARGET_APP"
-open "$TARGET_APP"
-"""
+[tasks.hardening-reset-tcc]
+description = "Reset Wrenflow TCC consent on an explicitly confirmed disposable account"
+run = "scripts/macos-hardening-matrix.sh reset-tcc"
 
 [tasks.run]
-description = "Build + launch macOS debug app (via open, so TCC works)"
+description = "Build and launch the signed app through LaunchServices for TCC"
 depends = ["build"]
-run = "open build/macos/Build/Products/Debug/wrenflow.app"
+run = "native/wrenflow-gpui/scripts/run-app.sh"
 
 [tasks.logs]
-description = "Tail wrenflow Rust logs (written by running app)"
-run = "tail -f /tmp/wrenflow.log"
+description = "Stream logs emitted by the production app process"
+run = "/usr/bin/log stream --style compact --predicate 'process == \"wrenflow\"'"
 
 [tasks.lint]
-description = "Run all linters (Rust clippy + Flutter analyze + workflow lints)"
-depends = ["lint-rust", "lint-dart", "lint-workflows"]
+description = "Run Rust and workflow linters"
+depends = ["lint-rust", "lint-app", "lint-workflows"]
+run = "true"
 
 [tasks.lint-rust]
-description = "Run cargo clippy"
+description = "Run clippy for all production Rust libraries"
 run = "cargo clippy --workspace --lib -- -D warnings"
 
-[tasks.lint-dart]
-description = "Run Flutter analyzer"
-run = "flutter analyze"
+[tasks.lint-app]
+description = "Run clippy for the isolated production app"
+run = "CARGO_HOME=\"$PWD/build/gpui-production-cargo-home\" CARGO_TARGET_DIR=\"$PWD/build/gpui-production-target\" cargo clippy --manifest-path native/wrenflow-gpui/Cargo.toml --locked --all-targets --config 'source.crates-io.registry=\"sparse+https://index.crates.io/\"' -- -D warnings"
 
 [tasks.lint-workflows]
 description = "Lint GitHub Actions workflows"
@@ -132,19 +94,99 @@ tools = { actionlint = "1.7.12", ghalint = "1.5.5" }
 run = """
 actionlint .github/workflows/*.yml
 ghalint run
+scripts/test-release-workflow.sh
 """
 
 [tasks.test]
-description = "Run Flutter tests"
-run = "flutter test"
+description = "Run core/runtime and production app tests"
+depends = ["test-rust", "test-app"]
+run = "true"
 
 [tasks.test-rust]
-description = "Run Rust domain + core tests"
-run = "cargo test -p wrenflow-domain -p wrenflow-core"
+description = "Run domain, core and runtime tests"
+depends = ["download-ort"]
+run = """
+ORT_DYLIB_PATH="$PWD/vendor/onnxruntime/lib/libonnxruntime.dylib" \
+  cargo test -p wrenflow-domain -p wrenflow-core --lib -- --test-threads=1
+cargo test -p wrenflow-runtime --all-targets -- --test-threads=1
+"""
+
+[tasks.test-app]
+description = "Run all isolated production app tests"
+run = "CARGO_HOME=\"$PWD/build/gpui-production-cargo-home\" CARGO_TARGET_DIR=\"$PWD/build/gpui-production-target\" cargo test --manifest-path native/wrenflow-gpui/Cargo.toml --locked --all-targets --config 'source.crates-io.registry=\"sparse+https://index.crates.io/\"'"
+
+[tasks.test-recordings]
+description = "Run transcription regression against an explicit immutable app-support fixture"
+depends = ["download-ort"]
+run = """
+: "${WRENFLOW_RECORDINGS_FIXTURE_DIR:?set WRENFLOW_RECORDINGS_FIXTURE_DIR to an immutable Wrenflow app-support fixture}"
+ORT_DYLIB_PATH="$PWD/vendor/onnxruntime/lib/libonnxruntime.dylib" \
+  cargo test -p wrenflow-core --test saved_recordings_regression \
+  transcribes_saved_parakeet_recordings_from_fixture -- \
+  --ignored --exact --nocapture --test-threads=1
+"""
+
+[tasks.export-whisper-onnx]
+description = "Export vanilla Whisper Turbo to ONNX via Optimum (spike utility)"
+run = "scripts/export-whisper-onnx.sh"
+
+[tasks.quantize-whisper-onnx]
+description = "Quantize an exported Whisper ONNX bundle to dynamic INT8 (spike utility)"
+run = "scripts/quantize-whisper-onnx.sh"
+
+[tasks.static-quantize-whisper-encoder]
+description = "Static-quantize the Whisper encoder using local recordings for calibration"
+run = "scripts/static-quantize-whisper-encoder.sh"
+
+[tasks.bucketize-whisper-onnx]
+description = "Rewrite the installed Whisper ONNX bundle to a smaller fixed encoder frame bucket"
+run = "python3 scripts/bucketize-whisper-onnx.py"
+
+[tasks.benchmark-whisper-onnx]
+description = "Benchmark Whisper ONNX variants on a saved recording (spike utility)"
+run = "scripts/benchmark-whisper-onnx.sh"
+
+[tasks.summarize-whisper-ort-profile]
+description = "Summarize ORT operator profiling JSON for Whisper spike work"
+run = "scripts/summarize-whisper-ort-profile.py"
+
+[tasks.summarize-whisper-history]
+description = "Summarize recent Whisper runs from local Wrenflow history"
+run = "python3 scripts/summarize-whisper-history.py"
+
+[tasks.cleanup-whisper-spike]
+description = "Clean up old Whisper ONNX spike artifacts from /tmp"
+run = "bash scripts/cleanup-whisper-spike.sh"
+
+[tasks.install-whisper-onnx-export]
+description = "Install a custom quantized Whisper ONNX export into local Wrenflow models (spike utility)"
+run = "scripts/install-whisper-onnx-export.sh"
+
+[tasks.check]
+description = "Check the core workspace and production app"
+depends = ["check-rust", "check-app"]
+run = "true"
 
 [tasks.check-rust]
-description = "Check all Rust crates compile"
-run = "cargo check"
+description = "Check all core/runtime Rust targets"
+run = "cargo check --workspace --all-targets"
+
+[tasks.check-app]
+description = "Check the isolated production app"
+run = "CARGO_HOME=\"$PWD/build/gpui-production-cargo-home\" CARGO_TARGET_DIR=\"$PWD/build/gpui-production-target\" cargo check --manifest-path native/wrenflow-gpui/Cargo.toml --locked --all-targets --config 'source.crates-io.registry=\"sparse+https://index.crates.io/\"'"
+
+[tasks.gpui-spike-check]
+description = "Compile the isolated GPUI macOS shell spike"
+run = "CARGO_HOME=\"$PWD/build/gpui-spike-cargo-home\" cargo check --manifest-path spikes/gpui-macos/Cargo.toml --locked --config 'source.crates-io.registry=\"sparse+https://index.crates.io/\"'"
+
+[tasks.gpui-spike-build]
+description = "Build and sign the isolated GPUI macOS app bundle"
+run = "spikes/gpui-macos/scripts/build-app.sh"
+
+[tasks.gpui-spike-run]
+description = "Launch the signed GPUI spike through LaunchServices"
+depends = ["gpui-spike-build"]
+run = "spikes/gpui-macos/scripts/run-app.sh"
 
 [tasks.pin-actions]
 description = "Pin GitHub Actions to full-length commit SHAs"
@@ -155,6 +197,8 @@ run = "pinact run"
 [tasks.clean]
 description = "Clean all build artifacts"
 run = """
-flutter clean
-cd native/hub && cargo clean
+cargo clean
+CARGO_HOME="$PWD/build/gpui-production-cargo-home" CARGO_TARGET_DIR="$PWD/build/gpui-production-target" \
+  cargo clean --manifest-path native/wrenflow-gpui/Cargo.toml
+[ ! -d "$PWD/build/gpui" ] || trash "$PWD/build/gpui"
 """

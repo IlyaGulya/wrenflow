@@ -1,0 +1,23 @@
+[package]
+name = "wrenflow-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+dirs.workspace = true
+log.workspace = true
+arboard = "3"
+thiserror.workspace = true
+tokio.workspace = true
+wrenflow-core = { path = "../wrenflow-core" }
+wrenflow-domain = { path = "../wrenflow-domain" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.24"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+enigo = "0.6"
+
+[lints]
+workspace = true

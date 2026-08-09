@@ -52,8 +52,11 @@ fn ensure_runtime_files(model: &ModelInfo, model_dir: &Path) -> Result<(), Strin
                 .map_err(|e| format!("Create runtime dir for {generated_file}: {e}"))?;
         }
 
-        std::fs::write(&path, format!("model_id={}\nrepo_id={}\n", model.id, model.repo_id))
-            .map_err(|e| format!("Write runtime file {generated_file}: {e}"))?;
+        std::fs::write(
+            &path,
+            format!("model_id={}\nrepo_id={}\n", model.id, model.repo_id),
+        )
+        .map_err(|e| format!("Write runtime file {generated_file}: {e}"))?;
     }
     Ok(())
 }
@@ -85,17 +88,53 @@ pub async fn download_model(
     let total_files = files.len();
     let mut bytes_so_far: u64 = 0;
     let mut total_bytes: u64 = 0;
-    let mut total_known = false;
+    let mut total_known = true;
 
     // Count already-downloaded file sizes
     for filename in files {
         let dest = model_dir.join(filename);
-        if dest.exists() {
+        if is_nonempty_file(&dest) {
             if let Ok(meta) = std::fs::metadata(&dest) {
                 let size = meta.len();
                 bytes_so_far += size;
                 total_bytes += size;
             }
+        }
+    }
+
+    // Resolve total size before downloading so progress stays monotonic across
+    // multi-file model bundles.
+    for filename in files {
+        if cancel_flag.load(Ordering::Relaxed) {
+            return Err("Cancelled".to_string());
+        }
+
+        let dest = model_dir.join(filename);
+        if is_nonempty_file(&dest) {
+            continue;
+        }
+
+        let url = format!(
+            "https://huggingface.co/{}/resolve/main/{}",
+            model.repo_id, filename
+        );
+        let head = client
+            .head(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Resolve size for {filename}: {e}"))?;
+
+        if !head.status().is_success() {
+            return Err(format!(
+                "Resolve size for {filename}: HTTP {}",
+                head.status()
+            ));
+        }
+
+        if let Some(size) = head.content_length() {
+            total_bytes += size;
+        } else {
+            total_known = false;
         }
     }
 
@@ -137,13 +176,6 @@ pub async fn download_model(
 
         if !response.status().is_success() {
             return Err(format!("Download {filename}: HTTP {}", response.status()));
-        }
-
-        // Get file size from Content-Length header
-        let file_size = response.content_length();
-        if let Some(size) = file_size {
-            total_bytes += size;
-            total_known = true;
         }
 
         listener.on_progress(DownloadProgress {

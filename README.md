@@ -35,17 +35,18 @@ Transcription typically completes in under a second. The model downloads automat
 
 ## Architecture
 
-Flutter (Dart) for UI, Rust for core logic, connected via [Rinf](https://github.com/aspect-build/aspect-frameworks/tree/main/packages/rinf).
+GPUI renders the product window, Rust owns application/runtime state, and a
+small Swift/AppKit shell owns the menu bar, macOS permissions and native
+overlays. The UI sends typed actions into `AppModel`; it never calls the audio,
+model or history services directly.
 
 ```
 core/
   wrenflow-domain/    Pure types and business logic (no IO)
   wrenflow-core/      Infrastructure: audio capture, transcription,
                       HTTP clients, SQLite history store
-native/hub/           Rinf bridge — actors for audio, pipeline,
-                      hotkeys, model management, history
-lib/                  Flutter UI (Riverpod state management)
-macos/Runner/         macOS platform code (overlay, permissions, tray)
+  wrenflow-runtime/   Transport-neutral runtime commands, snapshots and events
+native/wrenflow-gpui/ GPUI screens plus the Swift/AppKit macOS shell
 ```
 
 **Audio capture** uses [cpal](https://github.com/RustAudio/cpal) with CoreAudio.
@@ -58,22 +59,26 @@ macos/Runner/         macOS platform code (overlay, permissions, tray)
 Requires: [mise](https://mise.jdx.dev/) (manages all other tools automatically).
 
 ```bash
-mise install       # Install Rust, Flutter, Ruby, CocoaPods, XcodeGen, etc.
-mise run build     # Debug .app bundle
-mise run run       # Build + launch (via open, for microphone access)
-mise run release   # Release build (signed, hardened runtime)
+mise run setup     # Install Rust tooling and fetch locked dependencies
+mise run check     # Check the core/runtime workspace and desktop app
+mise run build     # Build the signed, hardened .app bundle
+mise run run       # Build + launch through LaunchServices for TCC
+mise run release   # Rebuild and strictly verify the release bundle
 ```
+
+Local machines without the Developer ID certificate can build an ad-hoc signed
+bundle with `WRENFLOW_GPUI_SIGN_IDENTITY=- mise run build`.
 
 Other useful commands:
 
 ```bash
-mise run lint          # Clippy + Flutter analyze + workflow lints
-mise run test          # Flutter tests
-mise run test-rust     # Rust tests
-mise run check-rust    # Cargo check
+mise run lint          # Core/app Clippy + workflow lints
+mise run test          # Core/runtime + desktop app tests
+mise run test-rust     # Domain, core and runtime tests
+mise run test-app      # GPUI application tests
 mise run icons         # Regenerate app icons from SVG sources
 mise run pin-actions   # Pin GitHub Actions to full-length SHAs
-mise run logs          # Tail app logs
+mise run logs          # Stream macOS logs for the app process
 mise run clean         # Remove build artifacts
 ```
 

@@ -7,7 +7,7 @@
       "include-component-in-tag": false,
       "extra-files": [
         "Cargo.toml",
-        "pubspec.yaml"
+        "native/wrenflow-gpui/Cargo.toml"
       ],
       "changelog-sections": [
         { "type": "feat", "section": "New Features" },

@@ -1,0 +1,45 @@
+[package]
+name = "wrenflow-gpui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+build = "build.rs"
+
+[dependencies]
+gpui = { version = "=0.2.2", default-features = false, features = ["font-kit", "runtime_shaders"] }
+gpui-component = "=0.5.1"
+gpui-component-assets = "=0.5.1"
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+wrenflow-runtime = { path = "../../core/wrenflow-runtime", default-features = false }
+
+[dev-dependencies]
+gpui = { version = "=0.2.2", features = ["test-support"] }
+
+[lints]
+workspace = true
+
+# Keep the production app isolated from the root runtime workspace so its
+# GPUI-specific resolver and lockfile remain independently reproducible.
+[workspace]
+resolver = "3"
+members = ["."]
+
+[workspace.package]
+version = "0.3.0" # x-release-please-version
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+wildcard_imports = "deny"
