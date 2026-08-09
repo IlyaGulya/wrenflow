@@ -6,7 +6,7 @@ METADATA_DIR="$REPO_DIR/build/supply-chain"
 
 GLOBAL_TOOLS="$(sed -n '/^\[tools\]$/,/^\[/p' "$REPO_DIR/mise.toml")"
 for pinned_tool in \
-    '"cargo:cargo-about" = "0.9.1"' \
+    '"cargo:cargo-about" = { version = "0.9.1", features = "cli" }' \
     '"cargo:cargo-cyclonedx" = "0.5.9"' \
     '"cargo:cargo-deny" = "0.20.2"'; do
     grep -Fq "$pinned_tool" <<<"$GLOBAL_TOOLS" || {
@@ -21,6 +21,9 @@ if sed -n '/^\[tasks\.supply-chain-audit\]$/,/^\[tasks\./p; /^\[tasks\.supply-ch
 fi
 grep -Fq 'cargo-cyclonedx cyclonedx \' "$REPO_DIR/scripts/generate-supply-chain.sh"
 grep -Fq 'cargo-about generate \' "$REPO_DIR/scripts/generate-supply-chain.sh"
+grep -Fq 'cargo-about --version' "$REPO_DIR/mise.toml"
+grep -Fq 'cargo-cyclonedx cyclonedx --version' "$REPO_DIR/mise.toml"
+grep -Fq 'cargo-deny --version' "$REPO_DIR/mise.toml"
 grep -Fq 'cargo-deny --locked check' "$REPO_DIR/mise.toml"
 if rg -n 'cargo (about|cyclonedx|deny)( |$)' \
     "$REPO_DIR/mise.toml" "$REPO_DIR/scripts/generate-supply-chain.sh"; then
