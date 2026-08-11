@@ -242,10 +242,10 @@ fn run(
             }
         }
 
-        if shell
+        let tray_projection_ready = shell
             .update_tray(&tray_presentation(&runtime_handle))
-            .is_err()
-        {
+            .is_ok();
+        if !tray_projection_ready {
             report_diagnostic_failure(
                 DiagnosticCategory::Bridge,
                 DiagnosticCode::TrayPublishFailed,
@@ -328,6 +328,14 @@ fn run(
             }
         })
         .detach();
+
+        if let Some(code) = menu_bar_ready_code(tray_projection_ready) {
+            emit_diagnostic(DiagnosticEvent::new(
+                DiagnosticCategory::Lifecycle,
+                DiagnosticLevel::Info,
+                code,
+            ));
+        }
 
         if let Some(request) = performance_request {
             app_model.read(cx).start_performance_self_test(request);
@@ -1147,6 +1155,14 @@ fn report_shell_capabilities(async_runtime: &Runtime, runtime_handle: &RuntimeHa
     }));
 }
 
+const fn menu_bar_ready_code(tray_projection_ready: bool) -> Option<DiagnosticCode> {
+    if tray_projection_ready {
+        Some(DiagnosticCode::MenuBarReady)
+    } else {
+        None
+    }
+}
+
 fn spawn_runtime_shell_adapter(
     async_runtime: &Runtime,
     runtime_handle: &RuntimeHandle,
@@ -1357,9 +1373,9 @@ fn launch_at_login_snapshot(observation: LaunchAtLoginObservation) -> LaunchAtLo
 #[cfg(test)]
 mod tests {
     use super::{
-        accessibility_action, begin_update_operation, hotkey_keycode, route_opens_automatically,
-        shell_event_action, shell_event_opens_window, window_layout, AppAction, NavigationTarget,
-        RuntimeShellUpdate, ShellEvent, WindowLayout,
+        accessibility_action, begin_update_operation, hotkey_keycode, menu_bar_ready_code,
+        route_opens_automatically, shell_event_action, shell_event_opens_window, window_layout,
+        AppAction, DiagnosticCode, NavigationTarget, RuntimeShellUpdate, ShellEvent, WindowLayout,
     };
     use wrenflow_gpui::ui::AccessibilityAction;
 
@@ -1534,6 +1550,56 @@ mod tests {
         assert!(swift.contains("window.isRestorable = false"));
         let plist = include_str!("../macos/Info.plist");
         assert!(plist.contains("NSQuitAlwaysKeepsWindows"));
+    }
+
+    #[test]
+    fn menu_bar_readiness_requires_tray_and_complete_main_thread_wiring() {
+        assert_eq!(menu_bar_ready_code(false), None);
+        assert_eq!(
+            menu_bar_ready_code(true),
+            Some(DiagnosticCode::MenuBarReady)
+        );
+
+        let source = include_str!("main.rs");
+        let Some((_, callback)) = source.split_once("application.run(move") else {
+            panic!("GPUI launch callback exists");
+        };
+        let Some((callback, _)) = callback.split_once("fn ensure_app_window") else {
+            panic!("window helper follows launch callback");
+        };
+        let Some(install) = callback.find("MacShell::install") else {
+            panic!("native shell is installed");
+        };
+        let Some(tray) = callback.find("let tray_projection_ready") else {
+            panic!("initial tray projection is checked");
+        };
+        let Some(runtime_poller) = callback.find("poll_runtime_shell_updates(") else {
+            panic!("runtime shell poller is installed");
+        };
+        let Some(request_poller) = callback.find("poll_shell_requests(") else {
+            panic!("shell request poller is installed");
+        };
+        let Some(event_poller) = callback.find("poll_shell_events(") else {
+            panic!("shell event poller is installed");
+        };
+        let Some(accessibility_poller) = callback.find("poll_accessibility(") else {
+            panic!("accessibility poller is installed");
+        };
+        let Some(quit) = callback.find("cx.on_app_quit") else {
+            panic!("typed quit callback is installed");
+        };
+        let Some(ready) = callback.find("menu_bar_ready_code(tray_projection_ready)") else {
+            panic!("menu bar readiness is emitted");
+        };
+        assert!(
+            install < tray
+                && tray < runtime_poller
+                && runtime_poller < request_poller
+                && request_poller < event_poller
+                && event_poller < accessibility_poller
+                && accessibility_poller < quit
+                && quit < ready
+        );
     }
 
     #[test]

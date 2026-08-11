@@ -136,9 +136,14 @@ impl AudioCapture {
         Self::default()
     }
 
-    /// Whether the current backend can at least enumerate input devices.
-    pub fn backend_available() -> bool {
-        cpal::default_host().input_devices().is_ok()
+    /// Whether this product build includes its supported capture backend.
+    ///
+    /// This deliberately does not ask CoreAudio to enumerate hardware. On a
+    /// headless macOS session that call can wait indefinitely, so device
+    /// discovery belongs on the runtime's blocking probe rather than the app
+    /// startup path.
+    pub const fn backend_available() -> bool {
+        cfg!(target_os = "macos")
     }
 
     /// Enumerate available audio input devices.

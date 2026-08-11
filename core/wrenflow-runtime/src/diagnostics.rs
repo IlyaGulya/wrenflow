@@ -95,6 +95,7 @@ impl DiagnosticLevel {
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticCode {
     Startup,
+    MenuBarReady,
     Shutdown,
     RuntimeLog,
     RecordingStarted,
@@ -123,6 +124,8 @@ pub enum DiagnosticCode {
     UpdateStatusPublishFailed,
     ShellCapabilitiesObserved,
     ShellCapabilitiesPublishFailed,
+    AudioDevicesRefreshFailed,
+    ModelInventoryRefreshFailed,
     SettingsWriteFailed,
     GpuiStartupFailed,
     GpuiWindowCreateFailed,

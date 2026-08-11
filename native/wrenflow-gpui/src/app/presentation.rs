@@ -2,8 +2,8 @@ use wrenflow_runtime::{
     recovery::RecoveryMode,
     support::SupportBundleFailureCode,
     update::{UpdateChannel, UpdateFailureCode},
-    AppSessionState, HistoryEntry, LocalModelsSnapshot, ModelOperationState, OnboardingStep,
-    PermissionStatus, PipelineState, RuntimeSnapshot, ThemePreference, UpdateStatus,
+    AppSessionState, HistoryEntry, LocalModelsSnapshot, ModelInventoryState, ModelOperationState,
+    OnboardingStep, PermissionStatus, PipelineState, RuntimeSnapshot, ThemePreference, UpdateStatus,
 };
 
 const SYSTEM_DEFAULT_MICROPHONE_ID: &str = "default";
@@ -478,6 +478,16 @@ fn models(snapshot: &RuntimeSnapshot, activation: CommandStatus) -> ModelsPresen
 }
 
 fn models_content(snapshot: &LocalModelsSnapshot) -> ContentState<Vec<ModelPresentation>> {
+    match snapshot.inventory_state {
+        ModelInventoryState::Loading => return ContentState::Loading,
+        ModelInventoryState::Error => {
+            return ContentState::Error {
+                title: "Model verification failed".to_string(),
+                detail: "Quit and reopen Wrenflow to retry verified model discovery.".to_string(),
+            };
+        }
+        ModelInventoryState::Ready => {}
+    }
     if snapshot.models.is_empty() {
         return ContentState::Empty {
             title: "No local models".to_string(),
@@ -981,6 +991,28 @@ mod tests {
         };
         assert_eq!(microphones.len(), 1);
         assert_eq!(microphones[0].id, SYSTEM_DEFAULT_MICROPHONE_ID);
+        instance.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn projects_typed_model_inventory_loading_error_and_ready_states() -> TestResult {
+        let instance = start_runtime(RuntimeBootstrap::default())?;
+        let mut snapshot = (*instance.handle.snapshot()).clone();
+        let loading = models_content(&snapshot.models);
+        assert!(matches!(loading, ContentState::Loading));
+
+        snapshot.models.inventory_state = ModelInventoryState::Error;
+        let ContentState::Error { detail, .. } = models_content(&snapshot.models) else {
+            panic!("failed model inventory is projected as an error");
+        };
+        assert!(detail.contains("Quit and reopen Wrenflow"));
+
+        snapshot.models.inventory_state = ModelInventoryState::Ready;
+        assert!(matches!(
+            models_content(&snapshot.models),
+            ContentState::Ready(_)
+        ));
         instance.shutdown().await?;
         Ok(())
     }

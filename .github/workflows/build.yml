@@ -418,10 +418,16 @@ jobs:
           mise exec -- python3 scripts/perf/gpui-performance.py seal \
             --result "$PERFORMANCE_RESULT" \
             --candidate-id "$PERFORMANCE_CANDIDATE_ID"
+          # shellcheck disable=SC2016
           mise exec -- jq -e '
             .sanitized == true and .sealed == true and
             (.phases | keys) == ["launch_cold"] and
             (.phases.launch_cold.samples | length) == 1 and
+            (.phases.launch_cold.definition == "machine-verified exact signed LaunchServices launch on one fresh GitHub-hosted macos-14 runner") and
+            (.phases.launch_cold.samples[0] as $sample |
+              ($sample | keys) == ["diagnostic_ready_at_unix_ms", "fresh_runner_id", "latency_ms", "ready_at_unix_ms", "session_id", "started_at_unix_ms", "ui_element_observed_at_unix_ms"] and
+              $sample.ready_at_unix_ms == ([$sample.diagnostic_ready_at_unix_ms, $sample.ui_element_observed_at_unix_ms] | max) and
+              $sample.latency_ms == ($sample.ready_at_unix_ms - $sample.started_at_unix_ms)) and
             .metrics["launch.cold.p95_ms"].sample_count == 1 and
             (.candidate | has("app_path") | not) and
             (.candidate | has("executable_path") | not)

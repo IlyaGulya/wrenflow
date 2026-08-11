@@ -60,6 +60,12 @@ REQUIRED_TEMPLATES = {
     "Time Profiler",
 }
 SUPPORTING_TEMPLATES = {"Power Profiler"}
+HUMAN_COLD_DEFINITION = (
+    "human-confirmed first post-boot or >=60-second quiesced LaunchServices start"
+)
+CONSTRAINED_COLD_DEFINITION = (
+    "machine-verified exact signed LaunchServices launch on one fresh GitHub-hosted macos-14 runner"
+)
 PHASES = {
     "idle",
     "idle_10m",
@@ -1324,23 +1330,55 @@ def add_history_count(result: dict[str, Any], path: pathlib.Path) -> None:
     set_metric(result, "history.rows.count", count, 1)
 
 
-def launch_ready_event(path: pathlib.Path, after_ms: int) -> dict[str, Any] | None:
-    records = read_diagnostics(path, after_ms - 50)
-    startups = [record for record in records if record.get("code") == "startup"]
+def launch_diagnostic_state(
+    path: pathlib.Path, after_ms: int
+) -> tuple[bool, dict[str, Any] | None]:
+    records = read_diagnostics(path, after_ms)
+    startups = [
+        record
+        for record in records
+        if record.get("code") == "startup"
+        and record.get("timestamp_unix_ms", -1) >= after_ms
+    ]
     for startup in reversed(startups):
         ready = next(
             (
                 record
                 for record in records
                 if record.get("session_id") == startup.get("session_id")
-                and record.get("code") == "shell_capabilities_observed"
+                and record.get("code") == "menu_bar_ready"
                 and record["timestamp_unix_ms"] >= startup["timestamp_unix_ms"]
             ),
             None,
         )
         if ready:
-            return ready
-    return None
+            return True, ready
+    return bool(startups), None
+
+
+def launch_failure_message(
+    *,
+    saw_exact_pid: bool,
+    exact_pid_running: bool,
+    startup_observed: bool,
+    ready_observed: bool,
+    ui_element_observed: bool,
+) -> str:
+    if not saw_exact_pid:
+        return "LaunchServices did not expose the exact candidate process"
+    if not exact_pid_running:
+        return "exact candidate exited before reaching the readiness contract"
+    if not startup_observed:
+        return "exact candidate started but did not emit the startup diagnostic"
+    if not ready_observed:
+        return "exact candidate emitted startup but not menu_bar_ready"
+    if not ui_element_observed:
+        return "exact candidate emitted readiness but LaunchServices did not report UIElement"
+    return "exact candidate reached an inconsistent readiness state"
+
+
+def launch_ready_at_ms(diagnostic_ready_ms: int, ui_element_observed_ms: int) -> int:
+    return max(diagnostic_ready_ms, ui_element_observed_ms)
 
 
 def terminate_exact(identity: dict[str, Any], pid: int) -> None:
@@ -1394,25 +1432,50 @@ def measure_launch(args: argparse.Namespace) -> None:
         deadline = time.monotonic() + args.timeout
         pid = None
         ready = None
+        saw_exact_pid = False
+        startup_observed = False
+        ui_element_observed = False
+        ui_element_observed_ms = None
         while time.monotonic() < deadline:
             pid = exact_pid(identity, required=False)
-            ready = launch_ready_event(diagnostics, started_ms)
+            saw_exact_pid |= pid is not None
+            current_startup, ready = launch_diagnostic_state(diagnostics, started_ms)
+            startup_observed |= current_startup
             if pid is not None and ready is not None:
                 info = run(
                     ["/usr/bin/lsappinfo", "info", "-only", "bundlepath,pid,ApplicationType", "-app", str(pid)],
                     check=False,
                 )
                 if '"ApplicationType"="UIElement"' in info:
+                    ui_element_observed = True
+                    ui_element_observed_ms = int(time.time() * 1000)
                     break
             time.sleep(0.01)
-        if pid is None or ready is None:
-            raise EvidenceError("candidate did not reach diagnostic + LaunchServices ready state")
-        latency = ready["timestamp_unix_ms"] - started_ms
+        if pid is None or ready is None or not ui_element_observed:
+            failure = launch_failure_message(
+                saw_exact_pid=saw_exact_pid,
+                exact_pid_running=pid is not None,
+                startup_observed=startup_observed,
+                ready_observed=ready is not None,
+                ui_element_observed=ui_element_observed,
+            )
+            if pid is not None:
+                try:
+                    terminate_exact(identity, pid)
+                except EvidenceError as shutdown_error:
+                    raise EvidenceError(f"{failure}; {shutdown_error}") from shutdown_error
+            raise EvidenceError(failure)
+        if ui_element_observed_ms is None:
+            raise EvidenceError("LaunchServices readiness observation timestamp is missing")
+        ready_at_ms = launch_ready_at_ms(ready["timestamp_unix_ms"], ui_element_observed_ms)
+        latency = ready_at_ms - started_ms
         if latency < 0:
             raise EvidenceError("wall clock moved backwards during launch measurement")
         sample = {
             "started_at_unix_ms": started_ms,
-            "ready_at_unix_ms": ready["timestamp_unix_ms"],
+            "ready_at_unix_ms": ready_at_ms,
+            "diagnostic_ready_at_unix_ms": ready["timestamp_unix_ms"],
+            "ui_element_observed_at_unix_ms": ui_element_observed_ms,
             "latency_ms": latency,
             "session_id": ready.get("session_id"),
         }
@@ -1426,7 +1489,9 @@ def measure_launch(args: argparse.Namespace) -> None:
     result["phases"][key] = {
         "phase": key,
         "definition": (
-            "human-confirmed first post-boot or >=60-second quiesced LaunchServices start"
+            CONSTRAINED_COLD_DEFINITION
+            if constrained_cold
+            else HUMAN_COLD_DEFINITION
             if args.mode == "cold"
             else "LaunchServices restart after a verified exact-candidate termination"
         ),
@@ -1669,7 +1734,7 @@ def merge_cold_launch(args: argparse.Namespace) -> None:
         if set(shard.get("phases", {})) != {"launch_cold"}:
             raise EvidenceError(f"cold shard contains unexpected phases: {label}")
         phase = shard["phases"]["launch_cold"]
-        if phase.get("definition") != "human-confirmed first post-boot or >=60-second quiesced LaunchServices start":
+        if phase.get("definition") != CONSTRAINED_COLD_DEFINITION:
             raise EvidenceError(f"cold shard does not use the cold-launch definition: {label}")
         phase_samples = phase.get("samples")
         metric = shard["metrics"]["launch.cold.p95_ms"]
@@ -1679,6 +1744,8 @@ def merge_cold_launch(args: argparse.Namespace) -> None:
         if not isinstance(sample, dict) or set(sample) != {
             "started_at_unix_ms",
             "ready_at_unix_ms",
+            "diagnostic_ready_at_unix_ms",
+            "ui_element_observed_at_unix_ms",
             "latency_ms",
             "session_id",
             "fresh_runner_id",
@@ -1686,10 +1753,21 @@ def merge_cold_launch(args: argparse.Namespace) -> None:
             raise EvidenceError(f"cold shard sample has an unexpected shape: {label}")
         started = sample.get("started_at_unix_ms")
         ready = sample.get("ready_at_unix_ms")
+        diagnostic_ready = sample.get("diagnostic_ready_at_unix_ms")
+        ui_element_observed = sample.get("ui_element_observed_at_unix_ms")
         latency = sample.get("latency_ms")
-        if not all(isinstance(value, int) and not isinstance(value, bool) for value in (started, ready, latency)):
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool)
+            for value in (started, ready, diagnostic_ready, ui_element_observed, latency)
+        ):
             raise EvidenceError(f"cold shard sample has non-integer timings: {label}")
-        if started < 0 or ready < started or latency != ready - started:
+        if (
+            started < 0
+            or diagnostic_ready < started
+            or ui_element_observed < started
+            or ready != launch_ready_at_ms(diagnostic_ready, ui_element_observed)
+            or latency != ready - started
+        ):
             raise EvidenceError(f"cold shard sample timings are inconsistent: {label}")
         if not re.fullmatch(r"s-[0-9a-f]{16}", sample.get("session_id", "")):
             raise EvidenceError(f"cold shard sample has an invalid session ID: {label}")

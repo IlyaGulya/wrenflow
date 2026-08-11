@@ -27,9 +27,10 @@ pub use api::{
 };
 pub use state::{
     AppSessionState, AudioDevicesSnapshot, ErrorAction, HistorySnapshot, LaunchAtLoginSnapshot,
-    LocalModelRuntimeState, LocalModelsSnapshot, ModelOperationState, OnboardingStep,
-    PermissionStatus, PermissionsSnapshot, RuntimeCapabilities, RuntimePhase, RuntimeSnapshot,
-    ShellCapabilities, ShellFacts, SupportBundleStatus, TranscriptDisposition, UpdateStatus,
+    LocalModelRuntimeState, LocalModelsSnapshot, ModelInventoryState, ModelOperationState,
+    OnboardingStep, PermissionStatus, PermissionsSnapshot, RuntimeCapabilities, RuntimePhase,
+    RuntimeSnapshot, ShellCapabilities, ShellFacts, SupportBundleStatus, TranscriptDisposition,
+    UpdateStatus,
 };
 pub use supervisor::{
     start_production_runtime, start_runtime, RuntimeBootstrap, RuntimeHandle, RuntimeInstance,

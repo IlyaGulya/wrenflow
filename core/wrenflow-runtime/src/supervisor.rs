@@ -14,9 +14,9 @@ use crate::api::{
 use crate::capabilities;
 use crate::state::{
     AppSessionState, AudioDevicesSnapshot, HistorySnapshot, LaunchAtLoginSnapshot,
-    LocalModelsSnapshot, OnboardingStep, PermissionStatus, PermissionsSnapshot,
-    RuntimeCapabilities, RuntimePhase, RuntimeSnapshot, ShellCapabilities, ShellFacts,
-    TranscriptDisposition, UpdateStatus,
+    LocalModelsSnapshot, ModelInventoryState, OnboardingStep, PermissionStatus,
+    PermissionsSnapshot, RuntimeCapabilities, RuntimePhase, RuntimeSnapshot, ShellCapabilities,
+    ShellFacts, TranscriptDisposition, UpdateStatus,
 };
 use crate::store::RuntimeStore;
 use crate::{
@@ -200,6 +200,7 @@ pub fn start_production_runtime() -> Result<RuntimeInstance, RuntimeError> {
             settings_store: Some(settings_store),
             history_path: Some(paths.history),
             platform_services: true,
+            audio_device_probe: None,
         },
     )
 }
@@ -216,6 +217,7 @@ struct ProductionOptions {
     settings_store: Option<Arc<ConfigStore>>,
     history_path: Option<std::path::PathBuf>,
     platform_services: bool,
+    audio_device_probe: Option<capabilities::AudioDeviceProbe>,
 }
 
 fn start_runtime_inner(
@@ -235,8 +237,25 @@ fn start_runtime_inner(
         audio_level_tx,
         event_tx.clone(),
     );
-    if options.platform_services {
-        capabilities::refresh_audio_devices(&store)?;
+    let injected_audio_device_probe = options.audio_device_probe.is_some();
+    let audio_device_probe = options
+        .audio_device_probe
+        .unwrap_or_else(capabilities::production_audio_device_probe);
+    if options.platform_services || injected_audio_device_probe {
+        let initial_store = store.clone();
+        let initial_probe = audio_device_probe.clone();
+        drop(tokio::spawn(async move {
+            if capabilities::refresh_audio_devices(&initial_store, &initial_probe)
+                .await
+                .is_err()
+            {
+                crate::diagnostics::emit_diagnostic(crate::diagnostics::DiagnosticEvent::new(
+                    crate::diagnostics::DiagnosticCategory::Recording,
+                    crate::diagnostics::DiagnosticLevel::Error,
+                    crate::diagnostics::DiagnosticCode::AudioDevicesRefreshFailed,
+                ));
+            }
+        }));
     }
     let history_runtime = options
         .history_path
@@ -283,6 +302,7 @@ fn start_runtime_inner(
             pipeline_join,
             performance_join: Some(performance_join),
             platform_services: options.platform_services,
+            audio_device_probe,
         }
         .run()
         .await;
@@ -312,6 +332,7 @@ pub(crate) fn initial_snapshot(bootstrap: &RuntimeBootstrap) -> RuntimeSnapshot 
         pipeline: PipelineState::Idle,
         models: LocalModelsSnapshot {
             models: all_local_model_catalog_entries(),
+            inventory_state: ModelInventoryState::Loading,
             selected_model_id,
             active_model_id: None,
             installed_model_ids: Vec::new(),
@@ -358,6 +379,7 @@ struct RuntimeSupervisor {
     pipeline_join: Option<JoinHandle<()>>,
     performance_join: Option<JoinHandle<()>>,
     platform_services: bool,
+    audio_device_probe: capabilities::AudioDeviceProbe,
 }
 
 impl RuntimeSupervisor {
@@ -428,7 +450,9 @@ impl RuntimeSupervisor {
                 if !self.platform_services {
                     return Err(RuntimeError::SubsystemUnavailable("audio_devices"));
                 }
-                let update = capabilities::refresh_audio_devices(&self.store)?;
+                let update =
+                    capabilities::refresh_audio_devices(&self.store, &self.audio_device_probe)
+                        .await?;
                 return Ok(if update.changed {
                     CommandOutcome::Applied {
                         revision: update.revision,
@@ -914,7 +938,100 @@ fn retreat_onboarding(state: &mut RuntimeSnapshot) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn startup_and_shell_commands_do_not_wait_for_audio_device_enumeration() {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
+        let probe = capabilities::AudioDeviceProbe::new(move || {
+            entered_tx.send(()).unwrap();
+            let _ = release_rx
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(2));
+            capabilities::AudioDeviceInventory {
+                devices: Vec::new(),
+                default_device_name: String::new(),
+            }
+        });
+
+        let started = Instant::now();
+        let runtime = start_runtime_inner(
+            RuntimeBootstrap::default(),
+            ProductionOptions {
+                settings_store: None,
+                history_path: None,
+                platform_services: false,
+                audio_device_probe: Some(probe),
+            },
+        )
+        .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "runtime startup synchronously waited for its audio device probe"
+        );
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(!runtime.handle.snapshot().audio_devices.has_snapshot);
+
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(500),
+            runtime
+                .handle
+                .request(RuntimeCommand::ReportShellCapabilities(
+                    ShellCapabilities::default(),
+                )),
+        )
+        .await
+        .expect("shell readiness command must not wait for CoreAudio")
+        .unwrap();
+        assert!(matches!(outcome, CommandOutcome::NoChange { .. }));
+
+        release_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            let mut snapshots = runtime.handle.subscribe_snapshots();
+            while !snapshots.borrow().audio_devices.has_snapshot {
+                snapshots.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("released audio probe must publish its snapshot");
+        runtime.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stuck_startup_audio_probe_does_not_delay_runtime_shutdown() {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
+        let probe = capabilities::AudioDeviceProbe::new(move || {
+            entered_tx.send(()).unwrap();
+            release_rx.lock().unwrap().recv().unwrap();
+            capabilities::AudioDeviceInventory {
+                devices: Vec::new(),
+                default_device_name: String::new(),
+            }
+        });
+        let runtime = start_runtime_inner(
+            RuntimeBootstrap::default(),
+            ProductionOptions {
+                settings_store: None,
+                history_path: None,
+                platform_services: false,
+                audio_device_probe: Some(probe),
+            },
+        )
+        .unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        tokio::time::timeout(Duration::from_millis(500), runtime.shutdown())
+            .await
+            .expect("runtime shutdown must not join a stuck CoreAudio probe")
+            .unwrap();
+        release_tx.send(()).unwrap();
+    }
 
     #[test]
     fn operational_commands_map_to_closed_markers_without_payloads() {
@@ -1002,6 +1119,7 @@ mod tests {
                 settings_store: Some(settings_store),
                 history_path: None,
                 platform_services: false,
+                audio_device_probe: None,
             },
         )
         .unwrap();
@@ -1041,6 +1159,7 @@ mod tests {
                 settings_store: Some(settings_store),
                 history_path: None,
                 platform_services: false,
+                audio_device_probe: None,
             },
         )
         .unwrap();

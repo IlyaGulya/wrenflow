@@ -64,14 +64,59 @@ if grep -Fq '"-o", "command="' "$HARNESS"; then
     exit 1
 fi
 mise exec -- python3 -c '
-import runpy, sys
+import inspect, runpy, sys
 module = runpy.run_path(sys.argv[1])
 assert module["parse_memory"]("38M-") == 38
 assert module["parse_memory"]("1.5G+") == 1536
 assert module["REQUIRED_TEMPLATES"].isdisjoint(module["SUPPORTING_TEMPLATES"])
 assert len(module["REQUIRED_TEMPLATES"]) == 7
 assert module["SUPPORTING_TEMPLATES"] == {"Power Profiler"}
+failure = module["launch_failure_message"]
+assert failure(
+    saw_exact_pid=True,
+    exact_pid_running=True,
+    startup_observed=True,
+    ready_observed=False,
+    ui_element_observed=False,
+) == "exact candidate emitted startup but not menu_bar_ready"
+assert failure(
+    saw_exact_pid=True,
+    exact_pid_running=True,
+    startup_observed=True,
+    ready_observed=True,
+    ui_element_observed=False,
+) == "exact candidate emitted readiness but LaunchServices did not report UIElement"
+assert module["launch_ready_at_ms"](1100, 1300) == 1300
+assert module["launch_ready_at_ms"](1400, 1300) == 1400
+measure_source = inspect.getsource(module["measure_launch"])
+assert "if pid is not None:\n                try:\n                    terminate_exact(identity, pid)" in measure_source
 ' "$HARNESS"
+
+mise exec -- python3 -c '
+import json, pathlib, runpy, sys
+module = runpy.run_path(sys.argv[1])
+diagnostics = pathlib.Path(sys.argv[2])
+records = [
+    {"timestamp_unix_ms": 999, "session_id": "s-0123456789abcdef", "code": "menu_bar_ready"},
+    {"timestamp_unix_ms": 1000, "session_id": "s-0123456789abcdef", "code": "startup"},
+    {"timestamp_unix_ms": 1001, "session_id": "s-other0000000000", "code": "menu_bar_ready"},
+]
+diagnostics.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+assert module["launch_diagnostic_state"](diagnostics, 1000) == (True, None)
+records.append(
+    {"timestamp_unix_ms": 1002, "session_id": "s-0123456789abcdef", "code": "menu_bar_ready"}
+)
+diagnostics.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+startup, ready = module["launch_diagnostic_state"](diagnostics, 1000)
+assert startup and ready["timestamp_unix_ms"] == 1002
+
+old_records = [
+    {"timestamp_unix_ms": 998, "session_id": "s-old000000000000", "code": "startup"},
+    {"timestamp_unix_ms": 999, "session_id": "s-old000000000000", "code": "menu_bar_ready"},
+]
+diagnostics.write_text("".join(json.dumps(record) + "\n" for record in old_records), encoding="utf-8")
+assert module["launch_diagnostic_state"](diagnostics, 1000) == (False, None)
+' "$HARNESS" "$TEST_ROOT/launch-diagnostics.ndjson"
 
 mise exec -- python3 -c '
 import runpy, sys
@@ -155,10 +200,12 @@ for index in range(5):
         "metrics": {"launch.cold.p95_ms": {"value": latency, "sample_count": 1, "evidence": []}},
         "phases": {"launch_cold": {
             "phase": "launch_cold",
-            "definition": "human-confirmed first post-boot or >=60-second quiesced LaunchServices start",
+            "definition": module["CONSTRAINED_COLD_DEFINITION"],
             "samples": [{
                 "started_at_unix_ms": 1000 + index,
                 "ready_at_unix_ms": 1000 + index + latency,
+                "diagnostic_ready_at_unix_ms": 1000 + index + latency - 1,
+                "ui_element_observed_at_unix_ms": 1000 + index + latency,
                 "latency_ms": latency,
                 "session_id": f"s-{index:016x}",
                 "fresh_runner_id": f"gh-12345-1-cold-{index + 1}",

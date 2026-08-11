@@ -104,9 +104,18 @@ pub enum ModelOperationState {
     },
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ModelInventoryState {
+    #[default]
+    Loading,
+    Ready,
+    Error,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LocalModelsSnapshot {
     pub models: Vec<LocalModelCatalogEntry>,
+    pub inventory_state: ModelInventoryState,
     pub selected_model_id: String,
     pub active_model_id: Option<String>,
     pub installed_model_ids: Vec<String>,
