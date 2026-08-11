@@ -1185,7 +1185,8 @@ def sample_phase(args: argparse.Namespace) -> None:
             if previous_idlew is None or previous_row_mono is None:
                 raise EvidenceError("top sampling baseline was not captured")
             observed_interval = current_mono - previous_row_mono
-            wakeups = idle_wakeup_rate(previous_idlew, idlew, observed_interval)
+            persisted_interval = round(observed_interval, 6)
+            wakeups = idle_wakeup_rate(previous_idlew, idlew, persisted_interval)
             previous_idlew = idlew
             previous_row_mono = current_mono
             fd_measured = False
@@ -1197,7 +1198,7 @@ def sample_phase(args: argparse.Namespace) -> None:
                 sample = {
                     "timestamp_unix_ms": current_wall_ms,
                     "elapsed_seconds": round(current_mono - started_mono, 6),
-                    "observed_interval_seconds": round(observed_interval, 6),
+                    "observed_interval_seconds": persisted_interval,
                     "cpu_percent": float(fields[1]),
                     "rss_mib": round(parse_memory(fields[2]), 6),
                     "threads": int(fields[3].split("/", 1)[0]),

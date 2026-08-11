@@ -706,24 +706,25 @@ BASELINE_ELAPSED = 0.5
 BASELINE_WALL_MS = 1_000_000
 BASELINE_WAKEUPS = 100
 
-def make_samples(intervals):
+def make_samples(intervals, *, counter_delta=1):
     samples = []
     elapsed = BASELINE_ELAPSED
     wall_ms = BASELINE_WALL_MS
     counter = BASELINE_WAKEUPS
     for index, interval in enumerate(intervals):
+        persisted_interval = round(interval, 6)
         elapsed = round(elapsed + interval, 6)
         wall_ms += max(1, round(interval * 1000))
-        counter += 1
+        counter += counter_delta
         samples.append({
             "timestamp_unix_ms": wall_ms,
             "elapsed_seconds": elapsed,
-            "observed_interval_seconds": round(interval, 6),
+            "observed_interval_seconds": persisted_interval,
             "cpu_percent": float(index % 2),
             "rss_mib": 100.0,
             "threads": 4,
             "idle_wakeups_counter": counter,
-            "idle_wakeups_per_s": round(1.0 / interval, 6),
+            "idle_wakeups_per_s": round(counter_delta / persisted_interval, 6),
             "energy_impact": float((index + 1) % 2),
             "file_descriptors": 8,
             "file_descriptors_measured": index % 5 == 0,
@@ -742,7 +743,22 @@ def summarize(samples, *, duration=1800.0, require_full_count=True):
         require_full_duration=True,
     )
 
-samples = make_samples([1.11] * 1800)
+raw_quantized_interval = 1.109876543
+persisted_quantized_interval = round(raw_quantized_interval, 6)
+old_mismatched_rate = round(5.0 / raw_quantized_interval, 6)
+recomputed_persisted_rate = 5.0 / persisted_quantized_interval
+assert abs(old_mismatched_rate - recomputed_persisted_rate) > 0.000002
+quantized_samples = make_samples([raw_quantized_interval], counter_delta=5)
+quantized_summary = summarize(quantized_samples, duration=1.0)
+assert quantized_summary["observed_sample_count"] == 1
+assert math.isclose(
+    quantized_samples[0]["idle_wakeups_per_s"],
+    recomputed_persisted_rate,
+    rel_tol=0.0,
+    abs_tol=0.000002,
+)
+
+samples = make_samples([1.11] * 1800, counter_delta=5)
 summary = summarize(samples)
 assert summary["observed_sample_count"] == 1800
 assert summary["wall_coverage_seconds"] == 1998.0
