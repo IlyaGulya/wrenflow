@@ -170,7 +170,7 @@ assert module["launch_ready_at_ms"](1100, 1300) == 1300
 assert module["launch_ready_at_ms"](1400, 1300) == 1400
 measure_source = inspect.getsource(module["measure_launch"])
 assert "wait_for_route_aware_launch" in measure_source
-self_test_source = inspect.getsource(module["run_signed_self_test"])
+self_test_source = inspect.getsource(module["_run_signed_self_test"])
 initial_accessory_barrier = self_test_source.index("validate_initial_self_test_accessory")
 idle_call = self_test_source.index("phase=\"idle\"")
 post_idle_barrier = self_test_source.index("validate_post_idle_self_test_observation")
@@ -179,11 +179,17 @@ start_signal_use = self_test_source.index("start_signal=str(start_signal)")
 assert initial_accessory_barrier < idle_call < post_idle_barrier < cycle_call < start_signal_use
 assert "except BaseException:" in self_test_source
 assert "request_exact_typed_quit(identity, pid)" in self_test_source
+wrapper_source = inspect.getsource(module["run_signed_self_test"])
+assert "write_failure_summary" in wrapper_source
 sample_source = inspect.getsource(module["sample_phase"])
 accepted_row = sample_source.index("samples.append(sample)")
 observer_ack = sample_source.index("observer_ack_evidence = maybe_create_observer_ack")
 sample_limit = sample_source.index("if len(samples) >= target_sample_count")
 assert accepted_row < observer_ack < sample_limit
+reader_delivery = sample_source.index("reader_delivery_delay =")
+boundary_detection = sample_source.index("new_boundary_correlations = {")
+boundary_fd = sample_source.index("last_fd = count_fds(pid)")
+assert reader_delivery < boundary_detection < boundary_fd < accepted_row
 ' "$HARNESS"
 
 mise exec -- python3 -c '
@@ -728,19 +734,19 @@ def make_samples(intervals, *, counter_delta=1):
             "energy_impact": float((index + 1) % 2),
             "file_descriptors": 8,
             "file_descriptors_measured": index % 5 == 0,
+            "observer_delivery_delay_seconds": 0.001,
         })
     return samples
 
-def summarize(samples, *, duration=1800.0, require_full_count=True):
+def summarize(samples, *, duration=1800.0, contract=None):
     return module["sampling_summary"](
         samples,
+        contract=contract or module["IDLE_SAMPLING_CONTRACT"],
         baseline_elapsed_seconds=BASELINE_ELAPSED,
         baseline_at_unix_ms=BASELINE_WALL_MS,
         baseline_idle_wakeups=BASELINE_WAKEUPS,
         requested_duration_seconds=duration,
         requested_interval_seconds=1.0,
-        require_full_count=require_full_count,
-        require_full_duration=True,
     )
 
 raw_quantized_interval = 1.109876543
@@ -764,9 +770,9 @@ assert summary["observed_sample_count"] == 1800
 assert summary["wall_coverage_seconds"] == 1998.0
 assert summary["average_observed_interval_seconds"] == 1.11
 
-def rejected(samples, message, *, duration=1800.0, require_full_count=True):
+def rejected(samples, message, *, duration=1800.0, contract=None):
     try:
-        summarize(samples, duration=duration, require_full_count=require_full_count)
+        summarize(samples, duration=duration, contract=contract)
     except module["EvidenceError"]:
         return
     raise SystemExit(message)
@@ -780,6 +786,45 @@ rejected(make_samples([0.9] * 1800), "sampling contract accepted short wall cove
 rejected(make_samples([1.26] * 1800), "sampling contract accepted too-low effective cadence")
 long_gap = make_samples([1.0] * 1799 + [2.01])
 rejected(long_gap, "sampling contract accepted an overlong gap")
+try:
+    summarize(long_gap)
+except module["SamplingEvidenceError"] as error:
+    failure_details = module["sampling_failure_details"](
+        long_gap,
+        contract=module["IDLE_SAMPLING_CONTRACT"],
+        process_returncode=1,
+        process_stderr="private /Users/secret/audio.ogg",
+        diagnostics=[],
+        session_id=None,
+        existing=error.details,
+    )
+    assert failure_details["first_bad_index"] == 1799
+    assert failure_details["first_bad_gap_seconds"] == 2.01
+    assert failure_details["row_count"] == 1800
+    assert failure_details["gap_p50_seconds"] == 1.0
+    assert failure_details["gap_p99_seconds"] == 1.0
+    assert failure_details["gap_max_seconds"] == 2.01
+    assert failure_details["top_stderr_category"] == "other"
+    assert "/Users/" not in str(failure_details)
+else:
+    raise SystemExit("sampling failure did not expose bounded diagnostic context")
+
+active_contract = module["ACTIVE_SAMPLING_CONTRACT"]
+active_with_isolated_gap = make_samples([1.0] * 19 + [2.4])
+active_summary = summarize(
+    active_with_isolated_gap,
+    duration=2400.0,
+    contract=active_contract,
+)
+assert active_summary["contract"] == active_contract
+assert "target_sample_count" not in active_summary
+assert "maximum_gap_multiplier_limit" not in active_summary
+rejected(
+    make_samples([1.3] * 20),
+    "active sampling accepted sustained undersampling",
+    duration=2400.0,
+    contract=active_contract,
+)
 
 duplicate_wall = copy.deepcopy(samples)
 duplicate_wall[10]["timestamp_unix_ms"] = duplicate_wall[9]["timestamp_unix_ms"]
@@ -954,7 +999,10 @@ report = {
   "completed": {"cycles": 20, "history_rows": 50},
   "history": {"schema_version": 1, "integrity_ok": True},
   "timings": {
-    "ready_at_unix_ms": 1000, "started_at_unix_ms": 1100, "completed_at_unix_ms": 3100,
+    "ready_at_unix_ms": 1000, "started_at_unix_ms": 1100,
+    "history_ready_at_unix_ms": 1200, "activation_started_at_unix_ms": 1300,
+    "loading_started_at_unix_ms": 1800, "model_ready_at_unix_ms": 2000,
+    "warmup_completed_at_unix_ms": 2200, "completed_at_unix_ms": 3100,
     "model_download_ms": 500, "model_cold_load_ms": 200, "total_ms": 2000,
     "cycles_ms": [50] * 20,
   },
@@ -1039,52 +1087,242 @@ module["add_history_count"]({"metrics": {}}, pathlib.Path(sys.argv[2]))
     exit 1
 fi
 mise exec -- python3 -c '
-import runpy, sys
+import copy, json, runpy, sys
 module = runpy.run_path(sys.argv[1])
-phase = {
-    "diagnostics": [
-        {"code": "transcription_completed", "correlation_id": "c1", "timestamp_unix_ms": 1000},
-        {"code": "transcription_completed", "correlation_id": "c2", "timestamp_unix_ms": 1100},
-    ],
-    "samples": [
-        {"timestamp_unix_ms": 1200, "rss_mib": 10.0, "file_descriptors": 5, "threads": 4},
-    ],
-    "sample_interval_seconds": 1,
+base = 1_000_000
+session = "s-0123456789abcdef"
+samples = []
+elapsed = 0.0
+for index, interval in enumerate([1.0, 2.4, *([1.0] * 48)], start=1):
+    elapsed += interval
+    timestamp = base + round(elapsed * 1000)
+    samples.append({
+        "timestamp_unix_ms": timestamp,
+        "elapsed_seconds": elapsed,
+        "observed_interval_seconds": interval,
+        "observer_delivery_delay_seconds": 0.001,
+        "rss_mib": 100.0 + index,
+        "file_descriptors": 8 + index // 10,
+        "file_descriptors_measured": False,
+        "threads": 4 + index // 20,
+        "cpu_percent": 20.0 + index,
+        "idle_wakeups_counter": 100 + index,
+        "idle_wakeups_per_s": round(1.0 / interval, 6),
+        "energy_impact": 1.0 + index / 10,
+    })
+diagnostics = [{
+    "session_id": session,
+    "code": "performance_self_test_history_ready",
+    "timestamp_unix_ms": base + 100,
+}]
+for index in range(20):
+    correlation = f"direct-{index:02d}"
+    started = base + 5000 + index * 2000
+    completed = started + 400
+    diagnostics.extend([
+        {"session_id": session, "code": "transcription_started", "correlation_id": correlation, "timestamp_unix_ms": started},
+        {"session_id": session, "code": "transcription_completed", "correlation_id": correlation, "timestamp_unix_ms": completed},
+    ])
+completion_timestamps = [
+    record["timestamp_unix_ms"]
+    for record in diagnostics
+    if record["code"] == "transcription_completed"
+]
+mapped_indexes = [
+    next(
+        index
+        for index, sample in enumerate(samples)
+        if sample["timestamp_unix_ms"] >= completed
+    )
+    for completed in completion_timestamps
+]
+assert len(set(mapped_indexes)) == 20
+for index in mapped_indexes:
+    samples[index]["file_descriptors_measured"] = True
+# A pre-warm peak remains global but must not contaminate post-warm p95.
+samples[0]["rss_mib"] = 9999.0
+timings = {
+    "ready_at_unix_ms": base - 500,
+    "started_at_unix_ms": base,
+    "history_ready_at_unix_ms": base + 100,
+    "activation_started_at_unix_ms": base + 200,
+    "loading_started_at_unix_ms": base + 2200,
+    "model_ready_at_unix_ms": base + 3200,
+    "warmup_completed_at_unix_ms": base + 4000,
+    "completed_at_unix_ms": base + 45000,
+    "model_download_ms": 2000.0,
+    "model_cold_load_ms": 1000.0,
+    "total_ms": 45500.0,
+    "cycles_ms": [400.0] * 20,
 }
+sampling = module["sampling_summary"](
+    samples,
+    contract=module["ACTIVE_SAMPLING_CONTRACT"],
+    baseline_elapsed_seconds=0.0,
+    baseline_at_unix_ms=base,
+    baseline_idle_wakeups=100,
+    requested_duration_seconds=2400.0,
+    requested_interval_seconds=1.0,
+)
+manifest = json.loads(module["FIXTURE_MANIFEST"].read_text(encoding="utf-8"))
+audio = manifest["audio"]
+self_test_report = {
+    "schema_version": 1,
+    "contract": module["SELF_TEST_CONTRACT"],
+    "fixture": {
+        "id": manifest["fixture_id"],
+        "sha256": manifest["sha256"],
+        "bytes": manifest["bytes"],
+        "channels": audio["channels"],
+        "sample_rate_hz": audio["sample_rate_hz"],
+        "bits_per_sample": audio["bits_per_sample"],
+        "duration_ms": int(audio["duration_seconds"] * 1000),
+    },
+    "process": {"pid": 4242},
+    "session_id": session,
+    "model": {
+        "id": module["DEFAULT_MODEL_ID"],
+        "revision": module["DEFAULT_MODEL_REVISION"],
+        "engine_instances": 1,
+        "warmed": True,
+        "downloaded": True,
+    },
+    "requested": {"cycles": 20, "history_rows": 50},
+    "completed": {"cycles": 20, "history_rows": 50},
+    "history": {"schema_version": 1, "integrity_ok": True},
+    "timings": timings,
+    "quit_requested": True,
+    "passed": True,
+    "failure_code": None,
+}
+phase = {
+    "phase": "cycles_20",
+    "pid": 4242,
+    "diagnostics": diagnostics,
+    "samples": samples,
+    "sample_interval_seconds": 1.0,
+    "requested_duration_seconds": 2400.0,
+    "sampling": sampling,
+    "self_test_report": self_test_report,
+    "observer_ack": {
+        "resource_row_timestamp_unix_ms": samples[mapped_indexes[-1]]["timestamp_unix_ms"],
+        "latest_completion_timestamp_unix_ms": base + 43400,
+        "started_correlation_count": 20,
+        "completion_correlation_count": 20,
+    },
+}
+result = {
+    "metrics": {},
+    "phases": {
+        "launch_warm": {"samples": [{"latency_ms": 500}]},
+        "cycles_20": phase,
+    },
+}
+module["add_cycle_growth_metrics"](result, phase)
+module["update_global_resource_metrics"](result)
+module["set_metric"](result, "cycles_20.duration_seconds", sampling["wall_coverage_seconds"], 1)
+module["set_metric"](result, "cycles_20.cpu.avg_percent", module["time_weighted_mean"](samples, "cpu_percent"), 50)
+module["set_metric"](result, "cycles_20.cpu.p95_percent", module["percentile"](sample["cpu_percent"] for sample in samples), 50)
+module["set_metric"](result, "cycles_20.energy.avg_impact", module["time_weighted_mean"](samples, "energy_impact"), 50)
+module["set_metric"](result, "cycles_20.energy.p95_impact", module["percentile"](sample["energy_impact"] for sample in samples), 50)
+module["set_metric"](result, "cycles_20.wakeups.avg_per_s", module["time_weighted_mean"](samples, "idle_wakeups_per_s"), 50)
+module["set_metric"](result, "cycles_20.wakeups.p95_per_s", module["percentile"](sample["idle_wakeups_per_s"] for sample in samples), 50)
+post_warm = [sample for sample in samples if sample["timestamp_unix_ms"] >= timings["warmup_completed_at_unix_ms"]]
+module["set_metric"](result, "memory.post_warmup.p95_mib", module["percentile"](sample["rss_mib"] for sample in post_warm), len(post_warm))
+module["set_metric"](result, "model.download.p95_ms", 2000.0, 1)
+module["set_metric"](result, "model.cold_load.p95_ms", 1000.0, 1)
+module["set_metric"](result, "history.rows.count", 50, 1)
+assert module["check_active_sampling"](result, "fixture") == []
+
+tampered = copy.deepcopy(result)
+tampered["metrics"]["transcription.cpu.p95_percent"]["value"] += 1
+assert module["check_active_sampling"](tampered, "fixture")
+tampered = copy.deepcopy(result)
+tampered["metrics"]["memory.peak_mib"]["value"] -= 1
+assert module["check_active_sampling"](tampered, "fixture")
+tampered = copy.deepcopy(result)
+tampered["phases"]["cycles_20"]["cycle_resource_mapping"]["pairs"][0]["sample_index"] += 1
+assert module["check_active_sampling"](tampered, "fixture")
+tampered = copy.deepcopy(result)
+tampered["phases"]["cycles_20"]["samples"][5]["file_descriptors_measured"] = False
+assert module["check_active_sampling"](tampered, "fixture")
+tampered = copy.deepcopy(result)
+tampered["phases"]["cycles_20"]["self_test_report"]["timings"]["model_ready_at_unix_ms"] = base + 2200
+assert module["check_active_sampling"](tampered, "fixture")
+tampered = copy.deepcopy(result)
+tampered_diagnostics = tampered["phases"]["cycles_20"]["diagnostics"]
+tampered_diagnostics[2]["timestamp_unix_ms"] = tampered_diagnostics[1]["timestamp_unix_ms"]
+assert module["check_active_sampling"](tampered, "fixture")
+tampered = copy.deepcopy(result)
+tampered["phases"]["cycles_20"]["self_test_report"]["transcript"] = "private"
+assert module["check_active_sampling"](tampered, "fixture")
+' "$HARNESS"
+
+FAILURE_SUMMARY="$TEST_ROOT/constrained-failure-summary.json"
+mise exec -- python3 -c '
+import json, os, pathlib, runpy, sys
+module = runpy.run_path(sys.argv[1])
+path = pathlib.Path(sys.argv[2])
+error = module["SamplingEvidenceError"](
+    "overlong_collection_gap",
+    "private detail /Users/private/audio.ogg",
+    first_bad_index=7,
+    first_bad_gap_seconds=2.4,
+    sampling_contract=module["ACTIVE_SAMPLING_CONTRACT"],
+    row_count=42,
+    gap_p50_seconds=1.1,
+    gap_p95_seconds=1.2,
+    gap_p99_seconds=2.4,
+    gap_max_seconds=2.4,
+    reader_lag_p95_seconds=0.01,
+    reader_lag_max_seconds=0.02,
+    top_returncode=1,
+    top_stderr_category="other",
+    top_stderr_sha256="a" * 64,
+    history_ready_count=1,
+    direct_start_count=20,
+    direct_completion_count=20,
+)
+module["write_failure_summary"](path, phase="cycles_20", error=error)
+value = json.loads(path.read_text(encoding="utf-8"))
+assert value["schema_version"] == 1
+assert value["contract"] == "gpui-performance-failure-v1"
+assert value["phase"] == "cycles_20"
+assert value["code"] == "overlong_collection_gap"
+assert value["passed"] is False
+assert value["sampling"]["contract"] == module["ACTIVE_SAMPLING_CONTRACT"]
+assert value["sampling"]["row_count"] == 42
+assert value["sampling"]["first_bad_index"] == 7
+assert value["sampling"]["first_bad_gap_seconds"] == 2.4
+assert value["sampling"]["gap_p99_seconds"] == 2.4
+assert value["sampling"]["reader_lag_max_seconds"] == 0.02
+assert value["sampling"]["top_returncode"] == 1
+assert value["sampling"]["top_stderr_sha256"] == "a" * 64
+assert value["sampling"]["direct_completion_count"] == 20
+assert os.stat(path).st_mode & 0o777 == 0o600
+assert "/Users/" not in path.read_text(encoding="utf-8")
 try:
-    module["add_cycle_growth_metrics"]({"metrics": {}}, phase)
+    module["write_failure_summary"](path, phase="cycles_20", error=error)
 except module["EvidenceError"]:
     pass
 else:
-    raise SystemExit("cycle verifier reused one resource sample for multiple completions")
-' "$HARNESS"
-mise exec -- python3 -c '
-import runpy, sys
-module = runpy.run_path(sys.argv[1])
-phase = {
-    "diagnostics": [
-        {"code": "transcription_started", "correlation_id": "direct-1", "timestamp_unix_ms": 1000},
-        {"code": "transcription_completed", "correlation_id": "direct-1", "timestamp_unix_ms": 1400},
-        {"code": "recording_started", "correlation_id": "typed-1", "timestamp_unix_ms": 1500},
-        {"code": "transcription_started", "correlation_id": "typed-1", "timestamp_unix_ms": 1600},
-        {"code": "transcription_completed", "correlation_id": "typed-1", "timestamp_unix_ms": 1700},
-        {"code": "transcription_started", "correlation_id": "direct-2", "timestamp_unix_ms": 2000},
-        {"code": "transcription_completed", "correlation_id": "direct-2", "timestamp_unix_ms": 2400},
-        {"code": "recording_started", "correlation_id": "typed-2", "timestamp_unix_ms": 2500},
-        {"code": "transcription_completed", "correlation_id": "typed-2", "timestamp_unix_ms": 2600},
-    ],
-    "samples": [
-        {"timestamp_unix_ms": 1450, "rss_mib": 10.0, "file_descriptors": 5, "threads": 4, "cpu_percent": 20.0, "energy_impact": 1.0},
-        {"timestamp_unix_ms": 2450, "rss_mib": 11.0, "file_descriptors": 5, "threads": 4, "cpu_percent": 21.0, "energy_impact": 1.1},
-        {"timestamp_unix_ms": 2650, "rss_mib": 11.0, "file_descriptors": 5, "threads": 4, "cpu_percent": 1.0, "energy_impact": 0.1},
-    ],
-    "sample_interval_seconds": 1,
-}
-result = {"metrics": {}}
-module["add_cycle_growth_metrics"](result, phase)
-assert result["metrics"]["cycles.completed.count"]["value"] == 2
-assert result["metrics"]["cycles.completed.count"]["sample_count"] == 1
-' "$HARNESS"
+    raise SystemExit("failure summary overwrote pre-existing evidence")
+atomic_path = path.with_name("constrained-failure-summary-atomic-test.json")
+replace = module["os"].replace
+def fail_replace(source, target):
+    raise OSError("injected publish failure /Users/private")
+module["os"].replace = fail_replace
+try:
+    module["write_private_json"](atomic_path, {"passed": False})
+except OSError:
+    pass
+else:
+    raise SystemExit("atomic failure-summary publish injection unexpectedly passed")
+finally:
+    module["os"].replace = replace
+assert not atomic_path.exists()
+assert not list(atomic_path.parent.glob(f".{atomic_path.name}.tmp-*"))
+' "$HARNESS" "$FAILURE_SUMMARY"
 
 mise exec -- python3 "$HARNESS" verify \
     --profile smoke \

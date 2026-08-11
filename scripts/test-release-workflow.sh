@@ -55,6 +55,8 @@ require_pattern "performance_constrained:" "$BUILD_WORKFLOW"
 require_pattern "needs: [build_release, performance_cold]" "$BUILD_WORKFLOW"
 require_pattern "scripts/perf/gpui-performance.py merge-cold" "$BUILD_WORKFLOW"
 require_pattern "mise run performance-self-test" "$BUILD_WORKFLOW"
+require_pattern 'echo "PERFORMANCE_FAILURE_SUMMARY=$PERFORMANCE_ROOT/constrained-failure-summary.json"' "$BUILD_WORKFLOW"
+require_pattern '--failure-summary "$PERFORMANCE_FAILURE_SUMMARY"' "$BUILD_WORKFLOW"
 require_pattern "--idle-duration 1800" "$BUILD_WORKFLOW"
 reject_pattern "mise run performance-sample" "$BUILD_WORKFLOW"
 reject_pattern "leaks.txt" "$BUILD_WORKFLOW"
@@ -65,6 +67,7 @@ require_pattern 'path: ${{ env.PERFORMANCE_RESULT }}' "$BUILD_WORKFLOW"
 require_pattern '${{ env.PERFORMANCE_REPORT }}' "$BUILD_WORKFLOW"
 require_pattern "Upload sanitized constrained evidence" "$BUILD_WORKFLOW"
 require_pattern "needs: [build_release, performance_constrained]" "$BUILD_WORKFLOW"
+require_pattern "if: needs.build_release.outputs.skip != 'true' && needs.performance_constrained.result == 'success'" "$BUILD_WORKFLOW"
 require_pattern "publish:" "$BUILD_WORKFLOW"
 require_pattern "verify_staged_or_published:" "$BUILD_WORKFLOW"
 require_pattern "contents: read" "$BUILD_WORKFLOW"
@@ -115,6 +118,47 @@ reject_pattern 'path: ${{ env.PERFORMANCE_ROOT }}' "$BUILD_WORKFLOW"
 reject_pattern 'path: ${{ env.PERFORMANCE_DATA_ROOT }}' "$BUILD_WORKFLOW"
 reject_pattern 'path: ${{ env.PERFORMANCE_FIXTURE }}' "$BUILD_WORKFLOW"
 reject_pattern 'path: ${{ env.PERFORMANCE_APP }}' "$BUILD_WORKFLOW"
+
+FAILURE_UPLOAD_BLOCK="$(awk '
+    $0 == "      - name: Upload sanitized constrained failure summary" { capture = 1 }
+    capture && $0 == "      - name: Upload sanitized constrained evidence" { exit }
+    capture { print }
+' "$BUILD_WORKFLOW")"
+if [[ -z "$FAILURE_UPLOAD_BLOCK" ]]; then
+    echo "Constrained failure-summary upload block is missing" >&2
+    exit 1
+fi
+for pattern in \
+    '      - name: Upload sanitized constrained failure summary' \
+    '        if: failure()' \
+    '        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1' \
+    '          name: constrained-performance-failure-summary-${{ needs.build_release.outputs.source_commit }}' \
+    '          path: ${{ env.PERFORMANCE_FAILURE_SUMMARY }}' \
+    '          if-no-files-found: ignore' \
+    '          retention-days: 7'; do
+    if ! grep -Fqx -- "$pattern" <<< "$FAILURE_UPLOAD_BLOCK"; then
+        echo "Constrained failure-summary upload invariant is missing: $pattern" >&2
+        exit 1
+    fi
+done
+if [[ "$(grep -c '^          path:' <<< "$FAILURE_UPLOAD_BLOCK")" -ne 1 ]]; then
+    echo "Constrained failure-summary artifact must upload exactly one path" >&2
+    exit 1
+fi
+for forbidden in \
+    'PERFORMANCE_ROOT' \
+    'PERFORMANCE_APP' \
+    'PERFORMANCE_FIXTURE' \
+    'PERFORMANCE_DATA_ROOT' \
+    'PERFORMANCE_RESULT' \
+    'PERFORMANCE_REPORT' \
+    'retention-days: 21' \
+    'if: always()'; do
+    if grep -Fq -- "$forbidden" <<< "$FAILURE_UPLOAD_BLOCK"; then
+        echo "Constrained failure-summary artifact contains forbidden source: $forbidden" >&2
+        exit 1
+    fi
+done
 
 require_pattern '"draft": true' "$RELEASE_CONFIG"
 require_pattern "build-staged-stable-release:" "$RELEASE_WORKFLOW"

@@ -63,7 +63,8 @@ REQUIRED_TEMPLATES = {
     "Time Profiler",
 }
 SUPPORTING_TEMPLATES = {"Power Profiler"}
-SAMPLING_CONTRACT = "fixed-count-monotonic-v1"
+IDLE_SAMPLING_CONTRACT = "fixed-count-monotonic-v1"
+ACTIVE_SAMPLING_CONTRACT = "event-bounded-monotonic-v1"
 SAMPLING_AVERAGE_GAP_MULTIPLIER = 1.25
 SAMPLING_MAX_GAP_MULTIPLIER = 2.0
 SAMPLING_DEADLINE_EXTRA_INTERVALS = 2.0
@@ -106,6 +107,13 @@ class EvidenceError(RuntimeError):
     pass
 
 
+class SamplingEvidenceError(EvidenceError):
+    def __init__(self, code: str, message: str, **details: Any) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = details
+
+
 def run(argv: list[str], *, check: bool = True) -> str:
     result = subprocess.run(argv, text=True, capture_output=True, check=False)
     if check and result.returncode != 0:
@@ -127,6 +135,27 @@ def write_json(path: pathlib.Path, value: Any) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, path)
+
+
+def write_private_json(path: pathlib.Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(temporary, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+    except BaseException:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def read_json(path: pathlib.Path) -> Any:
@@ -545,6 +574,49 @@ def finite_nonnegative(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
 
 
+SELF_TEST_ABSOLUTE_TIMING_KEYS = (
+    "ready_at_unix_ms",
+    "started_at_unix_ms",
+    "history_ready_at_unix_ms",
+    "activation_started_at_unix_ms",
+    "loading_started_at_unix_ms",
+    "model_ready_at_unix_ms",
+    "warmup_completed_at_unix_ms",
+    "completed_at_unix_ms",
+)
+
+
+def validate_self_test_timeline(timings: dict[str, Any]) -> None:
+    absolute = [timings.get(key) for key in SELF_TEST_ABSOLUTE_TIMING_KEYS]
+    if not all(isinstance(value, int) and value > 0 for value in absolute):
+        raise EvidenceError("signed self-test absolute timings must be positive integer milliseconds")
+    if any(current <= previous for previous, current in zip(absolute, absolute[1:])):
+        raise EvidenceError("signed self-test report timestamps are out of order")
+    if not all(
+        finite_nonnegative(timings.get(key))
+        for key in ("model_download_ms", "model_cold_load_ms", "total_ms")
+    ):
+        raise EvidenceError("signed self-test duration fields must be finite and non-negative")
+    cycles = timings.get("cycles_ms")
+    if (
+        not isinstance(cycles, list)
+        or len(cycles) != 20
+        or not all(finite_nonnegative(value) for value in cycles)
+    ):
+        raise EvidenceError("signed self-test must report exactly 20 finite cycle timings")
+    expected_download_ms = (
+        timings["loading_started_at_unix_ms"]
+        - timings["activation_started_at_unix_ms"]
+    )
+    expected_load_ms = (
+        timings["model_ready_at_unix_ms"] - timings["loading_started_at_unix_ms"]
+    )
+    if abs(float(timings["model_download_ms"]) - expected_download_ms) > 100.0:
+        raise EvidenceError("signed self-test download duration differs from its absolute timeline")
+    if abs(float(timings["model_cold_load_ms"]) - expected_load_ms) > 100.0:
+        raise EvidenceError("signed self-test cold-load duration differs from its absolute timeline")
+
+
 def validate_self_test_report(
     path: pathlib.Path,
     *,
@@ -613,9 +685,7 @@ def validate_self_test_report(
 
     timings = report.get("timings")
     expected_timing_keys = {
-        "ready_at_unix_ms",
-        "started_at_unix_ms",
-        "completed_at_unix_ms",
+        *SELF_TEST_ABSOLUTE_TIMING_KEYS,
         "model_download_ms",
         "model_cold_load_ms",
         "total_ms",
@@ -629,12 +699,7 @@ def validate_self_test_report(
     cycles = timings.get("cycles_ms")
     if not isinstance(cycles, list) or len(cycles) != 20 or not all(finite_nonnegative(value) for value in cycles):
         raise EvidenceError("signed self-test must report exactly 20 finite cycle timings")
-    if not (
-        timings["ready_at_unix_ms"]
-        <= timings["started_at_unix_ms"]
-        <= timings["completed_at_unix_ms"]
-    ):
-        raise EvidenceError("signed self-test report timestamps are out of order")
+    validate_self_test_timeline(timings)
     return report
 
 
@@ -930,16 +995,22 @@ def idle_wakeup_rate(previous: int, current: int, interval_seconds: float) -> fl
 def sampling_summary(
     samples: list[dict[str, Any]],
     *,
+    contract: str,
     baseline_elapsed_seconds: float,
     baseline_at_unix_ms: int,
     baseline_idle_wakeups: int,
     requested_duration_seconds: float,
     requested_interval_seconds: float,
-    require_full_count: bool,
-    require_full_duration: bool,
 ) -> dict[str, Any]:
+    if contract not in {IDLE_SAMPLING_CONTRACT, ACTIVE_SAMPLING_CONTRACT}:
+        raise EvidenceError("sampling phase uses an unknown contract")
+    fixed_count = contract == IDLE_SAMPLING_CONTRACT
     if not samples:
-        raise EvidenceError("sampling phase contains no samples")
+        raise SamplingEvidenceError(
+            "no_samples",
+            "sampling phase contains no samples",
+            observed_sample_count=0,
+        )
     numeric_inputs = (
         baseline_elapsed_seconds,
         requested_duration_seconds,
@@ -955,16 +1026,19 @@ def sampling_summary(
         raise EvidenceError("sampling baseline idle-wakeup counter is invalid")
 
     expected_count = math.ceil(requested_duration_seconds / requested_interval_seconds)
-    if require_full_count and len(samples) != expected_count:
-        raise EvidenceError(
-            f"sampling phase has {len(samples)} rows; requires exactly {expected_count}"
+    if fixed_count and len(samples) != expected_count:
+        raise SamplingEvidenceError(
+            "wrong_sample_count",
+            f"sampling phase has {len(samples)} rows; requires exactly {expected_count}",
+            observed_sample_count=len(samples),
+            required_sample_count=expected_count,
         )
 
     previous_elapsed = float(baseline_elapsed_seconds)
     previous_wall_ms = baseline_at_unix_ms
     previous_idle_wakeups = baseline_idle_wakeups
     observed_intervals: list[float] = []
-    for sample in samples:
+    for index, sample in enumerate(samples):
         elapsed = sample.get("elapsed_seconds")
         wall_ms = sample.get("timestamp_unix_ms")
         observed_interval = sample.get("observed_interval_seconds")
@@ -988,8 +1062,21 @@ def sampling_summary(
         wall_delta = (wall_ms - previous_wall_ms) / 1000.0
         if abs(wall_delta - observed_interval) > 0.5:
             raise EvidenceError("sampling wall timestamp drifted from monotonic time")
-        if observed_interval > requested_interval_seconds * SAMPLING_MAX_GAP_MULTIPLIER:
-            raise EvidenceError("sampling phase contains an overlong collection gap")
+        if (
+            fixed_count
+            and observed_interval
+            > requested_interval_seconds * SAMPLING_MAX_GAP_MULTIPLIER
+        ):
+            raise SamplingEvidenceError(
+                "overlong_collection_gap",
+                "sampling phase contains an overlong collection gap",
+                sample_index=index,
+                observed_interval_seconds=round(observed_interval, 6),
+                maximum_interval_seconds=round(
+                    requested_interval_seconds * SAMPLING_MAX_GAP_MULTIPLIER,
+                    6,
+                ),
+            )
         expected_rate = idle_wakeup_rate(
             previous_idle_wakeups,
             idle_wakeups,
@@ -1004,31 +1091,66 @@ def sampling_summary(
 
     coverage = float(samples[-1]["elapsed_seconds"]) - float(baseline_elapsed_seconds)
     average_gap = coverage / len(samples)
-    if require_full_duration and coverage + 0.002 < requested_duration_seconds:
-        raise EvidenceError("sampling phase does not cover the requested wall-clock duration")
+    if fixed_count and coverage + 0.002 < requested_duration_seconds:
+        raise SamplingEvidenceError(
+            "short_wall_coverage",
+            "sampling phase does not cover the requested wall-clock duration",
+            wall_coverage_seconds=round(coverage, 6),
+            required_coverage_seconds=round(requested_duration_seconds, 6),
+        )
     if average_gap > requested_interval_seconds * SAMPLING_AVERAGE_GAP_MULTIPLIER:
-        raise EvidenceError("sampling phase effective cadence is below the allowed bound")
-    maximum_coverage = (
-        SAMPLING_AVERAGE_GAP_MULTIPLIER * expected_count * requested_interval_seconds
-        + SAMPLING_DEADLINE_EXTRA_INTERVALS * requested_interval_seconds
-    )
+        raise SamplingEvidenceError(
+            "undersampled_average_cadence",
+            "sampling phase effective cadence is below the allowed bound",
+            average_observed_interval_seconds=round(average_gap, 6),
+            maximum_average_interval_seconds=round(
+                requested_interval_seconds * SAMPLING_AVERAGE_GAP_MULTIPLIER,
+                6,
+            ),
+        )
+    maximum_coverage = requested_duration_seconds
+    if fixed_count:
+        maximum_coverage = (
+            SAMPLING_AVERAGE_GAP_MULTIPLIER
+            * expected_count
+            * requested_interval_seconds
+            + SAMPLING_DEADLINE_EXTRA_INTERVALS * requested_interval_seconds
+        )
     if coverage > maximum_coverage + 0.002:
-        raise EvidenceError("sampling phase exceeded its hard collection deadline")
+        raise SamplingEvidenceError(
+            "hard_deadline_exceeded",
+            "sampling phase exceeded its hard collection deadline",
+            wall_coverage_seconds=round(coverage, 6),
+            hard_deadline_seconds=round(maximum_coverage, 6),
+        )
 
-    return {
-        "contract": SAMPLING_CONTRACT,
+    summary = {
+        "contract": contract,
         "baseline_elapsed_seconds": round(float(baseline_elapsed_seconds), 6),
         "baseline_at_unix_ms": baseline_at_unix_ms,
         "baseline_idle_wakeups": baseline_idle_wakeups,
-        "target_sample_count": expected_count,
         "observed_sample_count": len(samples),
         "wall_coverage_seconds": round(coverage, 6),
         "average_observed_interval_seconds": round(average_gap, 6),
         "maximum_observed_interval_seconds": round(max(observed_intervals), 6),
         "effective_samples_per_second": round(len(samples) / coverage, 6),
         "average_gap_multiplier_limit": SAMPLING_AVERAGE_GAP_MULTIPLIER,
-        "maximum_gap_multiplier_limit": SAMPLING_MAX_GAP_MULTIPLIER,
     }
+    if fixed_count:
+        summary.update(
+            {
+                "target_sample_count": expected_count,
+                "maximum_gap_multiplier_limit": SAMPLING_MAX_GAP_MULTIPLIER,
+            }
+        )
+    else:
+        summary.update(
+            {
+                "minimum_sample_count": 20,
+                "hard_deadline_seconds": round(requested_duration_seconds, 6),
+            }
+        )
+    return summary
 
 
 def time_weighted_mean(samples: list[dict[str, Any]], key: str) -> float:
@@ -1040,6 +1162,223 @@ def time_weighted_mean(samples: list[dict[str, Any]], key: str) -> float:
     if duration <= 0 or not math.isfinite(weighted):
         raise EvidenceError(f"cannot calculate time-weighted {key}")
     return weighted / duration
+
+
+def direct_completion_timestamps(
+    records: list[dict[str, Any]], session_id: str
+) -> dict[str, int]:
+    session = [record for record in records if record.get("session_id") == session_id]
+    recording_correlations = {
+        record.get("correlation_id")
+        for record in session
+        if record.get("code") == "recording_started" and record.get("correlation_id")
+    }
+    completions: dict[str, int] = {}
+    for record in session:
+        correlation = record.get("correlation_id")
+        timestamp = record.get("timestamp_unix_ms")
+        if (
+            record.get("code") == "transcription_completed"
+            and isinstance(correlation, str)
+            and correlation
+            and correlation not in recording_correlations
+            and isinstance(timestamp, int)
+        ):
+            completions[correlation] = max(timestamp, completions.get(correlation, timestamp))
+    return completions
+
+
+def direct_cycle_pairs(
+    records: list[dict[str, Any]], session_id: str
+) -> list[dict[str, Any]]:
+    session = [record for record in records if record.get("session_id") == session_id]
+    recording_correlations = {
+        record.get("correlation_id")
+        for record in session
+        if record.get("code") == "recording_started" and record.get("correlation_id")
+    }
+    starts = [
+        record
+        for record in session
+        if record.get("code") == "transcription_started"
+        and isinstance(record.get("correlation_id"), str)
+        and record.get("correlation_id")
+        and record.get("correlation_id") not in recording_correlations
+    ]
+    completions = [
+        record
+        for record in session
+        if record.get("code") == "transcription_completed"
+        and isinstance(record.get("correlation_id"), str)
+        and record.get("correlation_id")
+        and record.get("correlation_id") not in recording_correlations
+    ]
+    if len(starts) != 20 or len(completions) != 20:
+        raise EvidenceError("active diagnostics require exactly 20 direct start/completion pairs")
+    start_ids = [record["correlation_id"] for record in starts]
+    completion_ids = [record["correlation_id"] for record in completions]
+    if len(set(start_ids)) != 20 or len(set(completion_ids)) != 20 or start_ids != completion_ids:
+        raise EvidenceError("active diagnostic correlations are duplicated, rogue, or reordered")
+    pairs = []
+    previous_completion = None
+    for index, (start, completion) in enumerate(zip(starts, completions)):
+        started_at = start.get("timestamp_unix_ms")
+        completed_at = completion.get("timestamp_unix_ms")
+        if (
+            not isinstance(started_at, int)
+            or not isinstance(completed_at, int)
+            or completed_at <= started_at
+            or (previous_completion is not None and started_at <= previous_completion)
+        ):
+            raise EvidenceError("active diagnostic pairs are not strictly ordered")
+        pairs.append(
+            {
+                "cycle_index": index,
+                "correlation_id": start["correlation_id"],
+                "started_at_unix_ms": started_at,
+                "completed_at_unix_ms": completed_at,
+            }
+        )
+        previous_completion = completed_at
+    return pairs
+
+
+def sample_observation_window(sample: dict[str, Any]) -> tuple[float, float]:
+    end = float(sample["timestamp_unix_ms"])
+    start = end - float(sample["observed_interval_seconds"]) * 1_000.0
+    return start, end
+
+
+def interval_overlaps_sample(
+    sample: dict[str, Any], started_at_unix_ms: int, completed_at_unix_ms: int
+) -> bool:
+    sample_start, sample_end = sample_observation_window(sample)
+    return sample_start <= completed_at_unix_ms and sample_end >= started_at_unix_ms
+
+
+def active_cycle_evidence(phase: dict[str, Any]) -> dict[str, Any]:
+    report = phase.get("self_test_report")
+    samples = phase.get("samples")
+    diagnostics = phase.get("diagnostics")
+    sampling = phase.get("sampling")
+    observer_ack = phase.get("observer_ack")
+    if not all(isinstance(value, dict) for value in (report, sampling, observer_ack)):
+        raise EvidenceError("active phase is missing its report, cadence, or observer ack")
+    if not isinstance(samples, list) or not isinstance(diagnostics, list):
+        raise EvidenceError("active phase is missing raw samples or diagnostics")
+    timings = report.get("timings")
+    session_id = report.get("session_id")
+    if not isinstance(timings, dict) or not isinstance(session_id, str):
+        raise EvidenceError("active phase has an invalid self-test timeline")
+    validate_self_test_timeline(timings)
+    if sampling.get("baseline_at_unix_ms", 0) > timings["started_at_unix_ms"]:
+        raise EvidenceError("active top baseline was captured after the signed workload started")
+
+    pairs = direct_cycle_pairs(diagnostics, session_id)
+    history_markers = [
+        record
+        for record in diagnostics
+        if record.get("session_id") == session_id
+        and record.get("code") == "performance_self_test_history_ready"
+        and isinstance(record.get("timestamp_unix_ms"), int)
+    ]
+    if (
+        len(history_markers) != 1
+        or abs(
+            history_markers[0]["timestamp_unix_ms"]
+            - timings["history_ready_at_unix_ms"]
+        )
+        > 100
+    ):
+        raise EvidenceError("History-ready timing differs from its closed diagnostic marker")
+    cycle_durations = timings.get("cycles_ms")
+    if not isinstance(cycle_durations, list) or len(cycle_durations) != 20:
+        raise EvidenceError("active report is missing its exact cycle durations")
+    if any(
+        abs(float(duration) - (pair["completed_at_unix_ms"] - pair["started_at_unix_ms"]))
+        > 100.0
+        for duration, pair in zip(cycle_durations, pairs)
+    ):
+        raise EvidenceError("direct cycle duration differs from its diagnostic pair")
+    if timings["warmup_completed_at_unix_ms"] > pairs[0]["started_at_unix_ms"]:
+        raise EvidenceError("direct transcription cycles started before warmup completed")
+    if pairs[-1]["completed_at_unix_ms"] > timings["completed_at_unix_ms"]:
+        raise EvidenceError("direct transcription cycles completed after the signed report")
+
+    mappings = []
+    used_indexes: set[int] = set()
+    for pair in pairs:
+        sample_index = next(
+            (
+                index
+                for index, sample in enumerate(samples)
+                if sample.get("timestamp_unix_ms", -1) >= pair["completed_at_unix_ms"]
+            ),
+            None,
+        )
+        if sample_index is None or sample_index in used_indexes:
+            raise EvidenceError("direct completions do not map to 20 distinct first-later rows")
+        sample = samples[sample_index]
+        if not interval_overlaps_sample(
+            sample,
+            pair["started_at_unix_ms"],
+            pair["completed_at_unix_ms"],
+        ):
+            raise EvidenceError("mapped resource row does not overlap its direct transcription")
+        if sample.get("file_descriptors_measured") is not True:
+            raise EvidenceError("mapped resource row lacks an exact boundary FD measurement")
+        used_indexes.add(sample_index)
+        mappings.append(
+            {
+                **pair,
+                "sample_index": sample_index,
+                "sample_timestamp_unix_ms": sample["timestamp_unix_ms"],
+                "sample_observed_interval_seconds": sample["observed_interval_seconds"],
+            }
+        )
+
+    stage_intervals = {
+        "model_download": (
+            timings["activation_started_at_unix_ms"],
+            timings["loading_started_at_unix_ms"],
+        ),
+        "model_load": (
+            timings["loading_started_at_unix_ms"],
+            timings["model_ready_at_unix_ms"],
+        ),
+        "post_warmup": (
+            timings["warmup_completed_at_unix_ms"],
+            pairs[-1]["completed_at_unix_ms"],
+        ),
+    }
+    stage_coverage: dict[str, list[int]] = {}
+    for name, (started_at, completed_at) in stage_intervals.items():
+        indexes = [
+            index
+            for index, sample in enumerate(samples)
+            if interval_overlaps_sample(sample, started_at, completed_at)
+        ]
+        if not indexes:
+            raise EvidenceError(f"active resource rows do not cover {name}")
+        stage_coverage[name] = indexes
+
+    final_mapping = mappings[-1]
+    if (
+        observer_ack.get("resource_row_timestamp_unix_ms")
+        != final_mapping["sample_timestamp_unix_ms"]
+        or observer_ack.get("latest_completion_timestamp_unix_ms")
+        != pairs[-1]["completed_at_unix_ms"]
+        or observer_ack.get("started_correlation_count") != 20
+        or observer_ack.get("completion_correlation_count") != 20
+    ):
+        raise EvidenceError("observer ack does not match the final direct-cycle boundary row")
+
+    return {
+        "contract": "first-post-completion-observer-v1",
+        "pairs": mappings,
+        "stage_sample_indexes": stage_coverage,
+        "final_observer_sample_index": final_mapping["sample_index"],
+    }
 
 
 def start_line_reader(stream: Any) -> queue.Queue[tuple[str, float, int] | None]:
@@ -1056,6 +1395,92 @@ def start_line_reader(stream: Any) -> queue.Queue[tuple[str, float, int] | None]
     return lines
 
 
+def top_stderr_category(value: str) -> str:
+    lowered = value.lower()
+    if not value.strip():
+        return "empty"
+    if "permission" in lowered or "operation not permitted" in lowered:
+        return "permission_denied"
+    if "terminated" in lowered or "killed" in lowered:
+        return "terminated"
+    return "other"
+
+
+def sampling_failure_details(
+    samples: list[dict[str, Any]],
+    *,
+    contract: str,
+    process_returncode: int | None,
+    process_stderr: str,
+    diagnostics: list[dict[str, Any]],
+    session_id: str | None,
+    existing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    details = dict(existing or {})
+    if "sample_index" in details:
+        details["first_bad_index"] = details.pop("sample_index")
+    if "observed_interval_seconds" in details:
+        details["first_bad_gap_seconds"] = details["observed_interval_seconds"]
+    gaps = [
+        float(sample["observed_interval_seconds"])
+        for sample in samples
+        if isinstance(sample.get("observed_interval_seconds"), (int, float))
+        and math.isfinite(float(sample["observed_interval_seconds"]))
+    ]
+    delivery_lags = [
+        float(sample["observer_delivery_delay_seconds"])
+        for sample in samples
+        if isinstance(sample.get("observer_delivery_delay_seconds"), (int, float))
+        and math.isfinite(float(sample["observer_delivery_delay_seconds"]))
+    ]
+    details.update(
+        {
+            "sampling_contract": contract,
+            "row_count": len(samples),
+            "top_returncode": process_returncode,
+            "top_stderr_category": top_stderr_category(process_stderr),
+            "top_stderr_sha256": hashlib.sha256(process_stderr.encode()).hexdigest(),
+        }
+    )
+    if gaps:
+        details.update(
+            {
+                "gap_p50_seconds": round(percentile(gaps, 0.50), 6),
+                "gap_p95_seconds": round(percentile(gaps, 0.95), 6),
+                "gap_p99_seconds": round(percentile(gaps, 0.99), 6),
+                "gap_max_seconds": round(max(gaps), 6),
+            }
+        )
+    if delivery_lags:
+        details.update(
+            {
+                "reader_lag_p95_seconds": round(percentile(delivery_lags, 0.95), 6),
+                "reader_lag_max_seconds": round(max(delivery_lags), 6),
+            }
+        )
+    if isinstance(session_id, str):
+        session = [record for record in diagnostics if record.get("session_id") == session_id]
+        recording = {
+            record.get("correlation_id")
+            for record in session
+            if record.get("code") == "recording_started" and record.get("correlation_id")
+        }
+        details["history_ready_count"] = sum(
+            record.get("code") == "performance_self_test_history_ready" for record in session
+        )
+        details["direct_start_count"] = sum(
+            record.get("code") == "transcription_started"
+            and record.get("correlation_id") not in recording
+            for record in session
+        )
+        details["direct_completion_count"] = sum(
+            record.get("code") == "transcription_completed"
+            and record.get("correlation_id") not in recording
+            for record in session
+        )
+    return details
+
+
 def sample_phase(args: argparse.Namespace) -> None:
     app = require_app(args.app)
     output = pathlib.Path(args.output)
@@ -1068,10 +1493,10 @@ def sample_phase(args: argparse.Namespace) -> None:
         raise EvidenceError("duration must contain at least two sample intervals")
     if args.interval < 1.0 or not args.interval.is_integer():
         raise EvidenceError("macOS top requires a whole-second sample interval of at least one second")
-    # macOS top treats -s as a delay after each collection pass, so its own
-    # overhead makes wall-clock duration an invalid proxy for sample density.
-    # Collect the fixed budget count, then validate the observed cadence and
-    # wall coverage independently against a bounded monotonic deadline.
+    # macOS top treats -s as a delay after each collection pass. Idle evidence
+    # therefore collects its exact budget row count; the active signed workload
+    # instead ends on its exact observer ack/auto-exit inside the independent
+    # 2,400-second bound. Both modes validate actual observer-delivery cadence.
     target_sample_count = math.ceil(args.duration / args.interval)
     command = [
         "/usr/bin/top",
@@ -1128,9 +1553,11 @@ def sample_phase(args: argparse.Namespace) -> None:
     collection_deadline: float | None = None
     last_fd: int | None = None
     last_fd_at = 0.0
+    boundary_correlations: set[str] = set()
     seen_rows = 0
     assert process.stdout is not None
     line_queue = start_line_reader(process.stdout)
+    sampling_loop_error: EvidenceError | None = None
     try:
         while True:
             wait_deadline = collection_deadline
@@ -1165,13 +1592,16 @@ def sample_phase(args: argparse.Namespace) -> None:
                 baseline_elapsed_seconds = current_mono - started_mono
                 baseline_at_unix_ms = current_wall_ms
                 baseline_idle_wakeups = idlew
-                collection_deadline = (
-                    current_mono
-                    + SAMPLING_AVERAGE_GAP_MULTIPLIER
-                    * target_sample_count
-                    * args.interval
-                    + SAMPLING_DEADLINE_EXTRA_INTERVALS * args.interval
-                )
+                if expected_auto_exit:
+                    collection_deadline = current_mono + args.duration
+                else:
+                    collection_deadline = (
+                        current_mono
+                        + SAMPLING_AVERAGE_GAP_MULTIPLIER
+                        * target_sample_count
+                        * args.interval
+                        + SAMPLING_DEADLINE_EXTRA_INTERVALS * args.interval
+                    )
                 if start_signal is not None:
                     if not start_signal.is_absolute() or start_signal.exists() or start_signal.is_symlink():
                         raise EvidenceError("self-test start signal path is unsafe or already exists")
@@ -1189,11 +1619,35 @@ def sample_phase(args: argparse.Namespace) -> None:
             wakeups = idle_wakeup_rate(previous_idlew, idlew, persisted_interval)
             previous_idlew = idlew
             previous_row_mono = current_mono
+            reader_delivery_delay = max(0.0, time.monotonic() - current_mono)
+            row_diagnostics: list[dict[str, Any]] | None = None
+            new_boundary_correlations: set[str] = set()
+            if expected_auto_exit:
+                row_diagnostics = read_diagnostics(
+                    diagnostics_path,
+                    diagnostics_start_ms,
+                    current_wall_ms,
+                )
+                direct_completions = direct_completion_timestamps(
+                    row_diagnostics,
+                    observer_session_id,
+                )
+                new_boundary_correlations = {
+                    correlation
+                    for correlation, completed_at in direct_completions.items()
+                    if completed_at <= current_wall_ms
+                    and correlation not in boundary_correlations
+                }
             fd_measured = False
-            if current_mono - last_fd_at >= args.fd_interval or last_fd is None:
+            if (
+                new_boundary_correlations
+                or current_mono - last_fd_at >= args.fd_interval
+                or last_fd is None
+            ):
                 last_fd = count_fds(pid)
                 last_fd_at = current_mono
                 fd_measured = True
+            boundary_correlations.update(new_boundary_correlations)
             try:
                 sample = {
                     "timestamp_unix_ms": current_wall_ms,
@@ -1207,6 +1661,7 @@ def sample_phase(args: argparse.Namespace) -> None:
                     "energy_impact": float(fields[5]),
                     "file_descriptors": last_fd,
                     "file_descriptors_measured": fd_measured,
+                    "observer_delivery_delay_seconds": round(reader_delivery_delay, 6),
                 }
             except ValueError as error:
                 raise EvidenceError(f"cannot parse top row: {line.strip()}") from error
@@ -1214,11 +1669,7 @@ def sample_phase(args: argparse.Namespace) -> None:
             if observer_ack is not None and observer_ack_evidence is None:
                 assert completion_report is not None
                 observer_ack_evidence = maybe_create_observer_ack(
-                    read_diagnostics(
-                        diagnostics_path,
-                        diagnostics_start_ms,
-                        sample["timestamp_unix_ms"],
-                    ),
+                    row_diagnostics or [],
                     session_id=observer_session_id,
                     resource_row_timestamp_unix_ms=sample["timestamp_unix_ms"],
                     path=observer_ack,
@@ -1226,6 +1677,8 @@ def sample_phase(args: argparse.Namespace) -> None:
                 )
             if len(samples) >= target_sample_count and not expected_auto_exit:
                 break
+    except EvidenceError as error:
+        sampling_loop_error = error
     finally:
         if process.poll() is None:
             process.terminate()
@@ -1234,6 +1687,40 @@ def sample_phase(args: argparse.Namespace) -> None:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=5)
+    process_stderr = process.stderr.read() if process.stderr else ""
+    if sampling_loop_error is not None:
+        failed_diagnostics = read_diagnostics(
+            diagnostics_path,
+            diagnostics_start_ms,
+            int(time.time() * 1000),
+        )
+        code = (
+            sampling_loop_error.code
+            if isinstance(sampling_loop_error, SamplingEvidenceError)
+            else "collection_failed"
+        )
+        existing = (
+            sampling_loop_error.details
+            if isinstance(sampling_loop_error, SamplingEvidenceError)
+            else None
+        )
+        raise SamplingEvidenceError(
+            code,
+            str(sampling_loop_error),
+            **sampling_failure_details(
+                samples,
+                contract=(
+                    ACTIVE_SAMPLING_CONTRACT
+                    if expected_auto_exit
+                    else IDLE_SAMPLING_CONTRACT
+                ),
+                process_returncode=process.returncode,
+                process_stderr=process_stderr,
+                diagnostics=failed_diagnostics,
+                session_id=observer_session_id,
+                existing=existing,
+            ),
+        ) from sampling_loop_error
     current_executable = executable_for_pid(pid)
     report = None
     if expected_auto_exit:
@@ -1258,26 +1745,75 @@ def sample_phase(args: argparse.Namespace) -> None:
         raise EvidenceError("candidate process exited or changed identity during sampling")
     minimum_samples = 20 if expected_auto_exit else target_sample_count
     if len(samples) < minimum_samples:
-        stderr = process.stderr.read().strip() if process.stderr else ""
-        raise EvidenceError(f"insufficient samples ({len(samples)}): {stderr}")
+        raise SamplingEvidenceError(
+            "insufficient_samples",
+            f"insufficient samples ({len(samples)})",
+            **sampling_failure_details(
+                samples,
+                contract=(
+                    ACTIVE_SAMPLING_CONTRACT
+                    if expected_auto_exit
+                    else IDLE_SAMPLING_CONTRACT
+                ),
+                process_returncode=process.returncode,
+                process_stderr=process_stderr,
+                diagnostics=read_diagnostics(
+                    diagnostics_path,
+                    diagnostics_start_ms,
+                    int(time.time() * 1000),
+                ),
+                session_id=observer_session_id,
+                existing={
+                    "observed_sample_count": len(samples),
+                    "required_sample_count": minimum_samples,
+                },
+            ),
+        )
     if (
         baseline_elapsed_seconds is None
         or baseline_at_unix_ms is None
         or baseline_idle_wakeups is None
     ):
         raise EvidenceError("sampling baseline is missing")
-    sampling = sampling_summary(
-        samples,
-        baseline_elapsed_seconds=baseline_elapsed_seconds,
-        baseline_at_unix_ms=baseline_at_unix_ms,
-        baseline_idle_wakeups=baseline_idle_wakeups,
-        requested_duration_seconds=args.duration,
-        requested_interval_seconds=args.interval,
-        require_full_count=not expected_auto_exit,
-        require_full_duration=not expected_auto_exit,
-    )
     ended_ms = int(time.time() * 1000)
     diagnostics = read_diagnostics(diagnostics_path, diagnostics_start_ms, ended_ms)
+    sampling_contract = (
+        ACTIVE_SAMPLING_CONTRACT if expected_auto_exit else IDLE_SAMPLING_CONTRACT
+    )
+    failure_context_owner = getattr(args, "failure_context", None)
+    if failure_context_owner is not None:
+        failure_context_owner._sampling_failure_context = sampling_failure_details(
+            samples,
+            contract=sampling_contract,
+            process_returncode=process.returncode,
+            process_stderr=process_stderr,
+            diagnostics=diagnostics,
+            session_id=observer_session_id,
+        )
+    try:
+        sampling = sampling_summary(
+            samples,
+            contract=sampling_contract,
+            baseline_elapsed_seconds=baseline_elapsed_seconds,
+            baseline_at_unix_ms=baseline_at_unix_ms,
+            baseline_idle_wakeups=baseline_idle_wakeups,
+            requested_duration_seconds=args.duration,
+            requested_interval_seconds=args.interval,
+        )
+    except SamplingEvidenceError as error:
+        raise SamplingEvidenceError(
+            error.code,
+            str(error),
+            **sampling_failure_details(
+                samples,
+                contract=sampling_contract,
+                process_returncode=process.returncode,
+                process_stderr=process_stderr,
+                diagnostics=diagnostics,
+                session_id=observer_session_id,
+                existing=error.details,
+            ),
+        ) from error
     if report is not None:
         validate_self_test_diagnostics(diagnostics, session_id=report["session_id"])
     active_codes = {
@@ -1309,10 +1845,6 @@ def sample_phase(args: argparse.Namespace) -> None:
         phase["observer_ack"] = observer_ack_evidence
     result["phases"][args.phase] = phase
     cpu = [sample["cpu_percent"] for sample in samples]
-    rss = [sample["rss_mib"] for sample in samples]
-    threads = [sample["threads"] for sample in samples]
-    fds = [sample["file_descriptors"] for sample in samples]
-    fd_measurements = sum(sample["file_descriptors_measured"] for sample in samples)
     wakeups = [sample["idle_wakeups_per_s"] for sample in samples if sample["idle_wakeups_per_s"] is not None]
     energy = [sample["energy_impact"] for sample in samples]
     prefix = args.phase
@@ -1329,24 +1861,21 @@ def sample_phase(args: argparse.Namespace) -> None:
             len(wakeups),
         )
         set_metric(result, f"{prefix}.wakeups.p95_per_s", percentile(wakeups), len(wakeups))
-    current_peak_rss = max(rss)
-    prior_peak = result["metrics"].get("memory.peak_mib", {})
-    if current_peak_rss >= prior_peak.get("value", -1):
-        set_metric(result, "memory.peak_mib", current_peak_rss, len(rss))
-    prior_fd_peak = result["metrics"].get("resources.fd.peak", {})
-    if max(fds) >= prior_fd_peak.get("value", -1):
-        set_metric(result, "resources.fd.peak", max(fds), fd_measurements)
-    prior_thread_peak = result["metrics"].get("resources.thread.peak", {})
-    if max(threads) >= prior_thread_peak.get("value", -1):
-        set_metric(result, "resources.thread.peak", max(threads), len(threads))
-    if args.phase in {"transcription", "cycles_20", "history_50"}:
-        current_warm_p95 = percentile(rss)
-        prior_warm_p95 = result["metrics"].get("memory.post_warmup.p95_mib", {}).get("value", 0)
+    update_global_resource_metrics(result)
+    if args.phase == "cycles_20" and report is not None:
+        warmup_completed_at = report["timings"]["warmup_completed_at_unix_ms"]
+        post_warm_samples = [
+            sample
+            for sample in samples
+            if sample["timestamp_unix_ms"] >= warmup_completed_at
+        ]
+        if len(post_warm_samples) < 20:
+            raise EvidenceError("active phase has fewer than 20 post-warm resource rows")
         set_metric(
             result,
             "memory.post_warmup.p95_mib",
-            max(current_warm_p95, prior_warm_p95),
-            len(rss),
+            percentile(sample["rss_mib"] for sample in post_warm_samples),
+            len(post_warm_samples),
         )
     if args.phase == "recording":
         recording_duration = correlated_duration(diagnostics, "recording_started", "recording_stopped")
@@ -1379,7 +1908,8 @@ def request_exact_typed_quit(identity: dict[str, Any], pid: int) -> None:
     raise EvidenceError("exact candidate ignored the typed SIGUSR1 quit request")
 
 
-def run_signed_self_test(args: argparse.Namespace) -> None:
+def _run_signed_self_test(args: argparse.Namespace) -> None:
+    args._failure_stage = "preflight"
     app = require_app(args.app)
     fixture, fixture_manifest = validate_transcription_fixture(args.fixture)
     data_root = validate_empty_disposable_root(args.data_root)
@@ -1404,6 +1934,7 @@ def run_signed_self_test(args: argparse.Namespace) -> None:
         raise EvidenceError("stop the exact candidate before starting its isolated self-test")
     write_json(output, result)
 
+    args._failure_stage = "launch"
     launched_ms = int(time.time() * 1000)
     launch_command = [
         "/usr/bin/open",
@@ -1454,6 +1985,7 @@ def run_signed_self_test(args: argparse.Namespace) -> None:
         if args.verified_model_cache:
             stage_verified_model_cache(pathlib.Path(args.verified_model_cache), data_root)
 
+        args._failure_stage = "idle"
         sample_phase(
             argparse.Namespace(
                 app=str(app),
@@ -1465,6 +1997,7 @@ def run_signed_self_test(args: argparse.Namespace) -> None:
                 diagnostics=str(diagnostics),
                 history_db=str(history_db),
                 diagnostics_start_ms=launched_ms,
+                failure_context=args,
             )
         )
         if exact_pid(identity, required=False) != pid:
@@ -1485,6 +2018,7 @@ def run_signed_self_test(args: argparse.Namespace) -> None:
         idle_result["updated_at"] = now_iso()
         write_json(output, idle_result)
 
+        args._failure_stage = "cycles_20"
         sample_phase(
             argparse.Namespace(
                 app=str(app),
@@ -1502,8 +2036,10 @@ def run_signed_self_test(args: argparse.Namespace) -> None:
                 fixture_manifest=fixture_manifest,
                 observer_settle_seconds=args.observer_settle_seconds,
                 diagnostics_start_ms=launched_ms,
+                failure_context=args,
             )
         )
+        args._failure_stage = "finalize"
         final_result = load_result(output)
         interaction = None
         if args.interaction:
@@ -1586,6 +2122,121 @@ def run_signed_self_test(args: argparse.Namespace) -> None:
         raise
 
 
+def failure_summary_path(args: argparse.Namespace) -> pathlib.Path | None:
+    value = getattr(args, "failure_summary", None)
+    if value is None:
+        return None
+    path = pathlib.Path(value)
+    output = pathlib.Path(args.output)
+    if (
+        not path.is_absolute()
+        or not output.is_absolute()
+        or path.name != "constrained-failure-summary.json"
+        or path.parent != output.parent
+        or path.parent.is_symlink()
+        or not path.parent.is_dir()
+        or path.is_symlink()
+    ):
+        raise EvidenceError(
+            "failure summary must be the exact absolute constrained result sibling"
+        )
+    return path
+
+
+def write_failure_summary(
+    path: pathlib.Path,
+    *,
+    phase: str,
+    error: BaseException,
+) -> None:
+    if path.exists() or path.is_symlink():
+        raise EvidenceError("failure summary path existed before this collection attempt")
+    code = "unexpected_failure"
+    details: dict[str, Any] = {}
+    if isinstance(error, SamplingEvidenceError):
+        if re.fullmatch(r"[a-z][a-z0-9_]{0,47}", error.code):
+            code = error.code
+        numeric_keys = {
+            "first_bad_index",
+            "first_bad_gap_seconds",
+            "maximum_interval_seconds",
+            "maximum_average_interval_seconds",
+            "wall_coverage_seconds",
+            "required_coverage_seconds",
+            "hard_deadline_seconds",
+            "observed_sample_count",
+            "required_sample_count",
+            "row_count",
+            "gap_p50_seconds",
+            "gap_p95_seconds",
+            "gap_p99_seconds",
+            "gap_max_seconds",
+            "reader_lag_p95_seconds",
+            "reader_lag_max_seconds",
+            "history_ready_count",
+            "direct_start_count",
+            "direct_completion_count",
+        }
+        for key in numeric_keys:
+            value = error.details.get(key)
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+            ):
+                details[key] = value
+        sampling_contract = error.details.get("sampling_contract")
+        if sampling_contract in {IDLE_SAMPLING_CONTRACT, ACTIVE_SAMPLING_CONTRACT}:
+            details["contract"] = sampling_contract
+        returncode = error.details.get("top_returncode")
+        if returncode is None or isinstance(returncode, int):
+            details["top_returncode"] = returncode
+        stderr_category = error.details.get("top_stderr_category")
+        if stderr_category in {"empty", "permission_denied", "terminated", "other"}:
+            details["top_stderr_category"] = stderr_category
+        stderr_hash = error.details.get("top_stderr_sha256")
+        if isinstance(stderr_hash, str) and re.fullmatch(r"[0-9a-f]{64}", stderr_hash):
+            details["top_stderr_sha256"] = stderr_hash
+    elif isinstance(error, EvidenceError):
+        code = "closed_evidence_failure"
+    safe_phase = phase if phase in {"preflight", "launch", "idle", "cycles_20", "finalize"} else "unknown"
+    write_private_json(
+        path,
+        {
+            "schema_version": 1,
+            "contract": "gpui-performance-failure-v1",
+            "phase": safe_phase,
+            "code": code,
+            "sampling": details,
+            "passed": False,
+        },
+    )
+
+
+def run_signed_self_test(args: argparse.Namespace) -> None:
+    summary_path = failure_summary_path(args)
+    if summary_path is not None and (summary_path.exists() or summary_path.is_symlink()):
+        raise EvidenceError("failure summary path must be absent before collection")
+    try:
+        _run_signed_self_test(args)
+    except BaseException as error:
+        if summary_path is not None:
+            summary_error = error
+            context = getattr(args, "_sampling_failure_context", None)
+            if not isinstance(error, SamplingEvidenceError) and isinstance(context, dict):
+                summary_error = SamplingEvidenceError(
+                    "closed_evidence_failure",
+                    "closed performance evidence failure",
+                    **context,
+                )
+            write_failure_summary(
+                summary_path,
+                phase=getattr(args, "_failure_stage", "unknown"),
+                error=summary_error,
+            )
+        raise
+
+
 def linear_slope(values: list[float]) -> float:
     if len(values) < 2:
         return 0.0
@@ -1626,78 +2277,24 @@ def monotonic_tail(values: list[float], epsilon: float) -> bool:
 
 
 def add_cycle_growth_metrics(result: dict[str, Any], phase: dict[str, Any]) -> None:
-    recording_correlations = {
-        record.get("correlation_id")
-        for record in phase["diagnostics"]
-        if record.get("code") == "recording_started" and record.get("correlation_id")
-    }
-    completions = [
-        record
-        for record in phase["diagnostics"]
-        if record.get("code") == "transcription_completed"
-        and record.get("correlation_id")
-        and record.get("correlation_id") not in recording_correlations
-    ]
+    mapping = active_cycle_evidence(phase)
+    phase["cycle_resource_mapping"] = mapping
     samples = phase["samples"]
-    snapshots = []
-    for event in completions:
-        later = [sample for sample in samples if sample["timestamp_unix_ms"] >= event["timestamp_unix_ms"]]
-        if later:
-            snapshots.append(later[0])
-    snapshot_timestamps = [sample["timestamp_unix_ms"] for sample in snapshots]
-    if len(snapshot_timestamps) != len(set(snapshot_timestamps)):
-        raise EvidenceError(
-            "multiple transcription completions mapped to one resource sample; "
-            "add at least one sampler interval of settle time between fixture cycles"
-        )
+    snapshots = [samples[pair["sample_index"]] for pair in mapping["pairs"]]
     count = len(snapshots)
     set_metric(result, "cycles.completed.count", count, 1)
-    intervals = []
-    for start in phase["diagnostics"]:
-        correlation = start.get("correlation_id")
-        if (
-            start.get("code") != "transcription_started"
-            or not correlation
-            or correlation in recording_correlations
-        ):
-            continue
-        end = next(
-            (
-                record
-                for record in phase["diagnostics"]
-                if record.get("code") == "transcription_completed"
-                and record.get("correlation_id") == correlation
-                and record["timestamp_unix_ms"] >= start["timestamp_unix_ms"]
-            ),
-            None,
-        )
-        if end:
-            intervals.append((start["timestamp_unix_ms"], end["timestamp_unix_ms"]))
-    interval_ms = int(phase["sample_interval_seconds"] * 1000)
-    inference_samples = [
-        sample
-        for sample in samples
-        if any(
-            sample["timestamp_unix_ms"] - interval_ms <= end
-            and sample["timestamp_unix_ms"] >= start
-            for start, end in intervals
-        )
-    ]
-    if inference_samples:
-        set_metric(
-            result,
-            "transcription.cpu.p95_percent",
-            percentile(sample["cpu_percent"] for sample in inference_samples),
-            len(inference_samples),
-        )
-        set_metric(
-            result,
-            "transcription.energy.p95_impact",
-            percentile(sample["energy_impact"] for sample in inference_samples),
-            len(inference_samples),
-        )
-    if count < 2:
-        return
+    set_metric(
+        result,
+        "transcription.cpu.p95_percent",
+        percentile(sample["cpu_percent"] for sample in snapshots),
+        count,
+    )
+    set_metric(
+        result,
+        "transcription.energy.p95_impact",
+        percentile(sample["energy_impact"] for sample in snapshots),
+        count,
+    )
     rss = [sample["rss_mib"] for sample in snapshots]
     fds = [float(sample["file_descriptors"]) for sample in snapshots]
     threads = [float(sample["threads"]) for sample in snapshots]
@@ -1713,6 +2310,55 @@ def add_cycle_growth_metrics(result: dict[str, Any], phase: dict[str, Any]) -> N
         )
     )
     set_metric(result, "growth.monotonic_tail.count", monotonic, count)
+
+
+def all_resource_samples(result: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        sample
+        for phase in result.get("phases", {}).values()
+        if isinstance(phase, dict) and isinstance(phase.get("samples"), list)
+        for sample in phase["samples"]
+        if isinstance(sample, dict)
+        and all(
+            key in sample
+            for key in (
+                "rss_mib",
+                "threads",
+                "file_descriptors",
+                "file_descriptors_measured",
+            )
+        )
+    ]
+
+
+def update_global_resource_metrics(result: dict[str, Any]) -> None:
+    phase_samples = all_resource_samples(result)
+    if not phase_samples:
+        return
+    measured_fds = [
+        sample
+        for sample in phase_samples
+        if sample.get("file_descriptors_measured") is True
+    ]
+    set_metric(
+        result,
+        "memory.peak_mib",
+        max(float(sample["rss_mib"]) for sample in phase_samples),
+        len(phase_samples),
+    )
+    set_metric(
+        result,
+        "resources.thread.peak",
+        max(int(sample["threads"]) for sample in phase_samples),
+        len(phase_samples),
+    )
+    if measured_fds:
+        set_metric(
+            result,
+            "resources.fd.peak",
+            max(int(sample["file_descriptors"]) for sample in measured_fds),
+            len(measured_fds),
+        )
 
 
 def add_history_count(result: dict[str, Any], path: pathlib.Path) -> None:
@@ -2622,13 +3268,12 @@ def check_idle_sampling(result: dict[str, Any], label: str) -> list[str]:
     try:
         recomputed = sampling_summary(
             samples,
+            contract=IDLE_SAMPLING_CONTRACT,
             baseline_elapsed_seconds=sampling.get("baseline_elapsed_seconds"),
             baseline_at_unix_ms=sampling.get("baseline_at_unix_ms"),
             baseline_idle_wakeups=sampling.get("baseline_idle_wakeups"),
             requested_duration_seconds=phase.get("requested_duration_seconds"),
             requested_interval_seconds=phase.get("sample_interval_seconds"),
-            require_full_count=True,
-            require_full_duration=True,
         )
         if sampling != recomputed:
             raise EvidenceError("stored cadence summary differs from raw idle samples")
@@ -2666,6 +3311,222 @@ def check_idle_sampling(result: dict[str, Any], label: str) -> list[str]:
     return failures
 
 
+def require_derived_metric(
+    result: dict[str, Any], key: str, value: float, sample_count: int
+) -> None:
+    actual = result.get("metrics", {}).get(key)
+    if (
+        not isinstance(actual, dict)
+        or actual.get("sample_count") != sample_count
+        or actual.get("value") != round(float(value), 6)
+    ):
+        raise EvidenceError(f"derived metric {key} differs from raw sampling evidence")
+
+
+def check_active_sampling(result: dict[str, Any], label: str) -> list[str]:
+    phase = result.get("phases", {}).get("cycles_20")
+    if phase is None:
+        return []
+    if not isinstance(phase, dict) or phase.get("phase") != "cycles_20":
+        return [f"{label}: active sampling phase has an invalid shape"]
+    samples = phase.get("samples")
+    sampling = phase.get("sampling")
+    report = phase.get("self_test_report")
+    if not isinstance(samples, list) or not isinstance(sampling, dict) or not isinstance(report, dict):
+        return [f"{label}: active sampling phase is missing raw evidence"]
+    try:
+        fixture_manifest = read_json(FIXTURE_MANIFEST)
+        audio = fixture_manifest.get("audio", {})
+        expected_fixture = {
+            "id": fixture_manifest.get("fixture_id"),
+            "sha256": fixture_manifest.get("sha256"),
+            "bytes": fixture_manifest.get("bytes"),
+            "channels": audio.get("channels"),
+            "sample_rate_hz": audio.get("sample_rate_hz"),
+            "bits_per_sample": audio.get("bits_per_sample"),
+            "duration_ms": int(float(audio.get("duration_seconds", 0)) * 1_000),
+        }
+        expected_model = {
+            "id": DEFAULT_MODEL_ID,
+            "revision": DEFAULT_MODEL_REVISION,
+            "engine_instances": 1,
+            "warmed": True,
+            "downloaded": True,
+        }
+        expected_workload = {"cycles": 20, "history_rows": 50}
+        expected_report_keys = {
+            "schema_version",
+            "contract",
+            "fixture",
+            "process",
+            "session_id",
+            "model",
+            "requested",
+            "completed",
+            "history",
+            "timings",
+            "quit_requested",
+            "passed",
+            "failure_code",
+        }
+        expected_timing_keys = {
+            *SELF_TEST_ABSOLUTE_TIMING_KEYS,
+            "model_download_ms",
+            "model_cold_load_ms",
+            "total_ms",
+            "cycles_ms",
+        }
+        if (
+            set(report) != expected_report_keys
+            or report.get("schema_version") != 1
+            or report.get("contract") != SELF_TEST_CONTRACT
+            or report.get("fixture") != expected_fixture
+            or report.get("process") != {"pid": phase.get("pid")}
+            or report.get("model") != expected_model
+            or report.get("requested") != expected_workload
+            or report.get("completed") != expected_workload
+            or report.get("history") != {"schema_version": 1, "integrity_ok": True}
+            or report.get("quit_requested") is not True
+            or report.get("passed") is not True
+            or report.get("failure_code") not in (None, "none")
+            or not isinstance(report.get("timings"), dict)
+            or set(report["timings"]) != expected_timing_keys
+            or not re.fullmatch(r"s-[0-9a-f]{16}", report.get("session_id", ""))
+        ):
+            raise EvidenceError("stored self-test report differs from the closed product contract")
+        recomputed = sampling_summary(
+            samples,
+            contract=ACTIVE_SAMPLING_CONTRACT,
+            baseline_elapsed_seconds=sampling.get("baseline_elapsed_seconds"),
+            baseline_at_unix_ms=sampling.get("baseline_at_unix_ms"),
+            baseline_idle_wakeups=sampling.get("baseline_idle_wakeups"),
+            requested_duration_seconds=phase.get("requested_duration_seconds"),
+            requested_interval_seconds=phase.get("sample_interval_seconds"),
+        )
+        if sampling != recomputed:
+            raise EvidenceError("stored cadence summary differs from raw active samples")
+        for sample in samples:
+            for key in (
+                "cpu_percent",
+                "rss_mib",
+                "energy_impact",
+                "observer_delivery_delay_seconds",
+            ):
+                value = sample.get(key)
+                if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+                    raise EvidenceError(f"active sample has invalid {key}")
+            if (
+                not isinstance(sample.get("threads"), int)
+                or sample["threads"] < 0
+                or not isinstance(sample.get("file_descriptors"), int)
+                or sample["file_descriptors"] < 0
+                or not isinstance(sample.get("file_descriptors_measured"), bool)
+            ):
+                raise EvidenceError("active sample has invalid resource counters")
+
+        mapping = active_cycle_evidence(phase)
+        if phase.get("cycle_resource_mapping") != mapping:
+            raise EvidenceError("stored cycle mapping differs from raw active evidence")
+        mapped = [samples[pair["sample_index"]] for pair in mapping["pairs"]]
+        timings = report["timings"]
+        post_warm = [
+            sample
+            for sample in samples
+            if sample["timestamp_unix_ms"] >= timings["warmup_completed_at_unix_ms"]
+        ]
+        if len(post_warm) < 20:
+            raise EvidenceError("active phase has fewer than 20 post-warm resource rows")
+        cpu = [float(sample["cpu_percent"]) for sample in samples]
+        energy = [float(sample["energy_impact"]) for sample in samples]
+        wakeups = [float(sample["idle_wakeups_per_s"]) for sample in samples]
+        require_derived_metric(result, "cycles_20.duration_seconds", recomputed["wall_coverage_seconds"], 1)
+        require_derived_metric(
+            result,
+            "cycles_20.cpu.avg_percent",
+            time_weighted_mean(samples, "cpu_percent"),
+            len(samples),
+        )
+        require_derived_metric(result, "cycles_20.cpu.p95_percent", percentile(cpu), len(samples))
+        require_derived_metric(
+            result,
+            "cycles_20.energy.avg_impact",
+            time_weighted_mean(samples, "energy_impact"),
+            len(samples),
+        )
+        require_derived_metric(result, "cycles_20.energy.p95_impact", percentile(energy), len(samples))
+        require_derived_metric(
+            result,
+            "cycles_20.wakeups.avg_per_s",
+            time_weighted_mean(samples, "idle_wakeups_per_s"),
+            len(samples),
+        )
+        require_derived_metric(result, "cycles_20.wakeups.p95_per_s", percentile(wakeups), len(samples))
+        require_derived_metric(result, "cycles.completed.count", 20, 1)
+        require_derived_metric(
+            result,
+            "transcription.cpu.p95_percent",
+            percentile(sample["cpu_percent"] for sample in mapped),
+            20,
+        )
+        require_derived_metric(
+            result,
+            "transcription.energy.p95_impact",
+            percentile(sample["energy_impact"] for sample in mapped),
+            20,
+        )
+        require_derived_metric(
+            result,
+            "memory.post_warmup.p95_mib",
+            percentile(sample["rss_mib"] for sample in post_warm),
+            len(post_warm),
+        )
+        require_derived_metric(result, "model.download.p95_ms", timings["model_download_ms"], 1)
+        require_derived_metric(result, "model.cold_load.p95_ms", timings["model_cold_load_ms"], 1)
+        require_derived_metric(result, "history.rows.count", 50, 1)
+
+        rss = [float(sample["rss_mib"]) for sample in mapped]
+        fds = [float(sample["file_descriptors"]) for sample in mapped]
+        threads = [float(sample["threads"]) for sample in mapped]
+        require_derived_metric(result, "growth.rss.delta_mib", rss[-1] - rss[0], 20)
+        require_derived_metric(result, "growth.rss.slope_mib_per_cycle", linear_slope(rss), 20)
+        require_derived_metric(result, "growth.fd.delta", fds[-1] - fds[0], 20)
+        require_derived_metric(result, "growth.thread.delta", threads[-1] - threads[0], 20)
+        monotonic = sum(
+            (
+                monotonic_tail(rss, 1.0),
+                monotonic_tail(fds, 0.0),
+                monotonic_tail(threads, 0.0),
+            )
+        )
+        require_derived_metric(result, "growth.monotonic_tail.count", monotonic, 20)
+
+        all_samples = all_resource_samples(result)
+        measured_fds = [
+            sample for sample in all_samples if sample.get("file_descriptors_measured") is True
+        ]
+        require_derived_metric(
+            result,
+            "memory.peak_mib",
+            max(float(sample["rss_mib"]) for sample in all_samples),
+            len(all_samples),
+        )
+        require_derived_metric(
+            result,
+            "resources.thread.peak",
+            max(int(sample["threads"]) for sample in all_samples),
+            len(all_samples),
+        )
+        require_derived_metric(
+            result,
+            "resources.fd.peak",
+            max(int(sample["file_descriptors"]) for sample in measured_fds),
+            len(measured_fds),
+        )
+    except (EvidenceError, KeyError, TypeError, ValueError) as error:
+        return [f"{label}: {error}"]
+    return []
+
+
 def check_provenance(result: dict[str, Any], label: str) -> list[str]:
     failures = []
     host = result.get("host", {})
@@ -2679,6 +3540,7 @@ def check_provenance(result: dict[str, Any], label: str) -> list[str]:
     if result.get("phases", {}).get("signed_self_test", {}).get("model_cache_staged") is True:
         failures.append(f"{label}: cache-staged functional smoke cannot become release evidence")
     failures.extend(check_idle_sampling(result, label))
+    failures.extend(check_active_sampling(result, label))
     if host.get("missing_required_templates"):
         failures.append(f"{label}: missing Instruments templates: {host['missing_required_templates']}")
     if role == "physical_interactive":
@@ -2880,6 +3742,10 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--fixture", required=True)
     command.add_argument("--data-root", required=True)
     command.add_argument("--output", required=True)
+    command.add_argument(
+        "--failure-summary",
+        help="exact private-free constrained failure summary sibling (failure only)",
+    )
     command.add_argument("--launch-timeout", type=float, default=20.0)
     command.add_argument("--ready-timeout", type=float, default=60.0)
     command.add_argument(

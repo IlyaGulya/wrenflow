@@ -439,10 +439,10 @@ async fn execute_bounded(
     let models = models.ok_or(PerformanceFailureCode::RuntimeUnavailable)?;
     let history = history.ok_or(PerformanceFailureCode::RuntimeUnavailable)?;
     require_missing_observer_ack(&request.observer_ack_path)?;
-    let ready_at = unix_ms();
+    let ready_at = unix_ms_after(process_started_at);
     emit_marker(DiagnosticCode::PerformanceSelfTestReady);
     wait_for_start_signal(&request.start_signal_path).await?;
-    let started_at = unix_ms();
+    let started_at = unix_ms_after(ready_at);
 
     for index in 0..HISTORY_COUNT {
         history
@@ -459,14 +459,16 @@ async fn execute_bounded(
     }
     let paths = CurrentDataPaths::under(&request.data_root);
     verify_history(&paths.history)?;
+    let history_ready_at = unix_ms_after(started_at);
     emit_marker(DiagnosticCode::PerformanceSelfTestHistoryReady);
 
-    let model_timings = activate_model(&models, &store).await?;
+    let model_timings = activate_model(&models, &store, history_ready_at).await?;
     let transcription = models.transcription();
     transcription
         .transcribe(request.fixture.samples.as_ref().clone(), String::new())
         .await
         .map_err(|_| PerformanceFailureCode::Warmup)?;
+    let warmup_completed_at = unix_ms_after(model_timings.model_ready_at_unix_ms);
 
     let mut cycle_ms = Vec::with_capacity(CYCLE_COUNT);
     for _ in 0..CYCLE_COUNT {
@@ -505,15 +507,19 @@ async fn execute_bounded(
         wait_for_interaction_report(&paths.report_path).await?;
     }
 
-    let completed_at = unix_ms();
-    Ok(PerformanceReport::passed(
-        process_started_at,
-        ready_at,
-        started_at,
-        completed_at,
-        model_timings,
-        cycle_ms,
-    ))
+    let completed_at = unix_ms_after(warmup_completed_at);
+    let timeline = SelfTestTimeline {
+        process_started_at_unix_ms: process_started_at,
+        ready_at_unix_ms: ready_at,
+        started_at_unix_ms: started_at,
+        history_ready_at_unix_ms: history_ready_at,
+        activation_started_at_unix_ms: model_timings.activation_started_at_unix_ms,
+        loading_started_at_unix_ms: model_timings.loading_started_at_unix_ms,
+        model_ready_at_unix_ms: model_timings.model_ready_at_unix_ms,
+        warmup_completed_at_unix_ms: warmup_completed_at,
+        completed_at_unix_ms: completed_at,
+    };
+    Ok(PerformanceReport::passed(timeline, model_timings, cycle_ms))
 }
 
 async fn wait_for_paste_disposition(store: &RuntimeStore) -> Result<(), PerformanceFailureCode> {
@@ -739,6 +745,9 @@ async fn wait_for_observer_ack_with_timeout(
 }
 
 struct ModelTimings {
+    activation_started_at_unix_ms: u64,
+    loading_started_at_unix_ms: u64,
+    model_ready_at_unix_ms: u64,
     download_ms: f64,
     cold_load_ms: f64,
 }
@@ -746,6 +755,7 @@ struct ModelTimings {
 async fn activate_model(
     models: &ModelHandle,
     store: &RuntimeStore,
+    history_ready_at: u64,
 ) -> Result<ModelTimings, PerformanceFailureCode> {
     let descriptor = local_model_by_id(DEFAULT_SELECTED_LOCAL_MODEL_ID)
         .ok_or(PerformanceFailureCode::ModelIdentity)?;
@@ -759,12 +769,13 @@ async fn activate_model(
     }
 
     let activation_started = Instant::now();
+    let activation_started_at_unix_ms = unix_ms_after(history_ready_at);
     models
         .activate_selected()
         .await
         .map_err(|_| PerformanceFailureCode::ModelActivation)?;
     let deadline = Instant::now() + MODEL_TIMEOUT;
-    let mut loading_started = None;
+    let mut loading_started: Option<(Instant, u64)> = None;
     loop {
         let snapshot = store.snapshot();
         let state = snapshot
@@ -775,21 +786,28 @@ async fn activate_model(
             .map(|state| &state.state);
         match state {
             Some(ModelOperationState::Loading | ModelOperationState::Warming) => {
-                loading_started.get_or_insert_with(Instant::now);
+                if loading_started.is_none() {
+                    loading_started =
+                        Some((Instant::now(), unix_ms_after(activation_started_at_unix_ms)));
+                }
             }
             Some(ModelOperationState::Ready)
                 if snapshot.models.active_model_id.as_deref()
                     == Some(DEFAULT_SELECTED_LOCAL_MODEL_ID) =>
             {
                 let completed = Instant::now();
-                let loading_started =
+                let (loading_started, loading_started_at_unix_ms) =
                     loading_started.ok_or(PerformanceFailureCode::ModelTransition)?;
                 if !models.transcription().is_ready()
                     || !model_downloader::is_model_present(&descriptor, &directory)
                 {
                     return Err(PerformanceFailureCode::ModelActivation);
                 }
+                let model_ready_at_unix_ms = unix_ms_after(loading_started_at_unix_ms);
                 return Ok(ModelTimings {
+                    activation_started_at_unix_ms,
+                    loading_started_at_unix_ms,
+                    model_ready_at_unix_ms,
                     download_ms: loading_started
                         .duration_since(activation_started)
                         .as_secs_f64()
@@ -941,6 +959,11 @@ struct HistoryReport {
 struct TimingReport {
     ready_at_unix_ms: u64,
     started_at_unix_ms: u64,
+    history_ready_at_unix_ms: u64,
+    activation_started_at_unix_ms: u64,
+    loading_started_at_unix_ms: u64,
+    model_ready_at_unix_ms: u64,
+    warmup_completed_at_unix_ms: u64,
     completed_at_unix_ms: u64,
     model_download_ms: f64,
     model_cold_load_ms: f64,
@@ -948,15 +971,21 @@ struct TimingReport {
     cycles_ms: Vec<f64>,
 }
 
+#[derive(Clone, Copy)]
+struct SelfTestTimeline {
+    process_started_at_unix_ms: u64,
+    ready_at_unix_ms: u64,
+    started_at_unix_ms: u64,
+    history_ready_at_unix_ms: u64,
+    activation_started_at_unix_ms: u64,
+    loading_started_at_unix_ms: u64,
+    model_ready_at_unix_ms: u64,
+    warmup_completed_at_unix_ms: u64,
+    completed_at_unix_ms: u64,
+}
+
 impl PerformanceReport {
-    fn passed(
-        process_started_at: u64,
-        ready_at: u64,
-        started_at: u64,
-        completed_at: u64,
-        model: ModelTimings,
-        cycles_ms: Vec<f64>,
-    ) -> Self {
+    fn passed(timeline: SelfTestTimeline, model: ModelTimings, cycles_ms: Vec<f64>) -> Self {
         Self {
             schema_version: 1,
             contract: "gpui-performance-self-test-v1",
@@ -985,12 +1014,20 @@ impl PerformanceReport {
                 integrity_ok: true,
             },
             timings: TimingReport {
-                ready_at_unix_ms: ready_at,
-                started_at_unix_ms: started_at,
-                completed_at_unix_ms: completed_at,
+                ready_at_unix_ms: timeline.ready_at_unix_ms,
+                started_at_unix_ms: timeline.started_at_unix_ms,
+                history_ready_at_unix_ms: timeline.history_ready_at_unix_ms,
+                activation_started_at_unix_ms: timeline.activation_started_at_unix_ms,
+                loading_started_at_unix_ms: timeline.loading_started_at_unix_ms,
+                model_ready_at_unix_ms: timeline.model_ready_at_unix_ms,
+                warmup_completed_at_unix_ms: timeline.warmup_completed_at_unix_ms,
+                completed_at_unix_ms: timeline.completed_at_unix_ms,
                 model_download_ms: model.download_ms,
                 model_cold_load_ms: model.cold_load_ms,
-                total_ms: completed_at.saturating_sub(process_started_at) as f64,
+                total_ms: timeline
+                    .completed_at_unix_ms
+                    .saturating_sub(timeline.process_started_at_unix_ms)
+                    as f64,
                 cycles_ms,
             },
             quit_requested: true,
@@ -1041,6 +1078,11 @@ fn failure_report(
         timings: TimingReport {
             ready_at_unix_ms: 0,
             started_at_unix_ms: started_at,
+            history_ready_at_unix_ms: 0,
+            activation_started_at_unix_ms: 0,
+            loading_started_at_unix_ms: 0,
+            model_ready_at_unix_ms: 0,
+            warmup_completed_at_unix_ms: 0,
             completed_at_unix_ms: completed_at,
             model_download_ms: 0.0,
             model_cold_load_ms: 0.0,
@@ -1098,6 +1140,10 @@ fn unix_ms() -> u64 {
         .as_millis()
         .try_into()
         .unwrap_or(u64::MAX)
+}
+
+fn unix_ms_after(previous: u64) -> u64 {
+    unix_ms().max(previous.saturating_add(1))
 }
 
 fn performance_error(code: &str) -> RuntimeError {
@@ -1332,16 +1378,37 @@ mod tests {
     #[test]
     fn report_contract_has_exact_counts_and_no_content_fields() {
         let report = PerformanceReport::passed(
-            1,
-            2,
-            3,
-            4,
+            SelfTestTimeline {
+                process_started_at_unix_ms: 1,
+                ready_at_unix_ms: 10,
+                started_at_unix_ms: 20,
+                history_ready_at_unix_ms: 30,
+                activation_started_at_unix_ms: 40,
+                loading_started_at_unix_ms: 50,
+                model_ready_at_unix_ms: 60,
+                warmup_completed_at_unix_ms: 70,
+                completed_at_unix_ms: 80,
+            },
             ModelTimings {
+                activation_started_at_unix_ms: 40,
+                loading_started_at_unix_ms: 50,
+                model_ready_at_unix_ms: 60,
                 download_ms: 0.5,
                 cold_load_ms: 0.5,
             },
             vec![1.0; CYCLE_COUNT],
         );
+        let timeline = [
+            report.timings.ready_at_unix_ms,
+            report.timings.started_at_unix_ms,
+            report.timings.history_ready_at_unix_ms,
+            report.timings.activation_started_at_unix_ms,
+            report.timings.loading_started_at_unix_ms,
+            report.timings.model_ready_at_unix_ms,
+            report.timings.warmup_completed_at_unix_ms,
+            report.timings.completed_at_unix_ms,
+        ];
+        assert!(timeline.windows(2).all(|pair| pair[0] < pair[1]));
         let encoded = serde_json::to_string(&report).unwrap_or_default();
         assert!(encoded.contains("\"cycles\":20"));
         assert!(encoded.contains("\"history_rows\":50"));
@@ -1350,6 +1417,32 @@ mod tests {
         assert!(!encoded.contains("audio_file"));
         assert!(!encoded.contains("device"));
         assert!(!encoded.contains("path"));
+    }
+
+    #[test]
+    fn failure_report_zeros_absolute_transition_timestamps() {
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("temp root: {error}"));
+        let request = PerformanceSelfTestRequest {
+            data_root: root.path().to_path_buf(),
+            report_path: root.path().join(REPORT_NAME),
+            start_signal_path: root.path().join(START_SIGNAL_NAME),
+            observer_ack_path: root.path().join(OBSERVER_ACK_NAME),
+            fixture: FixtureMetadata {
+                samples: Arc::new(Vec::new()),
+            },
+            interaction_paths: None,
+        };
+        let report = failure_report(&request, 10, PerformanceFailureCode::TimedOut);
+        let transition_timestamps = [
+            report.timings.history_ready_at_unix_ms,
+            report.timings.activation_started_at_unix_ms,
+            report.timings.loading_started_at_unix_ms,
+            report.timings.model_ready_at_unix_ms,
+            report.timings.warmup_completed_at_unix_ms,
+        ];
+        assert!(transition_timestamps
+            .into_iter()
+            .all(|timestamp| timestamp == 0));
     }
 
     fn valid_interaction_report_json() -> serde_json::Value {

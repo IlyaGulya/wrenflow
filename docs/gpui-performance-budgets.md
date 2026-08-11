@@ -101,7 +101,10 @@ Required conditions shared by both halves are:
 
 `top` is kept alive for the complete phase: interval CPU, resident size,
 thread count, absolute idle-wakeup deltas and the Activity Monitor energy proxy
-come from one observer. `lsof` samples numeric descriptors every five seconds.
+come from one observer. Sample timestamps are observer-delivery times after
+`top` finishes its global collection/render/flush pass, not kernel sample
+timestamps. `lsof` samples numeric descriptors every five seconds and is also
+forced once on every first accepted resource row after a direct completion.
 Structured Wrenflow diagnostics contribute only closed event codes, timestamps,
 session IDs and correlation IDs. No transcript, audio, device, target-app name,
 window title, serial number or platform UUID enters an evidence JSON.
@@ -247,7 +250,13 @@ but remains below the independent total workload timeout. As the
 defines, absolute event mode appends `+` when an exact counter increased and
 `-` when it decreased; the collector accepts the exact numeric `+` form,
 rejects a decrease or malformed suffix, and computes wakeup rates from observed
-monotonic deltas.
+monotonic deltas. Idle uses `fixed-count-monotonic-v1`: exactly 1,800 accepted
+rows, at least 1,800 seconds of monotonic coverage, average cadence at most
+1.25 seconds and no individual gap above two seconds. Active work uses
+`event-bounded-monotonic-v1`: it retains the same row/counter/wall-clock
+validity, 1.25-second aggregate cadence bound and 2,400-second outer deadline,
+but terminates on the exact observer handshake instead of inventing a row count
+or rejecting one isolated collection-heavy interval.
 The report and closed diagnostics must prove
 the fixture digest, exact cycle count, one-process warmed-engine reuse, 50-row
 History snapshot and successful auto-exit. Its 20 completion boundaries drive
@@ -257,9 +266,14 @@ boundaries. The existing regression test caps long cases at three and therefore
 cannot be multiplied or relabeled as this evidence. Until the signed path
 produces all 20 real completion markers, record no `cycles.completed.count`;
 simply waiting, copying diagnostics or substituting a standalone test binary
-does not pass. Each completion must map to a distinct one-second resource
-sample; the self-test must settle for at least one sampler interval between
-cycles instead of duplicating one snapshot across fast completions. After the
+does not pass. Each completion must map to a distinct first observer-delivered
+resource row whose actual observed interval overlaps that transcription. All
+20 mapped rows require fresh descriptor counts. The report's absolute
+History-ready, activation, loading, model-ready and warmup timestamps must be
+strictly ordered, agree with duration/diagnostic evidence within 100 ms, and
+the raw rows must cover download, load and post-warm work. CPU and energy p95
+use only those 20 mapped rows; post-warm RSS excludes download/load; global
+peaks still use the complete active capture. After the
 twentieth paired non-recording completion, the runtime remains alive behind a
 second bounded handshake. The observer atomically publishes the exact
 zero-byte, non-symlink `<root>/performance-observer-ack-v1` only after an
@@ -267,6 +281,13 @@ accepted resource row at or after that final completion. Pre-existing,
 non-empty, symlinked, missing, 19-cycle or row-before-completion acknowledgments
 fail closed; success/report finalization and auto-exit happen only after this
 acknowledgment.
+
+On a constrained failure the workflow may upload only the atomic mode-0600
+`constrained-failure-summary.json` for seven days. It contains a fixed failure
+code, phase/contract, bounded gap and reader-lag quantiles, row/stage counts,
+and only the `top` return code plus a stderr category/hash. Raw stderr, samples,
+diagnostics, app/data paths, transcripts and audio never enter this artifact;
+its presence is diagnostic only and can never satisfy publish or verification.
 
 On the physical host, run 20 real record-release-transcribe-paste cycles as
 human acceptance only under `.9.9` M06. They are not required or inferred by

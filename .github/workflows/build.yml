@@ -519,6 +519,7 @@ jobs:
             echo "PERFORMANCE_DATA_ROOT=$PERFORMANCE_ROOT/self-test-data"
             echo "PERFORMANCE_RESULT=$PERFORMANCE_ROOT/constrained-evidence.json"
             echo "PERFORMANCE_REPORT=$PERFORMANCE_ROOT/constrained-verification.json"
+            echo "PERFORMANCE_FAILURE_SUMMARY=$PERFORMANCE_ROOT/constrained-failure-summary.json"
             echo "PERFORMANCE_CANDIDATE_ID=${SOURCE_COMMIT}-${DMG_SHA256}"
           } >> "$GITHUB_ENV"
 
@@ -546,6 +547,7 @@ jobs:
             --fixture "$PERFORMANCE_FIXTURE" \
             --data-root "$PERFORMANCE_DATA_ROOT" \
             --output "$PERFORMANCE_RESULT" \
+            --failure-summary "$PERFORMANCE_FAILURE_SUMMARY" \
             --idle-duration 1800 \
             --timeout 2400
 
@@ -579,6 +581,15 @@ jobs:
           mise exec -- jq -e '.profile == "constrained" and .passed == true' \
             "$PERFORMANCE_REPORT" >/dev/null
 
+      - name: Upload sanitized constrained failure summary
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: constrained-performance-failure-summary-${{ needs.build_release.outputs.source_commit }}
+          path: ${{ env.PERFORMANCE_FAILURE_SUMMARY }}
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Upload sanitized constrained evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -591,7 +602,7 @@ jobs:
 
   publish:
     needs: [build_release, performance_constrained]
-    if: needs.build_release.outputs.skip != 'true'
+    if: needs.build_release.outputs.skip != 'true' && needs.performance_constrained.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
