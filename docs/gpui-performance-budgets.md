@@ -131,6 +131,17 @@ bundle through LaunchServices, never its Mach-O:
 mise exec -- open -n "$WRENFLOW_PERF_APP"
 ```
 
+Launch readiness is route-aware. A same-session `startup` and
+`menu_bar_ready` must be followed by exactly one terminal window-policy
+marker after the initial non-Loading route is applied. The observer then
+requires the exact LaunchServices bundle ID, bundle path and PID to report
+`UIElement` for `window_policy_accessory_ready`, or `Foreground` for
+`window_policy_foreground_ready`. A transient pre-marker `UIElement` state is
+not evidence. The recorded latency ends at the later of the terminal marker
+and its matching LaunchServices observation, so a fresh runner that truthfully
+opens Onboarding or Permission Recovery remains valid Foreground launch
+evidence rather than being mislabeled as menu-bar residency.
+
 Transfer the byte-identical signed app and clean checkout to the constrained
 runner without rebuilding. Its preflight must pass
 `--expect-github-macos14`. Collect five cold samples across fresh-runner or
@@ -170,29 +181,35 @@ executable path and waits for full runtime/AppKit cleanup.
 mise exec -- python3 scripts/perf/gpui-performance.py launch \
   --app "$WRENFLOW_PERF_APP" --mode warm --iterations 10 \
   --output "$WRENFLOW_PERF_CONSTRAINED"
-mise exec -- open -n "$WRENFLOW_PERF_APP"
 ```
 
-Run deterministic resource phases on the constrained runner and Instruments
-or display phases on the physical host. The automated 60-second hold is owned
-by the signed synthetic interaction mode below; it does not establish M06.
+The constrained 30-minute idle phase is collected by the gated self-test below,
+not by leaving an ordinary fresh-account launch running with its required
+Onboarding or Permission Recovery window visible. Standalone resource phases
+remain useful only for additional physical-host attribution. The automated
+60-second hold is owned by the signed synthetic interaction mode below; it
+does not establish M06.
 
 ```bash
-mise run performance-sample -- \
-  --app "$WRENFLOW_PERF_APP" --phase idle --duration 1800 \
-  --output "$WRENFLOW_PERF_CONSTRAINED"
-
 mise run performance-sample -- \
   --app "$WRENFLOW_PERF_APP" --phase idle_10m --duration 600 \
   --output "$WRENFLOW_PERF_CONSTRAINED"
 ```
 
-The constrained signed-app self-test starts from a truly empty disposable root,
-uses the normal production downloader to fetch and hash-verify the pinned
-Parakeet revision once, measures download and cold load/prewarm separately,
-then keeps one warmed engine for 20 immutable fixture transcriptions. The
-harness owns the LaunchServices invocation, external observer handshake,
-canonical report import and clean-exit proof:
+The constrained signed-app self-test starts from a truly empty disposable root.
+Its already exact argument/environment gates are the only authority to suppress
+automatic Onboarding and Permission Recovery window presentation; the actual
+route, permission state and configuration remain unchanged. The observer first
+requires the same PID and bundle to reach terminal Accessory/`UIElement` state,
+collects the fixed-count 30-minute idle phase while the runtime remains blocked
+on its existing start signal, and then re-verifies the exact Accessory identity
+and absence of a same-session `window_policy_apply_failed`. Only then does it
+atomically create the start signal. The same process uses the normal production
+downloader to fetch and hash-verify the pinned Parakeet revision once, measures
+download and cold load/prewarm separately, then keeps one warmed engine for 20
+immutable fixture transcriptions. The harness owns the LaunchServices
+invocation, both policy observations, canonical report import and clean-exit
+proof:
 
 ```bash
 export WRENFLOW_PERF_FIXTURE="$WRENFLOW_PERF_DIR/jfk.wav"
@@ -204,7 +221,8 @@ mise run performance-self-test -- \
   --app "$WRENFLOW_PERF_APP" \
   --fixture "$WRENFLOW_PERF_FIXTURE" \
   --data-root "$WRENFLOW_PERF_ROOT" \
-  --output "$WRENFLOW_PERF_CONSTRAINED"
+  --output "$WRENFLOW_PERF_CONSTRAINED" \
+  --idle-duration 1800
 ```
 
 For a repeated functional smoke only, `--verified-model-cache <model-dir>` may
@@ -222,8 +240,15 @@ Internally this passes only
 argument through `open --env ... --args`; `WRENFLOW_PERFORMANCE_REPORT` is
 explicitly rejected. The report is fixed at
 `<root>/performance-self-test-v1.json`, and the observer start handshake is
-the fsynced, zero-byte regular file `<root>/performance-start-v1`. The report
-and closed diagnostics must prove
+the fsynced, zero-byte regular file `<root>/performance-start-v1`. The bounded
+runtime wait for that signal exceeds the idle sampler's hard cadence deadline
+but remains below the independent total workload timeout. As the
+[Apple `top` source](https://github.com/apple-oss-distributions/top/blob/main/uinteger.c)
+defines, absolute event mode appends `+` when an exact counter increased and
+`-` when it decreased; the collector accepts the exact numeric `+` form,
+rejects a decrease or malformed suffix, and computes wakeup rates from observed
+monotonic deltas.
+The report and closed diagnostics must prove
 the fixture digest, exact cycle count, one-process warmed-engine reuse, 50-row
 History snapshot and successful auto-exit. Its 20 completion boundaries drive
 RSS/FD/thread end delta, RSS linear slope, and a fail-closed check that none of
@@ -234,7 +259,14 @@ produces all 20 real completion markers, record no `cycles.completed.count`;
 simply waiting, copying diagnostics or substituting a standalone test binary
 does not pass. Each completion must map to a distinct one-second resource
 sample; the self-test must settle for at least one sampler interval between
-cycles instead of duplicating one snapshot across fast completions.
+cycles instead of duplicating one snapshot across fast completions. After the
+twentieth paired non-recording completion, the runtime remains alive behind a
+second bounded handshake. The observer atomically publishes the exact
+zero-byte, non-symlink `<root>/performance-observer-ack-v1` only after an
+accepted resource row at or after that final completion. Pre-existing,
+non-empty, symlinked, missing, 19-cycle or row-before-completion acknowledgments
+fail closed; success/report finalization and auto-exit happen only after this
+acknowledgment.
 
 On the physical host, run 20 real record-release-transcribe-paste cycles as
 human acceptance only under `.9.9` M06. They are not required or inferred by

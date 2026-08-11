@@ -96,6 +96,9 @@ impl DiagnosticLevel {
 pub enum DiagnosticCode {
     Startup,
     MenuBarReady,
+    WindowPolicyAccessoryReady,
+    WindowPolicyForegroundReady,
+    WindowPolicyApplyFailed,
     Shutdown,
     RuntimeLog,
     RecordingStarted,

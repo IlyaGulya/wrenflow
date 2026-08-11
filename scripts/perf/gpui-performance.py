@@ -39,6 +39,7 @@ SELF_TEST_GATE_ENV = "WRENFLOW_PERFORMANCE_SELF_TEST"
 SELF_TEST_FIXTURE_ENV = "WRENFLOW_PERFORMANCE_FIXTURE"
 SELF_TEST_ROOT_ENV = "WRENFLOW_PERFORMANCE_DATA_ROOT"
 SELF_TEST_REPORT_NAME = "performance-self-test-v1.json"
+SELF_TEST_OBSERVER_ACK_NAME = "performance-observer-ack-v1"
 INTERACTION_ENV = "WRENFLOW_PERFORMANCE_INTERACTION"
 INTERACTION_CONTRACT = "synthetic-in-process-v1"
 INTERACTION_REPORT_NAME = "performance-interaction-v1.json"
@@ -67,6 +68,12 @@ SAMPLING_AVERAGE_GAP_MULTIPLIER = 1.25
 SAMPLING_MAX_GAP_MULTIPLIER = 2.0
 SAMPLING_DEADLINE_EXTRA_INTERVALS = 2.0
 TOP_EVENT_COUNT_MODE = "e"
+SELF_TEST_AUTO_EXIT_GRACE_SECONDS = 30.0
+LSAPPINFO_TIMEOUT_SECONDS = 2.0
+WINDOW_POLICY_APPLICATION_TYPES = {
+    "window_policy_accessory_ready": "UIElement",
+    "window_policy_foreground_ready": "Foreground",
+}
 HUMAN_COLD_DEFINITION = (
     "human-confirmed first post-boot or >=60-second quiesced LaunchServices start"
 )
@@ -436,6 +443,18 @@ def parse_memory(value: str) -> float:
     return amount * factor / 1024**2
 
 
+def parse_top_counter(value: str) -> int:
+    # In non-delta modes top prints the exact numeric value, then `+` when the
+    # counter increased or `-` when it decreased since the previous sample:
+    # https://github.com/apple-oss-distributions/top/blob/main/uinteger.c
+    match = re.fullmatch(r"([0-9]+)([+-]?)", value.strip())
+    if not match:
+        raise EvidenceError(f"cannot parse absolute top idle-wakeup counter: {value}")
+    if match.group(2) == "-":
+        raise EvidenceError("top idle-wakeup counter reported a decreasing absolute value")
+    return int(match.group(1))
+
+
 def executable_for_pid(pid: int) -> str | None:
     # `command=` includes argv and therefore differs for the private signed-app
     # self-test's sole `--performance-self-test` argument. `comm=` is the
@@ -773,6 +792,14 @@ def validate_self_test_diagnostics(
         for record in session
         if record.get("code") == "recording_started" and record.get("correlation_id")
     }
+    start_correlations = {
+        record.get("correlation_id")
+        for record in session
+        if record.get("code") == "transcription_started"
+        and isinstance(record.get("correlation_id"), str)
+        and record.get("correlation_id")
+        and record.get("correlation_id") not in recording_correlations
+    }
     starts = {
         record.get("correlation_id")
         for record in session
@@ -785,6 +812,111 @@ def validate_self_test_diagnostics(
     } - recording_correlations
     if len(starts) != 20 or completions != starts:
         raise EvidenceError("signed self-test diagnostics do not contain exactly 20 paired unique transcriptions")
+
+
+def validate_observer_ack_path(
+    path: pathlib.Path,
+    *,
+    data_root: pathlib.Path,
+    require_existing: bool,
+) -> None:
+    expected = data_root / SELF_TEST_OBSERVER_ACK_NAME
+    if not path.is_absolute() or path != expected or data_root.is_symlink() or not data_root.is_dir():
+        raise EvidenceError("observer ack must be the exact disposable-root child")
+    if require_existing:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size != 0:
+            raise EvidenceError("observer ack must be an existing zero-byte regular non-symlink file")
+    elif path.exists() or path.is_symlink():
+        raise EvidenceError("observer ack already exists before observer acceptance")
+
+
+def observer_ack_readiness(
+    records: list[dict[str, Any]],
+    *,
+    session_id: str,
+    resource_row_timestamp_unix_ms: int,
+) -> dict[str, Any]:
+    if not re.fullmatch(r"s-[0-9a-f]{16}", session_id):
+        raise EvidenceError("observer ack session ID is invalid")
+    if not isinstance(resource_row_timestamp_unix_ms, int):
+        raise EvidenceError("observer ack resource-row timestamp is invalid")
+    session = [record for record in records if record.get("session_id") == session_id]
+    recording_correlations = {
+        record.get("correlation_id")
+        for record in session
+        if record.get("code") == "recording_started" and record.get("correlation_id")
+    }
+    start_correlations = {
+        record.get("correlation_id")
+        for record in session
+        if record.get("code") == "transcription_started"
+        and isinstance(record.get("correlation_id"), str)
+        and record.get("correlation_id")
+        and record.get("correlation_id") not in recording_correlations
+    }
+    completion_timestamps: dict[str, int] = {}
+    for record in session:
+        correlation = record.get("correlation_id")
+        timestamp = record.get("timestamp_unix_ms")
+        if (
+            record.get("code") != "transcription_completed"
+            or not isinstance(correlation, str)
+            or not correlation
+            or correlation in recording_correlations
+            or not isinstance(timestamp, int)
+        ):
+            continue
+        completion_timestamps[correlation] = max(
+            timestamp,
+            completion_timestamps.get(correlation, timestamp),
+        )
+    latest_completion = (
+        max(completion_timestamps.values()) if completion_timestamps else None
+    )
+    completion_count = len(completion_timestamps)
+    ready = (
+        len(start_correlations) == 20
+        and completion_count == 20
+        and set(completion_timestamps) == start_correlations
+        and latest_completion is not None
+        and resource_row_timestamp_unix_ms >= latest_completion
+    )
+    return {
+        "ready": ready,
+        "started_correlation_count": len(start_correlations),
+        "completion_correlation_count": completion_count,
+        "latest_completion_timestamp_unix_ms": latest_completion,
+        "resource_row_timestamp_unix_ms": resource_row_timestamp_unix_ms,
+    }
+
+
+def maybe_create_observer_ack(
+    records: list[dict[str, Any]],
+    *,
+    session_id: str,
+    resource_row_timestamp_unix_ms: int,
+    path: pathlib.Path,
+    data_root: pathlib.Path,
+) -> dict[str, Any] | None:
+    readiness = observer_ack_readiness(
+        records,
+        session_id=session_id,
+        resource_row_timestamp_unix_ms=resource_row_timestamp_unix_ms,
+    )
+    if not readiness["ready"]:
+        return None
+    validate_observer_ack_path(path, data_root=data_root, require_existing=False)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.flush()
+        os.fsync(handle.fileno())
+    validate_observer_ack_path(path, data_root=data_root, require_existing=True)
+    return {
+        "name": SELF_TEST_OBSERVER_ACK_NAME,
+        "bytes": 0,
+        **readiness,
+    }
 
 
 def idle_wakeup_rate(previous: int, current: int, interval_seconds: float) -> float:
@@ -954,9 +1086,6 @@ def sample_phase(args: argparse.Namespace) -> None:
         "-stats",
         "pid,cpu,rsize,threads,idlew,power",
     ]
-    started_ms = int(time.time() * 1000)
-    started_mono = time.monotonic()
-    process = subprocess.Popen(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     completion_report_value = getattr(args, "completion_report", None)
     completion_report = pathlib.Path(completion_report_value) if completion_report_value else None
     start_signal_value = getattr(args, "start_signal", None)
@@ -964,6 +1093,32 @@ def sample_phase(args: argparse.Namespace) -> None:
     expected_auto_exit = completion_report is not None
     fixture_manifest = getattr(args, "fixture_manifest", None)
     observer_settle = float(getattr(args, "observer_settle_seconds", 0.0))
+    observer_ack_value = getattr(args, "observer_ack", None)
+    observer_ack = pathlib.Path(observer_ack_value) if observer_ack_value else None
+    observer_session_id = getattr(args, "observer_session_id", None)
+    observer_ack_evidence: dict[str, Any] | None = None
+    if expected_auto_exit:
+        if observer_ack is None or not isinstance(observer_session_id, str):
+            raise EvidenceError("signed self-test sampler requires its observer ack contract")
+        assert completion_report is not None
+        validate_observer_ack_path(
+            observer_ack,
+            data_root=completion_report.parent,
+            require_existing=False,
+        )
+    elif observer_ack is not None or observer_session_id is not None:
+        raise EvidenceError("observer ack is valid only for the signed self-test sampler")
+    if expected_auto_exit:
+        command[4] = str(
+            target_sample_count
+            + math.ceil(SELF_TEST_AUTO_EXIT_GRACE_SECONDS / args.interval)
+            + 1
+        )
+    diagnostics_path = pathlib.Path(args.diagnostics)
+    started_ms = int(time.time() * 1000)
+    started_mono = time.monotonic()
+    diagnostics_start_ms = int(getattr(args, "diagnostics_start_ms", started_ms))
+    process = subprocess.Popen(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     samples: list[dict[str, Any]] = []
     previous_idlew: int | None = None
     previous_row_mono: float | None = None
@@ -1003,9 +1158,7 @@ def sample_phase(args: argparse.Namespace) -> None:
                     break
                 continue
             seen_rows += 1
-            if not fields[4].isdigit():
-                raise EvidenceError(f"cannot parse absolute top idle-wakeup counter: {fields[4]}")
-            idlew = int(fields[4])
+            idlew = parse_top_counter(fields[4])
             if seen_rows == 1:
                 previous_idlew = idlew
                 previous_row_mono = current_mono
@@ -1057,7 +1210,20 @@ def sample_phase(args: argparse.Namespace) -> None:
             except ValueError as error:
                 raise EvidenceError(f"cannot parse top row: {line.strip()}") from error
             samples.append(sample)
-            if len(samples) >= target_sample_count:
+            if observer_ack is not None and observer_ack_evidence is None:
+                assert completion_report is not None
+                observer_ack_evidence = maybe_create_observer_ack(
+                    read_diagnostics(
+                        diagnostics_path,
+                        diagnostics_start_ms,
+                        sample["timestamp_unix_ms"],
+                    ),
+                    session_id=observer_session_id,
+                    resource_row_timestamp_unix_ms=sample["timestamp_unix_ms"],
+                    path=observer_ack,
+                    data_root=completion_report.parent,
+                )
+            if len(samples) >= target_sample_count and not expected_auto_exit:
                 break
     finally:
         if process.poll() is None:
@@ -1070,6 +1236,14 @@ def sample_phase(args: argparse.Namespace) -> None:
     current_executable = executable_for_pid(pid)
     report = None
     if expected_auto_exit:
+        if observer_ack is None or observer_ack_evidence is None:
+            raise EvidenceError("signed self-test sampler never reached observer ack acceptance")
+        assert completion_report is not None
+        validate_observer_ack_path(
+            observer_ack,
+            data_root=completion_report.parent,
+            require_existing=True,
+        )
         if current_executable is not None:
             raise EvidenceError("signed self-test did not auto-exit before the bounded sampler ended")
         if fixture_manifest is None:
@@ -1102,8 +1276,6 @@ def sample_phase(args: argparse.Namespace) -> None:
         require_full_duration=not expected_auto_exit,
     )
     ended_ms = int(time.time() * 1000)
-    diagnostics_path = pathlib.Path(args.diagnostics)
-    diagnostics_start_ms = int(getattr(args, "diagnostics_start_ms", started_ms))
     diagnostics = read_diagnostics(diagnostics_path, diagnostics_start_ms, ended_ms)
     if report is not None:
         validate_self_test_diagnostics(diagnostics, session_id=report["session_id"])
@@ -1133,6 +1305,7 @@ def sample_phase(args: argparse.Namespace) -> None:
     if report is not None:
         phase["self_test_report"] = report
         phase["self_test_report_sha256"] = sha256_file(completion_report)
+        phase["observer_ack"] = observer_ack_evidence
     result["phases"][args.phase] = phase
     cpu = [sample["cpu_percent"] for sample in samples]
     rss = [sample["rss_mib"] for sample in samples]
@@ -1215,12 +1388,14 @@ def run_signed_self_test(args: argparse.Namespace) -> None:
     report = data_root / SELF_TEST_REPORT_NAME
     interaction_report = data_root / INTERACTION_REPORT_NAME
     start_signal = data_root / SELF_TEST_START_NAME
+    observer_ack = data_root / SELF_TEST_OBSERVER_ACK_NAME
     diagnostics = data_root / CURRENT_DATA_NAMESPACE / "diagnostics/events.ndjson"
     history_db = data_root / CURRENT_DATA_NAMESPACE / "history.sqlite"
     private_outputs = (report, start_signal, interaction_report) if args.interaction else (report, start_signal)
     for path in private_outputs:
         if path.exists() or path.is_symlink():
             raise EvidenceError(f"self-test disposable artifact already exists: {path.name}")
+    validate_observer_ack_path(observer_ack, data_root=data_root, require_existing=False)
 
     result = load_result(output, app)
     identity = result["candidate"]
@@ -1252,43 +1427,62 @@ def run_signed_self_test(args: argparse.Namespace) -> None:
         raise EvidenceError(f"LaunchServices rejected the signed self-test: {launch.stderr.strip()}")
 
     pid = None
-    deadline = time.monotonic() + args.launch_timeout
-    while time.monotonic() < deadline:
-        pid = exact_pid(identity, required=False)
-        if pid is not None:
-            break
-        time.sleep(0.02)
-    if pid is None:
-        raise EvidenceError("signed self-test did not create the exact LaunchServices process")
-
     try:
-        app_info = run(
-            [
-                "/usr/bin/lsappinfo",
-                "info",
-                "-only",
-                "bundlepath,bundleid,pid,ApplicationType",
-                "-app",
-                str(pid),
-            ],
-            check=False,
+        launch_observation = wait_for_route_aware_launch(
+            app=app,
+            identity=identity,
+            diagnostics=diagnostics,
+            started_ms=launched_ms,
+            timeout_seconds=args.launch_timeout,
         )
-        if (
-            f'"CFBundleIdentifier"="{BUNDLE_ID}"' not in app_info
-            or f'"LSBundlePath"="{app}"' not in app_info
-            or '"ApplicationType"="UIElement"' not in app_info
-        ):
-            raise EvidenceError("self-test PID is not the exact LaunchServices UIElement candidate")
+        pid = launch_observation["pid"]
+        validate_initial_self_test_accessory(
+            observation=launch_observation,
+            start_signal=start_signal,
+        )
         ready = wait_for_diagnostic_code(
             diagnostics,
             "performance_self_test_ready",
             launched_ms,
             args.ready_timeout,
         )
+        if ready.get("session_id") != launch_observation["terminal"].get("session_id"):
+            raise EvidenceError("signed self-test readiness belongs to another launch session")
         if executable_for_pid(pid) != identity["executable_path"]:
             raise EvidenceError("signed self-test exited before the observer handshake")
         if args.verified_model_cache:
             stage_verified_model_cache(pathlib.Path(args.verified_model_cache), data_root)
+
+        sample_phase(
+            argparse.Namespace(
+                app=str(app),
+                phase="idle",
+                duration=args.idle_duration,
+                interval=args.interval,
+                fd_interval=args.fd_interval,
+                output=str(output),
+                diagnostics=str(diagnostics),
+                history_db=str(history_db),
+                diagnostics_start_ms=launched_ms,
+            )
+        )
+        if exact_pid(identity, required=False) != pid:
+            raise EvidenceError("signed self-test PID changed between idle and cycle sampling")
+        idle_result = load_result(output)
+        idle_phase = idle_result.get("phases", {}).get("idle")
+        if not isinstance(idle_phase, dict):
+            raise EvidenceError("signed self-test idle evidence is missing after sampling")
+        post_idle_state = query_launch_services_state(app=app, pid=pid)
+        post_idle_observation = validate_post_idle_self_test_observation(
+            idle_phase=idle_phase,
+            session_id=launch_observation["terminal"]["session_id"],
+            state=post_idle_state,
+            observed_at_unix_ms=int(time.time() * 1000),
+            start_signal=start_signal,
+        )
+        idle_phase["post_idle_launch_services"] = post_idle_observation
+        idle_result["updated_at"] = now_iso()
+        write_json(output, idle_result)
 
         sample_phase(
             argparse.Namespace(
@@ -1302,6 +1496,8 @@ def run_signed_self_test(args: argparse.Namespace) -> None:
                 history_db=str(history_db),
                 completion_report=str(report),
                 start_signal=str(start_signal),
+                observer_ack=str(observer_ack),
+                observer_session_id=ready["session_id"],
                 fixture_manifest=fixture_manifest,
                 observer_settle_seconds=args.observer_settle_seconds,
                 diagnostics_start_ms=launched_ms,
@@ -1354,6 +1550,18 @@ def run_signed_self_test(args: argparse.Namespace) -> None:
         final_result["phases"]["signed_self_test"] = {
             "launched_at_unix_ms": launched_ms,
             "ready_at_unix_ms": ready["timestamp_unix_ms"],
+            "menu_bar_ready_at_unix_ms": launch_observation["ready"]["timestamp_unix_ms"],
+            "terminal_policy_ready_at_unix_ms": launch_observation["terminal"][
+                "timestamp_unix_ms"
+            ],
+            "launch_services_observed_at_unix_ms": launch_observation[
+                "launch_services_observed_at_unix_ms"
+            ],
+            "terminal_application_type": WINDOW_POLICY_APPLICATION_TYPES[
+                launch_observation["terminal"]["code"]
+            ],
+            "post_idle_launch_services": post_idle_observation,
+            "observer_ack": final_result["phases"]["cycles_20"]["observer_ack"],
             "pid": pid,
             "fixture_manifest_sha256": sha256_file(FIXTURE_MANIFEST),
             "report_sha256": sha256_file(report),
@@ -1545,7 +1753,7 @@ def add_history_count(result: dict[str, Any], path: pathlib.Path) -> None:
 
 def launch_diagnostic_state(
     path: pathlib.Path, after_ms: int
-) -> tuple[bool, dict[str, Any] | None]:
+) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None]:
     records = read_diagnostics(path, after_ms)
     startups = [
         record
@@ -1564,9 +1772,213 @@ def launch_diagnostic_state(
             ),
             None,
         )
-        if ready:
-            return True, ready
-    return bool(startups), None
+        if not ready:
+            continue
+        terminal = next(
+            (
+                record
+                for record in records
+                if record.get("session_id") == startup.get("session_id")
+                and record.get("code") in WINDOW_POLICY_APPLICATION_TYPES
+                and record["timestamp_unix_ms"] >= ready["timestamp_unix_ms"]
+            ),
+            None,
+        )
+        return True, ready, terminal
+    return bool(startups), None, None
+
+
+def sanitized_launch_services_state(
+    output: str,
+    *,
+    expected_app: pathlib.Path,
+    expected_pid: int,
+    returncode: int | None = 0,
+    stderr: str = "",
+    timed_out: bool = False,
+    invocation_failed: bool = False,
+) -> dict[str, Any]:
+    expected_fields = {
+        "LSBundlePath": r'"LSBundlePath"="([^"]*)"',
+        "CFBundleIdentifier": r'"CFBundleIdentifier"="([^"]*)"',
+        "pid": r'"pid"=([0-9]+)',
+        "ApplicationType": r'"ApplicationType"="([^"]*)"',
+    }
+    values: dict[str, str] = {}
+    match_counts: dict[str, int] = {}
+    for key, pattern in expected_fields.items():
+        matches = re.findall(rf"(?m)^{pattern}$", output.strip())
+        match_counts[key] = len(matches)
+        if len(matches) == 1:
+            values[key] = matches[0]
+    nonempty_lines = [line for line in output.splitlines() if line.strip()]
+    if not nonempty_lines:
+        stdout_shape = "empty"
+    elif any(count > 1 for count in match_counts.values()):
+        stdout_shape = "duplicate_fields"
+    elif any(count == 0 for count in match_counts.values()):
+        stdout_shape = "missing_fields"
+    elif len(nonempty_lines) != len(expected_fields):
+        stdout_shape = "unexpected_lines"
+    else:
+        stdout_shape = "exact_fields"
+    if timed_out:
+        stderr_category = "timeout"
+    elif invocation_failed:
+        stderr_category = "invocation_failed"
+    else:
+        normalized_stderr = stderr.strip().casefold()
+        if not normalized_stderr:
+            stderr_category = "empty"
+        elif "not found" in normalized_stderr or "no such process" in normalized_stderr:
+            stderr_category = "not_found"
+        elif "permission" in normalized_stderr or "not permitted" in normalized_stderr:
+            stderr_category = "permission_denied"
+        else:
+            stderr_category = "other"
+    application_type = values.get("ApplicationType")
+    if application_type not in WINDOW_POLICY_APPLICATION_TYPES.values():
+        application_type = "other" if application_type is not None else "missing"
+    return {
+        "returncode": returncode,
+        "stdout_shape": stdout_shape,
+        "stderr_category": stderr_category,
+        "bundle_id_matches": values.get("CFBundleIdentifier") == BUNDLE_ID,
+        "bundle_path_matches": values.get("LSBundlePath") == str(expected_app),
+        "pid_matches": values.get("pid") == str(expected_pid),
+        "application_type": application_type,
+    }
+
+
+def query_launch_services_state(
+    *,
+    app: pathlib.Path,
+    pid: int,
+) -> dict[str, Any]:
+    command = [
+        "/usr/bin/lsappinfo",
+        "info",
+        "-only",
+        "bundlepath,bundleid,pid,ApplicationType",
+        "-app",
+        str(pid),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=LSAPPINFO_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return sanitized_launch_services_state(
+            "",
+            expected_app=app,
+            expected_pid=pid,
+            returncode=None,
+            timed_out=True,
+        )
+    except OSError:
+        return sanitized_launch_services_state(
+            "",
+            expected_app=app,
+            expected_pid=pid,
+            returncode=None,
+            invocation_failed=True,
+        )
+    return sanitized_launch_services_state(
+        completed.stdout,
+        expected_app=app,
+        expected_pid=pid,
+        returncode=completed.returncode,
+        stderr=completed.stderr,
+    )
+
+
+def launch_services_state_matches(
+    state: dict[str, Any], terminal: dict[str, Any]
+) -> bool:
+    expected_type = WINDOW_POLICY_APPLICATION_TYPES.get(terminal.get("code"))
+    return (
+        expected_type is not None
+        and state.get("returncode") == 0
+        and state.get("stdout_shape") == "exact_fields"
+        and state.get("stderr_category") == "empty"
+        and state.get("bundle_id_matches") is True
+        and state.get("bundle_path_matches") is True
+        and state.get("pid_matches") is True
+        and state.get("application_type") == expected_type
+    )
+
+
+def validate_post_idle_self_test_observation(
+    *,
+    idle_phase: dict[str, Any],
+    session_id: str,
+    state: dict[str, Any],
+    observed_at_unix_ms: int,
+    start_signal: pathlib.Path,
+) -> dict[str, Any]:
+    if not start_signal.is_absolute() or start_signal.exists() or start_signal.is_symlink():
+        raise EvidenceError("self-test workload start signal exists before post-idle verification")
+    started_at = idle_phase.get("started_at_unix_ms")
+    ended_at = idle_phase.get("ended_at_unix_ms")
+    diagnostics = idle_phase.get("diagnostics")
+    if (
+        not isinstance(started_at, int)
+        or not isinstance(ended_at, int)
+        or ended_at < started_at
+        or not isinstance(diagnostics, list)
+        or not isinstance(observed_at_unix_ms, int)
+        or observed_at_unix_ms < ended_at
+    ):
+        raise EvidenceError("idle phase cannot support a bounded post-idle verification")
+    if any(
+        record.get("session_id") == session_id
+        and record.get("code") == "window_policy_apply_failed"
+        and started_at <= record.get("timestamp_unix_ms", -1) <= ended_at
+        for record in diagnostics
+    ):
+        raise EvidenceError("idle phase contains a same-session window policy failure")
+    accessory = {"code": "window_policy_accessory_ready"}
+    if not launch_services_state_matches(state, accessory):
+        sanitized = json.dumps(state, sort_keys=True, separators=(",", ":"))
+        raise EvidenceError(
+            "post-idle self-test requires exact Accessory/UIElement LaunchServices state; "
+            f"sanitized state={sanitized}"
+        )
+    return {
+        "observed_at_unix_ms": observed_at_unix_ms,
+        **state,
+    }
+
+
+def validate_initial_self_test_accessory(
+    *,
+    observation: dict[str, Any],
+    start_signal: pathlib.Path,
+) -> None:
+    if not start_signal.is_absolute() or start_signal.exists() or start_signal.is_symlink():
+        raise EvidenceError("self-test workload start signal exists before launch verification")
+    terminal = observation.get("terminal")
+    state = observation.get("launch_services_state")
+    accessory = {"code": "window_policy_accessory_ready"}
+    if (
+        not isinstance(terminal, dict)
+        or terminal.get("code") != accessory["code"]
+        or not isinstance(state, dict)
+        or not launch_services_state_matches(state, accessory)
+    ):
+        sanitized = (
+            json.dumps(state, sort_keys=True, separators=(",", ":"))
+            if isinstance(state, dict)
+            else "missing"
+        )
+        raise EvidenceError(
+            "signed self-test launch requires terminal Accessory/UIElement policy; "
+            f"sanitized state={sanitized}"
+        )
 
 
 def launch_failure_message(
@@ -1575,7 +1987,9 @@ def launch_failure_message(
     exact_pid_running: bool,
     startup_observed: bool,
     ready_observed: bool,
-    ui_element_observed: bool,
+    terminal_observed: bool,
+    expected_application_type: str | None,
+    launch_services_observations: dict[str, Any] | None,
 ) -> str:
     if not saw_exact_pid:
         return "LaunchServices did not expose the exact candidate process"
@@ -1585,13 +1999,107 @@ def launch_failure_message(
         return "exact candidate started but did not emit the startup diagnostic"
     if not ready_observed:
         return "exact candidate emitted startup but not menu_bar_ready"
-    if not ui_element_observed:
-        return "exact candidate emitted readiness but LaunchServices did not report UIElement"
-    return "exact candidate reached an inconsistent readiness state"
+    if not terminal_observed:
+        return "exact candidate emitted menu_bar_ready but no terminal window policy diagnostic"
+    if launch_services_observations is None:
+        return "exact candidate emitted terminal window policy but LaunchServices returned no state"
+    expected = expected_application_type or "unknown"
+    observations = json.dumps(
+        launch_services_observations,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return (
+        f"exact candidate terminal window policy expected ApplicationType={expected}; "
+        f"sanitized LaunchServices observations={observations}"
+    )
 
 
-def launch_ready_at_ms(diagnostic_ready_ms: int, ui_element_observed_ms: int) -> int:
-    return max(diagnostic_ready_ms, ui_element_observed_ms)
+def launch_ready_at_ms(
+    terminal_policy_ready_ms: int,
+    launch_services_observed_ms: int,
+) -> int:
+    return max(terminal_policy_ready_ms, launch_services_observed_ms)
+
+
+def wait_for_route_aware_launch(
+    *,
+    app: pathlib.Path,
+    identity: dict[str, Any],
+    diagnostics: pathlib.Path,
+    started_ms: int,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    pid: int | None = None
+    observed_pid: int | None = None
+    ready: dict[str, Any] | None = None
+    terminal: dict[str, Any] | None = None
+    saw_exact_pid = False
+    startup_observed = False
+    last_launch_services_state: dict[str, Any] | None = None
+    first_launch_services_state: dict[str, Any] | None = None
+    launch_services_observation_count = 0
+    while time.monotonic() < deadline:
+        pid = exact_pid(identity, required=False)
+        saw_exact_pid |= pid is not None
+        if pid is not None:
+            if observed_pid is None:
+                observed_pid = pid
+            elif pid != observed_pid:
+                try:
+                    terminate_exact(identity, pid)
+                except EvidenceError as shutdown_error:
+                    raise EvidenceError(
+                        "exact candidate PID changed during launch readiness observation; "
+                        f"{shutdown_error}"
+                    ) from shutdown_error
+                raise EvidenceError("exact candidate PID changed during launch readiness observation")
+        current_startup, ready, terminal = launch_diagnostic_state(diagnostics, started_ms)
+        startup_observed |= current_startup
+        if pid is not None and ready is not None and terminal is not None:
+            last_launch_services_state = query_launch_services_state(app=app, pid=pid)
+            launch_services_observation_count += 1
+            if first_launch_services_state is None:
+                first_launch_services_state = last_launch_services_state
+            if launch_services_state_matches(last_launch_services_state, terminal):
+                observed_at_ms = int(time.time() * 1000)
+                return {
+                    "pid": pid,
+                    "ready": ready,
+                    "terminal": terminal,
+                    "launch_services_state": last_launch_services_state,
+                    "launch_services_observed_at_unix_ms": observed_at_ms,
+                }
+        time.sleep(0.01)
+
+    expected_type = (
+        WINDOW_POLICY_APPLICATION_TYPES.get(terminal.get("code"))
+        if terminal is not None
+        else None
+    )
+    launch_services_observations = None
+    if first_launch_services_state is not None and last_launch_services_state is not None:
+        launch_services_observations = {
+            "count": launch_services_observation_count,
+            "first": first_launch_services_state,
+            "last": last_launch_services_state,
+        }
+    failure = launch_failure_message(
+        saw_exact_pid=saw_exact_pid,
+        exact_pid_running=pid is not None,
+        startup_observed=startup_observed,
+        ready_observed=ready is not None,
+        terminal_observed=terminal is not None,
+        expected_application_type=expected_type,
+        launch_services_observations=launch_services_observations,
+    )
+    if pid is not None:
+        try:
+            terminate_exact(identity, pid)
+        except EvidenceError as shutdown_error:
+            raise EvidenceError(f"{failure}; {shutdown_error}") from shutdown_error
+    raise EvidenceError(failure)
 
 
 def terminate_exact(identity: dict[str, Any], pid: int) -> None:
@@ -1642,53 +2150,30 @@ def measure_launch(args: argparse.Namespace) -> None:
             launch_command.extend(["--env", "MallocStackLogging=1"])
         launch_command.append(str(app))
         subprocess.run(launch_command, check=True)
-        deadline = time.monotonic() + args.timeout
-        pid = None
-        ready = None
-        saw_exact_pid = False
-        startup_observed = False
-        ui_element_observed = False
-        ui_element_observed_ms = None
-        while time.monotonic() < deadline:
-            pid = exact_pid(identity, required=False)
-            saw_exact_pid |= pid is not None
-            current_startup, ready = launch_diagnostic_state(diagnostics, started_ms)
-            startup_observed |= current_startup
-            if pid is not None and ready is not None:
-                info = run(
-                    ["/usr/bin/lsappinfo", "info", "-only", "bundlepath,pid,ApplicationType", "-app", str(pid)],
-                    check=False,
-                )
-                if '"ApplicationType"="UIElement"' in info:
-                    ui_element_observed = True
-                    ui_element_observed_ms = int(time.time() * 1000)
-                    break
-            time.sleep(0.01)
-        if pid is None or ready is None or not ui_element_observed:
-            failure = launch_failure_message(
-                saw_exact_pid=saw_exact_pid,
-                exact_pid_running=pid is not None,
-                startup_observed=startup_observed,
-                ready_observed=ready is not None,
-                ui_element_observed=ui_element_observed,
-            )
-            if pid is not None:
-                try:
-                    terminate_exact(identity, pid)
-                except EvidenceError as shutdown_error:
-                    raise EvidenceError(f"{failure}; {shutdown_error}") from shutdown_error
-            raise EvidenceError(failure)
-        if ui_element_observed_ms is None:
-            raise EvidenceError("LaunchServices readiness observation timestamp is missing")
-        ready_at_ms = launch_ready_at_ms(ready["timestamp_unix_ms"], ui_element_observed_ms)
+        observation = wait_for_route_aware_launch(
+            app=app,
+            identity=identity,
+            diagnostics=diagnostics,
+            started_ms=started_ms,
+            timeout_seconds=args.timeout,
+        )
+        pid = observation["pid"]
+        ready = observation["ready"]
+        terminal = observation["terminal"]
+        launch_services_observed_ms = observation["launch_services_observed_at_unix_ms"]
+        ready_at_ms = launch_ready_at_ms(
+            terminal["timestamp_unix_ms"], launch_services_observed_ms
+        )
         latency = ready_at_ms - started_ms
         if latency < 0:
             raise EvidenceError("wall clock moved backwards during launch measurement")
         sample = {
             "started_at_unix_ms": started_ms,
             "ready_at_unix_ms": ready_at_ms,
-            "diagnostic_ready_at_unix_ms": ready["timestamp_unix_ms"],
-            "ui_element_observed_at_unix_ms": ui_element_observed_ms,
+            "menu_bar_ready_at_unix_ms": ready["timestamp_unix_ms"],
+            "terminal_policy_ready_at_unix_ms": terminal["timestamp_unix_ms"],
+            "launch_services_observed_at_unix_ms": launch_services_observed_ms,
+            "terminal_application_type": WINDOW_POLICY_APPLICATION_TYPES[terminal["code"]],
             "latency_ms": latency,
             "session_id": ready.get("session_id"),
         }
@@ -1957,8 +2442,10 @@ def merge_cold_launch(args: argparse.Namespace) -> None:
         if not isinstance(sample, dict) or set(sample) != {
             "started_at_unix_ms",
             "ready_at_unix_ms",
-            "diagnostic_ready_at_unix_ms",
-            "ui_element_observed_at_unix_ms",
+            "menu_bar_ready_at_unix_ms",
+            "terminal_policy_ready_at_unix_ms",
+            "launch_services_observed_at_unix_ms",
+            "terminal_application_type",
             "latency_ms",
             "session_id",
             "fresh_runner_id",
@@ -1966,22 +2453,33 @@ def merge_cold_launch(args: argparse.Namespace) -> None:
             raise EvidenceError(f"cold shard sample has an unexpected shape: {label}")
         started = sample.get("started_at_unix_ms")
         ready = sample.get("ready_at_unix_ms")
-        diagnostic_ready = sample.get("diagnostic_ready_at_unix_ms")
-        ui_element_observed = sample.get("ui_element_observed_at_unix_ms")
+        menu_bar_ready = sample.get("menu_bar_ready_at_unix_ms")
+        terminal_policy_ready = sample.get("terminal_policy_ready_at_unix_ms")
+        launch_services_observed = sample.get("launch_services_observed_at_unix_ms")
         latency = sample.get("latency_ms")
         if not all(
             isinstance(value, int) and not isinstance(value, bool)
-            for value in (started, ready, diagnostic_ready, ui_element_observed, latency)
+            for value in (
+                started,
+                ready,
+                menu_bar_ready,
+                terminal_policy_ready,
+                launch_services_observed,
+                latency,
+            )
         ):
             raise EvidenceError(f"cold shard sample has non-integer timings: {label}")
         if (
             started < 0
-            or diagnostic_ready < started
-            or ui_element_observed < started
-            or ready != launch_ready_at_ms(diagnostic_ready, ui_element_observed)
+            or menu_bar_ready < started
+            or terminal_policy_ready < menu_bar_ready
+            or launch_services_observed < terminal_policy_ready
+            or ready != launch_ready_at_ms(terminal_policy_ready, launch_services_observed)
             or latency != ready - started
         ):
             raise EvidenceError(f"cold shard sample timings are inconsistent: {label}")
+        if sample.get("terminal_application_type") not in WINDOW_POLICY_APPLICATION_TYPES.values():
+            raise EvidenceError(f"cold shard has an invalid terminal ApplicationType: {label}")
         if not re.fullmatch(r"s-[0-9a-f]{16}", sample.get("session_id", "")):
             raise EvidenceError(f"cold shard sample has an invalid session ID: {label}")
         runner_id = sample.get("fresh_runner_id", "")
@@ -2375,7 +2873,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     command = subparsers.add_parser(
         "self-test",
-        help="LaunchServices-run the gated signed-app 20-cycle/50-History workload",
+        help="LaunchServices-run gated signed-app idle and 20-cycle/50-History workloads",
     )
     command.add_argument("--app", required=True)
     command.add_argument("--fixture", required=True)
@@ -2383,6 +2881,12 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--output", required=True)
     command.add_argument("--launch-timeout", type=float, default=20.0)
     command.add_argument("--ready-timeout", type=float, default=60.0)
+    command.add_argument(
+        "--idle-duration",
+        type=float,
+        default=1_800.0,
+        help="fixed-count idle sampling duration before releasing the workload start gate",
+    )
     command.add_argument("--timeout", type=float, default=2_400.0)
     command.add_argument("--interval", type=float, default=1.0)
     command.add_argument("--fd-interval", type=float, default=5.0)

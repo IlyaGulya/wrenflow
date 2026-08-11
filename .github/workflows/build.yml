@@ -429,8 +429,11 @@ jobs:
             (.phases.launch_cold.samples | length) == 1 and
             (.phases.launch_cold.definition == "machine-verified exact signed LaunchServices launch on one fresh GitHub-hosted macos-14 runner") and
             (.phases.launch_cold.samples[0] as $sample |
-              ($sample | keys) == ["diagnostic_ready_at_unix_ms", "fresh_runner_id", "latency_ms", "ready_at_unix_ms", "session_id", "started_at_unix_ms", "ui_element_observed_at_unix_ms"] and
-              $sample.ready_at_unix_ms == ([$sample.diagnostic_ready_at_unix_ms, $sample.ui_element_observed_at_unix_ms] | max) and
+              ($sample | keys) == ["fresh_runner_id", "latency_ms", "launch_services_observed_at_unix_ms", "menu_bar_ready_at_unix_ms", "ready_at_unix_ms", "session_id", "started_at_unix_ms", "terminal_application_type", "terminal_policy_ready_at_unix_ms"] and
+              ($sample.terminal_application_type == "UIElement" or $sample.terminal_application_type == "Foreground") and
+              $sample.menu_bar_ready_at_unix_ms <= $sample.terminal_policy_ready_at_unix_ms and
+              $sample.terminal_policy_ready_at_unix_ms <= $sample.launch_services_observed_at_unix_ms and
+              $sample.ready_at_unix_ms == ([$sample.terminal_policy_ready_at_unix_ms, $sample.launch_services_observed_at_unix_ms] | max) and
               $sample.latency_ms == ($sample.ready_at_unix_ms - $sample.started_at_unix_ms)) and
             .metrics["launch.cold.p95_ms"].sample_count == 1 and
             (.candidate | has("app_path") | not) and
@@ -536,42 +539,14 @@ jobs:
             --settle-seconds 1 \
             --output "$PERFORMANCE_RESULT"
 
-      - name: Measure thirty-minute idle residency
-        run: |
-          mise exec -- python3 scripts/perf/gpui-performance.py launch \
-            --app "$PERFORMANCE_APP" \
-            --mode warm \
-            --iterations 1 \
-            --leave-running \
-            --output "$PERFORMANCE_RESULT"
-          mise run performance-sample -- \
-            --app "$PERFORMANCE_APP" \
-            --phase idle \
-            --duration 1800 \
-            --interval 1 \
-            --fd-interval 5 \
-            --output "$PERFORMANCE_RESULT"
-
-          PID=$(/usr/bin/pgrep -x wrenflow || true)
-          [[ "$PID" =~ ^[0-9]+$ ]]
-          [[ "$(/bin/ps -p "$PID" -o comm=)" == "$PERFORMANCE_APP/Contents/MacOS/wrenflow" ]]
-          /bin/kill -USR1 "$PID"
-          for _ in {1..150}; do
-            /bin/kill -0 "$PID" 2>/dev/null || break
-            /bin/sleep 0.1
-          done
-          if /bin/kill -0 "$PID" 2>/dev/null; then
-            echo "Exact candidate ignored typed SIGUSR1 shutdown after idle sampling" >&2
-            exit 1
-          fi
-
-      - name: Run the signed-app production workload
+      - name: Measure signed-app idle residency and production workload
         run: |
           mise run performance-self-test -- \
             --app "$PERFORMANCE_APP" \
             --fixture "$PERFORMANCE_FIXTURE" \
             --data-root "$PERFORMANCE_DATA_ROOT" \
             --output "$PERFORMANCE_RESULT" \
+            --idle-duration 1800 \
             --timeout 2400
 
       - name: Sanitize, seal, and enforce constrained budgets

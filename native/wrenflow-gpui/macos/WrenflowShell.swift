@@ -489,7 +489,11 @@ private final class WrenflowShell: NSObject {
             selectedHotkey: 63
         ))
 
-        setAccessoryPolicy()
+        guard setAccessoryPolicy() else {
+            reportDiagnosticFailure(.shellInstall)
+            shutdown(removeReopenObservation: false)
+            return -3
+        }
         attachCloseButton()
         accessibility.attach(to: settingsWindow)
         emitPermissions(force: true)
@@ -503,7 +507,6 @@ private final class WrenflowShell: NSObject {
         }
         if pendingReopen {
             pendingReopen = false
-            showMainWindow()
             emit(.openSettings)
         }
         if pendingQuit {
@@ -630,21 +633,29 @@ private final class WrenflowShell: NSObject {
         accessibility.nodeCount
     }
 
-    func showMainWindow() {
+    func showMainWindow() -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
-        NSApp.setActivationPolicy(.regular)
+        guard let settingsWindow else { return false }
+        guard applyActivationPolicy(.regular) else { return false }
         disableWindowRestoration()
         attachCloseButton()
         accessibility.attach(to: settingsWindow)
-        settingsWindow?.makeKeyAndOrderFront(nil)
+        settingsWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        return true
     }
 
-    func hideMainWindow() {
+    func hideMainWindow() -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
         settingsWindow?.close()
-        setAccessoryPolicy()
+        let policyApplied = setAccessoryPolicy()
         emit(.mainWindowHidden)
+        return policyApplied
+    }
+
+    func ensureAccessoryPolicy() -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        return setAccessoryPolicy()
     }
 
     func applyWindowLayout(_ rawValue: Int32) -> Bool {
@@ -888,8 +899,13 @@ private final class WrenflowShell: NSObject {
         button.action = #selector(closeMainWindow)
     }
 
-    private func setAccessoryPolicy() {
-        NSApp.setActivationPolicy(.accessory)
+    private func setAccessoryPolicy() -> Bool {
+        applyActivationPolicy(.accessory)
+    }
+
+    private func applyActivationPolicy(_ policy: NSApplication.ActivationPolicy) -> Bool {
+        if NSApp.activationPolicy() == policy { return true }
+        return NSApp.setActivationPolicy(policy) && NSApp.activationPolicy() == policy
     }
 
     private func updateTray(_ presentation: WrenflowTrayPresentation) {
@@ -1042,22 +1058,23 @@ private final class WrenflowShell: NSObject {
     }
 
     @objc private func openSettings() {
-        showMainWindow()
         emit(.openSettings)
     }
 
     @objc private func openHistory() {
-        showMainWindow()
         emit(.openHistory)
     }
 
     @objc private func openAbout() {
-        showMainWindow()
         emit(.openAbout)
     }
     @objc private func quit() { emit(.quitRequested) }
 
-    @objc private func closeMainWindow() { hideMainWindow() }
+    @objc private func closeMainWindow() {
+        if !hideMainWindow() {
+            reportDiagnosticFailure(.shellInstall)
+        }
+    }
 
     @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {
         setLaunchAtLogin(sender.state != .on)
@@ -1124,13 +1141,18 @@ public func wrenflowShellShutdown() {
 }
 
 @_cdecl("wrenflow_shell_show_main_window")
-public func wrenflowShellShowMainWindow() {
-    onMain { WrenflowShell.shared.showMainWindow() }
+public func wrenflowShellShowMainWindow() -> Int32 {
+    onMain { WrenflowShell.shared.showMainWindow() ? 0 : -1 }
 }
 
 @_cdecl("wrenflow_shell_hide_main_window")
-public func wrenflowShellHideMainWindow() {
-    onMain { WrenflowShell.shared.hideMainWindow() }
+public func wrenflowShellHideMainWindow() -> Int32 {
+    onMain { WrenflowShell.shared.hideMainWindow() ? 0 : -1 }
+}
+
+@_cdecl("wrenflow_shell_ensure_accessory_policy")
+public func wrenflowShellEnsureAccessoryPolicy() -> Int32 {
+    onMain { WrenflowShell.shared.ensureAccessoryPolicy() ? 0 : -1 }
 }
 
 @_cdecl("wrenflow_shell_apply_window_layout")

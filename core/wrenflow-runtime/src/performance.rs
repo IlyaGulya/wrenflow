@@ -46,15 +46,21 @@ const DATA_ROOT_ENV: &str = "WRENFLOW_PERFORMANCE_DATA_ROOT";
 const REJECTED_REPORT_ENV: &str = "WRENFLOW_PERFORMANCE_REPORT";
 const REPORT_NAME: &str = "performance-self-test-v1.json";
 const START_SIGNAL_NAME: &str = "performance-start-v1";
+const OBSERVER_ACK_NAME: &str = "performance-observer-ack-v1";
 const INTERACTION_READY_NAME: &str = "performance-interaction-ready-v1";
 const INTERACTION_REPORT_NAME: &str = "performance-interaction-v1.json";
 const CYCLE_COUNT: usize = 20;
 const HISTORY_COUNT: usize = 50;
-const START_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+// The signed observer may hold the exact two-gate process at its start signal
+// while collecting the bounded 30-minute idle phase. The sampler's hard
+// cadence deadline is 37.5 minutes plus two seconds, so retain a fail-closed
+// margin without approaching the independent 90-minute workload deadline.
+const START_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 const MODEL_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(90 * 60);
 const CYCLE_SETTLE: Duration = Duration::from_secs(1);
 const INTERACTION_TIMEOUT: Duration = Duration::from_secs(3 * 60);
+const OBSERVER_ACK_TIMEOUT: Duration = Duration::from_secs(60);
 const INTERACTION_REPORT_MAX_BYTES: u64 = 64 * 1024;
 const INTERACTION_PULSE_COUNT: usize = 20;
 const INTERACTION_KEY_CODE: u16 = 96;
@@ -98,6 +104,7 @@ pub struct PerformanceSelfTestRequest {
     data_root: PathBuf,
     report_path: PathBuf,
     start_signal_path: PathBuf,
+    observer_ack_path: PathBuf,
     fixture: FixtureMetadata,
     interaction_paths: Option<PerformanceInteractionPaths>,
 }
@@ -219,6 +226,7 @@ pub fn prepare_performance_self_test(
     Ok(Some(PerformanceSelfTestRequest {
         report_path: data_root.join(REPORT_NAME),
         start_signal_path: data_root.join(START_SIGNAL_NAME),
+        observer_ack_path: data_root.join(OBSERVER_ACK_NAME),
         data_root,
         fixture,
         interaction_paths,
@@ -430,6 +438,7 @@ async fn execute_bounded(
 ) -> Result<PerformanceReport, PerformanceFailureCode> {
     let models = models.ok_or(PerformanceFailureCode::RuntimeUnavailable)?;
     let history = history.ok_or(PerformanceFailureCode::RuntimeUnavailable)?;
+    require_missing_observer_ack(&request.observer_ack_path)?;
     let ready_at = unix_ms();
     emit_marker(DiagnosticCode::PerformanceSelfTestReady);
     wait_for_start_signal(&request.start_signal_path).await?;
@@ -486,6 +495,8 @@ async fn execute_bounded(
         );
         tokio::time::sleep(CYCLE_SETTLE).await;
     }
+
+    wait_for_observer_ack(&request.observer_ack_path).await?;
 
     if let Some(paths) = &request.interaction_paths {
         wait_for_paste_disposition(&store).await?;
@@ -697,6 +708,36 @@ async fn wait_for_start_signal(path: &Path) -> Result<(), PerformanceFailureCode
     }
 }
 
+fn require_missing_observer_ack(path: &Path) -> Result<(), PerformanceFailureCode> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        _ => Err(PerformanceFailureCode::UnsafeObserverAck),
+    }
+}
+
+async fn wait_for_observer_ack(path: &Path) -> Result<(), PerformanceFailureCode> {
+    wait_for_observer_ack_with_timeout(path, OBSERVER_ACK_TIMEOUT).await
+}
+
+async fn wait_for_observer_ack_with_timeout(
+    path: &Path,
+    timeout: Duration,
+) -> Result<(), PerformanceFailureCode> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.file_type().is_file() && metadata.len() == 0 => return Ok(()),
+            Ok(_) => return Err(PerformanceFailureCode::UnsafeObserverAck),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(PerformanceFailureCode::UnsafeObserverAck),
+        }
+        if Instant::now() >= deadline {
+            return Err(PerformanceFailureCode::ObserverAckTimeout);
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 struct ModelTimings {
     download_ms: f64,
     cold_load_ms: f64,
@@ -795,6 +836,8 @@ enum PerformanceFailureCode {
     RuntimeUnavailable,
     UnsafeStartSignal,
     StartTimeout,
+    UnsafeObserverAck,
+    ObserverAckTimeout,
     HistoryInsert,
     HistoryIntegrity,
     ModelIdentity,
@@ -818,6 +861,8 @@ impl PerformanceFailureCode {
             Self::RuntimeUnavailable => "runtime_unavailable",
             Self::UnsafeStartSignal => "unsafe_start_signal",
             Self::StartTimeout => "start_timeout",
+            Self::UnsafeObserverAck => "unsafe_observer_ack",
+            Self::ObserverAckTimeout => "observer_ack_timeout",
             Self::HistoryInsert => "history_insert_failed",
             Self::HistoryIntegrity => "history_integrity_failed",
             Self::ModelIdentity => "model_identity_failed",
@@ -1065,6 +1110,55 @@ fn performance_error(code: &str) -> RuntimeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn start_signal_timeout_contains_the_full_idle_sampler_deadline() {
+        let idle_sampler_deadline = Duration::from_secs((1_800 * 5 / 4) + 2);
+        assert!(START_TIMEOUT > idle_sampler_deadline);
+        assert!(TOTAL_TIMEOUT > START_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn observer_ack_is_missing_first_zero_byte_and_bounded() {
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("temp root: {error}"));
+        let ack = root.path().join(OBSERVER_ACK_NAME);
+        assert_eq!(require_missing_observer_ack(&ack), Ok(()));
+
+        fs::write(&ack, []).unwrap_or_else(|error| panic!("write preexisting ack: {error}"));
+        assert_eq!(
+            require_missing_observer_ack(&ack),
+            Err(PerformanceFailureCode::UnsafeObserverAck)
+        );
+        fs::remove_file(&ack).unwrap_or_else(|error| panic!("remove preexisting ack: {error}"));
+
+        assert_eq!(
+            wait_for_observer_ack_with_timeout(&ack, Duration::from_millis(30)).await,
+            Err(PerformanceFailureCode::ObserverAckTimeout)
+        );
+        fs::write(&ack, b"not-empty").unwrap_or_else(|error| panic!("write nonempty ack: {error}"));
+        assert_eq!(
+            wait_for_observer_ack_with_timeout(&ack, Duration::from_millis(30)).await,
+            Err(PerformanceFailureCode::UnsafeObserverAck)
+        );
+        fs::remove_file(&ack).unwrap_or_else(|error| panic!("remove nonempty ack: {error}"));
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.path().join("missing-target"), &ack)
+                .unwrap_or_else(|error| panic!("create ack symlink: {error}"));
+            assert_eq!(
+                wait_for_observer_ack_with_timeout(&ack, Duration::from_millis(30)).await,
+                Err(PerformanceFailureCode::UnsafeObserverAck)
+            );
+            fs::remove_file(&ack).unwrap_or_else(|error| panic!("remove ack symlink: {error}"));
+        }
+
+        fs::write(&ack, []).unwrap_or_else(|error| panic!("write valid ack: {error}"));
+        assert_eq!(
+            wait_for_observer_ack_with_timeout(&ack, Duration::from_millis(30)).await,
+            Ok(())
+        );
+    }
 
     fn inputs(contract: Option<&str>, fixture: bool, root: bool) -> ProcessInputs {
         ProcessInputs {
@@ -1352,6 +1446,7 @@ mod tests {
             data_root: root.clone(),
             report_path: root.join(REPORT_NAME),
             start_signal_path: root.join(START_SIGNAL_NAME),
+            observer_ack_path: root.join(OBSERVER_ACK_NAME),
             fixture: FixtureMetadata {
                 samples: Arc::new(vec![0.0]),
             },
@@ -1363,6 +1458,7 @@ mod tests {
         let paths = request
             .interaction_driver_paths()
             .expect("interaction paths");
+        assert_eq!(request.observer_ack_path, root.join(OBSERVER_ACK_NAME));
         assert_eq!(
             paths.ready_path(),
             root.join(INTERACTION_READY_NAME).as_path()

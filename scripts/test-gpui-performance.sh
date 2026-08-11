@@ -61,6 +61,7 @@ mise exec -- python3 "$HARNESS" --help | grep -Fq 'leaks'
 mise exec -- python3 "$HARNESS" --help | grep -Fq 'merge-cold'
 mise exec -- python3 "$HARNESS" launch --help | grep -Fq -- '--malloc-stack-logging'
 mise exec -- python3 "$HARNESS" self-test --help | grep -Fq -- '--interaction'
+mise exec -- python3 "$HARNESS" self-test --help | grep -Fq -- '--idle-duration'
 grep -Fq '"-o", "comm="' "$HARNESS"
 if grep -Fq '"-o", "command="' "$HARNESS"; then
     echo "Exact PID verifier regressed to argv-bearing ps command output" >&2
@@ -71,6 +72,15 @@ import inspect, runpy, sys
 module = runpy.run_path(sys.argv[1])
 assert module["parse_memory"]("38M-") == 38
 assert module["parse_memory"]("1.5G+") == 1536
+assert module["parse_top_counter"]("0") == 0
+assert module["parse_top_counter"]("132+") == 132
+assert module["parse_top_counter"]("999+") == 999
+for invalid_counter in ("", "+", "132-", "+132", "132++", "-1", "1.0", "N/A"):
+    try:
+        module["parse_top_counter"](invalid_counter)
+    except module["EvidenceError"]:
+        continue
+    raise AssertionError(f"invalid top counter was accepted: {invalid_counter!r}")
 assert module["REQUIRED_TEMPLATES"].isdisjoint(module["SUPPORTING_TEMPLATES"])
 assert len(module["REQUIRED_TEMPLATES"]) == 7
 assert module["SUPPORTING_TEMPLATES"] == {"Power Profiler"}
@@ -80,19 +90,100 @@ assert failure(
     exact_pid_running=True,
     startup_observed=True,
     ready_observed=False,
-    ui_element_observed=False,
+    terminal_observed=False,
+    expected_application_type=None,
+    launch_services_observations=None,
 ) == "exact candidate emitted startup but not menu_bar_ready"
 assert failure(
     saw_exact_pid=True,
     exact_pid_running=True,
     startup_observed=True,
     ready_observed=True,
-    ui_element_observed=False,
-) == "exact candidate emitted readiness but LaunchServices did not report UIElement"
+    terminal_observed=False,
+    expected_application_type=None,
+    launch_services_observations=None,
+) == "exact candidate emitted menu_bar_ready but no terminal window policy diagnostic"
+
+app = module["pathlib"].Path("/private/candidate/Wrenflow.app")
+exact_info = "\n".join((
+    "\"LSBundlePath\"=\"/private/candidate/Wrenflow.app\"",
+    "\"CFBundleIdentifier\"=\"me.gulya.wrenflow\"",
+    "\"pid\"=4242",
+    "\"ApplicationType\"=\"UIElement\"",
+))
+state = module["sanitized_launch_services_state"](
+    exact_info, expected_app=app, expected_pid=4242
+)
+assert state["returncode"] == 0
+assert state["stdout_shape"] == "exact_fields"
+assert state["stderr_category"] == "empty"
+accessory = {"code": "window_policy_accessory_ready"}
+foreground = {"code": "window_policy_foreground_ready"}
+assert module["launch_services_state_matches"](state, accessory)
+assert not module["launch_services_state_matches"](state, foreground)
+
+# A transient pre-terminal UIElement state cannot satisfy a terminal Foreground route.
+foreground_info = exact_info.replace("UIElement", "Foreground")
+foreground_state = module["sanitized_launch_services_state"](
+    foreground_info, expected_app=app, expected_pid=4242
+)
+assert module["launch_services_state_matches"](foreground_state, foreground)
+assert not module["launch_services_state_matches"](foreground_state, accessory)
+
+for malformed in (
+    exact_info.replace("\"pid\"=4242", "\"pid\"=7"),
+    exact_info.replace("me.gulya.wrenflow", "me.example.other"),
+    exact_info.replace("/private/candidate/Wrenflow.app", "/private/other/Wrenflow.app"),
+    exact_info + "\n\"pid\"=4242",
+    exact_info.replace("\"ApplicationType\"=\"UIElement\"", ""),
+):
+    malformed_state = module["sanitized_launch_services_state"](
+        malformed, expected_app=app, expected_pid=4242
+    )
+    assert not module["launch_services_state_matches"](malformed_state, accessory)
+
+private_error_state = module["sanitized_launch_services_state"](
+    exact_info,
+    expected_app=app,
+    expected_pid=4242,
+    returncode=1,
+    stderr="permission denied for /private/secret/Wrenflow.app",
+)
+assert private_error_state["stderr_category"] == "permission_denied"
+assert not module["launch_services_state_matches"](private_error_state, accessory)
+
+closed_message = failure(
+    saw_exact_pid=True,
+    exact_pid_running=True,
+    startup_observed=True,
+    ready_observed=True,
+    terminal_observed=True,
+    expected_application_type="Foreground",
+    launch_services_observations={"count": 2, "first": state, "last": private_error_state},
+)
+assert "ApplicationType=Foreground" in closed_message
+assert "\"application_type\":\"UIElement\"" in closed_message
+assert "/private/" not in closed_message
+assert "me.gulya.wrenflow" not in closed_message
+assert "\"count\":2" in closed_message
 assert module["launch_ready_at_ms"](1100, 1300) == 1300
 assert module["launch_ready_at_ms"](1400, 1300) == 1400
 measure_source = inspect.getsource(module["measure_launch"])
-assert "if pid is not None:\n                try:\n                    terminate_exact(identity, pid)" in measure_source
+assert "wait_for_route_aware_launch" in measure_source
+self_test_source = inspect.getsource(module["run_signed_self_test"])
+initial_accessory_barrier = self_test_source.index("validate_initial_self_test_accessory")
+idle_call = self_test_source.index("phase=\"idle\"")
+post_idle_barrier = self_test_source.index("validate_post_idle_self_test_observation")
+cycle_call = self_test_source.index("phase=\"cycles_20\"")
+start_signal_use = self_test_source.index("start_signal=str(start_signal)")
+assert initial_accessory_barrier < idle_call < post_idle_barrier < cycle_call < start_signal_use
+assert "except BaseException:" in self_test_source
+assert "request_exact_typed_quit(identity, pid)" in self_test_source
+sample_source = inspect.getsource(module["sample_phase"])
+accepted_row = sample_source.index("samples.append(sample)")
+observer_ack = sample_source.index("observer_ack_evidence = maybe_create_observer_ack")
+sample_limit = sample_source.index("if len(samples) >= target_sample_count")
+assert accepted_row < observer_ack < sample_limit
 ' "$HARNESS"
 
 mise exec -- python3 -c '
@@ -105,21 +196,362 @@ records = [
     {"timestamp_unix_ms": 1001, "session_id": "s-other0000000000", "code": "menu_bar_ready"},
 ]
 diagnostics.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
-assert module["launch_diagnostic_state"](diagnostics, 1000) == (True, None)
+assert module["launch_diagnostic_state"](diagnostics, 1000) == (True, None, None)
 records.append(
     {"timestamp_unix_ms": 1002, "session_id": "s-0123456789abcdef", "code": "menu_bar_ready"}
 )
 diagnostics.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
-startup, ready = module["launch_diagnostic_state"](diagnostics, 1000)
+startup, ready, terminal = module["launch_diagnostic_state"](diagnostics, 1000)
+assert startup and ready["timestamp_unix_ms"] == 1002 and terminal is None
+records.extend((
+    {"timestamp_unix_ms": 1003, "session_id": "s-other0000000000", "code": "window_policy_accessory_ready"},
+    {"timestamp_unix_ms": 1004, "session_id": "s-0123456789abcdef", "code": "window_policy_foreground_ready"},
+))
+diagnostics.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+startup, ready, terminal = module["launch_diagnostic_state"](diagnostics, 1000)
 assert startup and ready["timestamp_unix_ms"] == 1002
+assert terminal["timestamp_unix_ms"] == 1004
+assert terminal["code"] == "window_policy_foreground_ready"
 
 old_records = [
     {"timestamp_unix_ms": 998, "session_id": "s-old000000000000", "code": "startup"},
     {"timestamp_unix_ms": 999, "session_id": "s-old000000000000", "code": "menu_bar_ready"},
 ]
 diagnostics.write_text("".join(json.dumps(record) + "\n" for record in old_records), encoding="utf-8")
-assert module["launch_diagnostic_state"](diagnostics, 1000) == (False, None)
+assert module["launch_diagnostic_state"](diagnostics, 1000) == (False, None, None)
 ' "$HARNESS" "$TEST_ROOT/launch-diagnostics.ndjson"
+
+mise exec -- python3 -c '
+import pathlib, runpy, subprocess, sys
+module = runpy.run_path(sys.argv[1])
+observer = module["wait_for_route_aware_launch"]
+globals_ = observer.__globals__
+ready = {"timestamp_unix_ms": 1001, "session_id": "s-0123456789abcdef", "code": "menu_bar_ready"}
+terminal = {"timestamp_unix_ms": 1002, "session_id": "s-0123456789abcdef", "code": "window_policy_foreground_ready"}
+diagnostic_states = iter(((True, ready, None), (True, ready, terminal), (True, ready, terminal)))
+app_info = iter((
+    "\n".join((
+        "\"LSBundlePath\"=\"/private/candidate/Wrenflow.app\"",
+        "\"CFBundleIdentifier\"=\"me.gulya.wrenflow\"",
+        "\"pid\"=4242",
+        "\"ApplicationType\"=\"UIElement\"",
+    )),
+    "\n".join((
+        "\"LSBundlePath\"=\"/private/candidate/Wrenflow.app\"",
+        "\"CFBundleIdentifier\"=\"me.gulya.wrenflow\"",
+        "\"pid\"=4242",
+        "\"ApplicationType\"=\"Foreground\"",
+    )),
+))
+lsappinfo_calls = []
+query = module["query_launch_services_state"]
+def completed_run(argv, **kwargs):
+    lsappinfo_calls.append((argv, kwargs))
+    return subprocess.CompletedProcess(argv, 0, next(app_info), "")
+globals_["subprocess"].run = completed_run
+queried = query(app=pathlib.Path("/private/candidate/Wrenflow.app"), pid=4242)
+assert queried["application_type"] == "UIElement"
+assert lsappinfo_calls[0][1]["timeout"] == module["LSAPPINFO_TIMEOUT_SECONDS"]
+assert lsappinfo_calls[0][1]["capture_output"] is True
+
+def timeout_run(argv, **kwargs):
+    raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+globals_["subprocess"].run = timeout_run
+timed_out = query(app=pathlib.Path("/private/candidate/Wrenflow.app"), pid=4242)
+assert timed_out["returncode"] is None
+assert timed_out["stderr_category"] == "timeout"
+assert timed_out["stdout_shape"] == "empty"
+
+def failed_run(argv, **kwargs):
+    raise OSError("private launch services detail /private/secret")
+globals_["subprocess"].run = failed_run
+invocation_failed = query(app=pathlib.Path("/private/candidate/Wrenflow.app"), pid=4242)
+assert invocation_failed["returncode"] is None
+assert invocation_failed["stderr_category"] == "invocation_failed"
+assert "/private/" not in str(invocation_failed)
+
+# The observer queries only after the terminal route marker. Its first query
+# sees a mismatching transient UIElement state and its second sees Foreground.
+app_info = iter((
+    "\n".join((
+        "\"LSBundlePath\"=\"/private/candidate/Wrenflow.app\"",
+        "\"CFBundleIdentifier\"=\"me.gulya.wrenflow\"",
+        "\"pid\"=4242",
+        "\"ApplicationType\"=\"UIElement\"",
+    )),
+    "\n".join((
+        "\"LSBundlePath\"=\"/private/candidate/Wrenflow.app\"",
+        "\"CFBundleIdentifier\"=\"me.gulya.wrenflow\"",
+        "\"pid\"=4242",
+        "\"ApplicationType\"=\"Foreground\"",
+    )),
+))
+observer_queries = []
+def fake_query(*, app, pid):
+    observer_queries.append(pid)
+    return module["sanitized_launch_services_state"](
+        next(app_info), expected_app=app, expected_pid=pid
+    )
+globals_["exact_pid"] = lambda identity, required=False: 4242
+globals_["launch_diagnostic_state"] = lambda diagnostics, started_ms: next(diagnostic_states)
+globals_["query_launch_services_state"] = fake_query
+observation = observer(
+    app=pathlib.Path("/private/candidate/Wrenflow.app"),
+    identity={"executable_path": "/private/candidate/Wrenflow.app/Contents/MacOS/wrenflow"},
+    diagnostics=pathlib.Path("/private/diagnostics.ndjson"),
+    started_ms=1000,
+    timeout_seconds=1,
+)
+assert observation["pid"] == 4242
+assert observation["terminal"] == terminal
+# No lsappinfo query happened before the terminal marker, and the transient
+# post-marker UIElement mismatch did not satisfy the Foreground contract.
+assert len(observer_queries) == 2
+' "$HARNESS"
+
+mise exec -- python3 -c '
+import pathlib, runpy, sys
+module = runpy.run_path(sys.argv[1])
+root = pathlib.Path(sys.argv[2])
+start_signal = root / "performance-start-post-idle-test"
+session = "s-0123456789abcdef"
+idle_phase = {
+    "started_at_unix_ms": 1000,
+    "ended_at_unix_ms": 2000,
+    "diagnostics": [
+        {"timestamp_unix_ms": 1500, "session_id": "s-other0000000000", "code": "window_policy_apply_failed"},
+    ],
+}
+info = "\n".join((
+    "\"LSBundlePath\"=\"/private/candidate/Wrenflow.app\"",
+    "\"CFBundleIdentifier\"=\"me.gulya.wrenflow\"",
+    "\"pid\"=4242",
+    "\"ApplicationType\"=\"UIElement\"",
+))
+state = module["sanitized_launch_services_state"](
+    info,
+    expected_app=pathlib.Path("/private/candidate/Wrenflow.app"),
+    expected_pid=4242,
+)
+validate_initial = module["validate_initial_self_test_accessory"]
+validate_initial(
+    observation={
+        "terminal": {"code": "window_policy_accessory_ready"},
+        "launch_services_state": state,
+    },
+    start_signal=start_signal,
+)
+foreground_initial = dict(state)
+foreground_initial["application_type"] = "Foreground"
+try:
+    validate_initial(
+        observation={
+            "terminal": {"code": "window_policy_foreground_ready"},
+            "launch_services_state": foreground_initial,
+        },
+        start_signal=start_signal,
+    )
+except module["EvidenceError"]:
+    pass
+else:
+    raise SystemExit("self-test launch accepted terminal Foreground instead of Accessory/UIElement")
+assert not start_signal.exists()
+
+validate = module["validate_post_idle_self_test_observation"]
+observation = validate(
+    idle_phase=idle_phase,
+    session_id=session,
+    state=state,
+    observed_at_unix_ms=2001,
+    start_signal=start_signal,
+)
+assert observation["observed_at_unix_ms"] == 2001
+assert observation["application_type"] == "UIElement"
+assert not start_signal.exists()
+
+same_session_failure = dict(idle_phase)
+same_session_failure["diagnostics"] = [
+    {"timestamp_unix_ms": 1500, "session_id": session, "code": "window_policy_apply_failed"},
+]
+try:
+    validate(
+        idle_phase=same_session_failure,
+        session_id=session,
+        state=state,
+        observed_at_unix_ms=2001,
+        start_signal=start_signal,
+    )
+except module["EvidenceError"]:
+    pass
+else:
+    raise SystemExit("post-idle barrier accepted a same-session window policy failure")
+assert not start_signal.exists()
+
+foreground = dict(state)
+foreground["application_type"] = "Foreground"
+try:
+    validate(
+        idle_phase=idle_phase,
+        session_id=session,
+        state=foreground,
+        observed_at_unix_ms=2001,
+        start_signal=start_signal,
+    )
+except module["EvidenceError"]:
+    pass
+else:
+    raise SystemExit("post-idle barrier accepted Foreground instead of Accessory/UIElement")
+assert not start_signal.exists()
+
+start_signal.write_text("premature", encoding="utf-8")
+try:
+    validate(
+        idle_phase=idle_phase,
+        session_id=session,
+        state=state,
+        observed_at_unix_ms=2001,
+        start_signal=start_signal,
+    )
+except module["EvidenceError"]:
+    pass
+else:
+    raise SystemExit("post-idle barrier accepted a pre-existing workload start signal")
+' "$HARNESS" "$TEST_ROOT"
+
+mise exec -- python3 -c '
+import pathlib, runpy, sys
+module = runpy.run_path(sys.argv[1])
+test_root = pathlib.Path(sys.argv[2])
+session = "s-0123456789abcdef"
+
+def workload_records(count):
+    records = []
+    for index in range(count):
+        correlation = f"direct-{index:02d}"
+        records.extend((
+            {"timestamp_unix_ms": 1000 + index * 10, "session_id": session, "correlation_id": correlation, "code": "transcription_started"},
+            {"timestamp_unix_ms": 1005 + index * 10, "session_id": session, "correlation_id": correlation, "code": "transcription_completed"},
+        ))
+    return records
+
+readiness = module["observer_ack_readiness"]
+nineteen = workload_records(19)
+assert not readiness(
+    nineteen, session_id=session, resource_row_timestamp_unix_ms=9999
+)["ready"]
+
+twenty = workload_records(20)
+latest = 1195
+assert not readiness(
+    twenty, session_id=session, resource_row_timestamp_unix_ms=latest - 1
+)["ready"]
+
+missing_start = [
+    record for record in twenty
+    if not (record["code"] == "transcription_started" and record["correlation_id"] == "direct-19")
+]
+assert not readiness(
+    missing_start, session_id=session, resource_row_timestamp_unix_ms=9999
+)["ready"]
+
+rogue_completion = [
+    *twenty,
+    {"timestamp_unix_ms": 1200, "session_id": session, "correlation_id": "rogue", "code": "transcription_completed"},
+]
+assert not readiness(
+    rogue_completion, session_id=session, resource_row_timestamp_unix_ms=9999
+)["ready"]
+
+with_interaction = [
+    *twenty,
+    {"timestamp_unix_ms": 900, "session_id": session, "correlation_id": "recording-1", "code": "recording_started"},
+    {"timestamp_unix_ms": 3000, "session_id": session, "correlation_id": "recording-1", "code": "transcription_started"},
+    {"timestamp_unix_ms": 4000, "session_id": session, "correlation_id": "recording-1", "code": "transcription_completed"},
+]
+accepted = readiness(
+    with_interaction, session_id=session, resource_row_timestamp_unix_ms=latest
+)
+assert accepted["ready"]
+assert accepted["started_correlation_count"] == 20
+assert accepted["completion_correlation_count"] == 20
+assert accepted["latest_completion_timestamp_unix_ms"] == latest
+
+ack_root = test_root / "observer-ack-root"
+ack_root.mkdir()
+ack = ack_root / module["SELF_TEST_OBSERVER_ACK_NAME"]
+maybe_create = module["maybe_create_observer_ack"]
+assert maybe_create(
+    nineteen,
+    session_id=session,
+    resource_row_timestamp_unix_ms=9999,
+    path=ack,
+    data_root=ack_root,
+) is None
+assert not ack.exists()
+assert maybe_create(
+    twenty,
+    session_id=session,
+    resource_row_timestamp_unix_ms=latest - 1,
+    path=ack,
+    data_root=ack_root,
+) is None
+assert not ack.exists()
+evidence = maybe_create(
+    with_interaction,
+    session_id=session,
+    resource_row_timestamp_unix_ms=latest,
+    path=ack,
+    data_root=ack_root,
+)
+assert evidence["name"] == "performance-observer-ack-v1"
+assert evidence["bytes"] == 0
+assert ack.is_file() and not ack.is_symlink() and ack.stat().st_size == 0
+
+validate_path = module["validate_observer_ack_path"]
+for unsafe in (pathlib.Path("relative-ack"), ack_root / "wrong-name"):
+    try:
+        validate_path(unsafe, data_root=ack_root, require_existing=False)
+    except module["EvidenceError"]:
+        pass
+    else:
+        raise SystemExit("observer ack accepted an unsafe path")
+
+preexisting_root = test_root / "observer-ack-preexisting"
+preexisting_root.mkdir()
+preexisting = preexisting_root / module["SELF_TEST_OBSERVER_ACK_NAME"]
+preexisting.write_bytes(b"")
+try:
+    validate_path(preexisting, data_root=preexisting_root, require_existing=False)
+except module["EvidenceError"]:
+    pass
+else:
+    raise SystemExit("observer ack accepted a pre-existing zero-byte file")
+
+nonzero_root = test_root / "observer-ack-nonzero"
+nonzero_root.mkdir()
+nonzero = nonzero_root / module["SELF_TEST_OBSERVER_ACK_NAME"]
+nonzero.write_bytes(b"x")
+try:
+    validate_path(nonzero, data_root=nonzero_root, require_existing=True)
+except module["EvidenceError"]:
+    pass
+else:
+    raise SystemExit("observer ack accepted a nonzero file")
+
+symlink_root = test_root / "observer-ack-symlink"
+symlink_root.mkdir()
+target = symlink_root / "target"
+target.write_bytes(b"")
+symlink = symlink_root / module["SELF_TEST_OBSERVER_ACK_NAME"]
+symlink.symlink_to(target)
+for require_existing in (False, True):
+    try:
+        validate_path(symlink, data_root=symlink_root, require_existing=require_existing)
+    except module["EvidenceError"]:
+        pass
+    else:
+        raise SystemExit("observer ack accepted a symlink")
+' "$HARNESS" "$TEST_ROOT"
 
 mise exec -- python3 -c '
 import runpy, sys
@@ -163,7 +595,7 @@ for invalid in (
 ' "$HARNESS"
 
 mise exec -- python3 -c '
-import argparse, json, pathlib, runpy, sys
+import argparse, copy, json, pathlib, runpy, sys
 module = runpy.run_path(sys.argv[1])
 root = pathlib.Path(sys.argv[2])
 base_path = root / "merge-base.json"
@@ -207,8 +639,10 @@ for index in range(5):
             "samples": [{
                 "started_at_unix_ms": 1000 + index,
                 "ready_at_unix_ms": 1000 + index + latency,
-                "diagnostic_ready_at_unix_ms": 1000 + index + latency - 1,
-                "ui_element_observed_at_unix_ms": 1000 + index + latency,
+                "menu_bar_ready_at_unix_ms": 1000 + index + latency - 2,
+                "terminal_policy_ready_at_unix_ms": 1000 + index + latency - 1,
+                "launch_services_observed_at_unix_ms": 1000 + index + latency,
+                "terminal_application_type": "UIElement",
                 "latency_ms": latency,
                 "session_id": f"s-{index:016x}",
                 "fresh_runner_id": f"gh-12345-1-cold-{index + 1}",
@@ -230,6 +664,24 @@ merged = json.loads(base_path.read_text(encoding="utf-8"))
 assert merged["metrics"]["launch.cold.p95_ms"]["value"] == 104
 assert merged["metrics"]["launch.cold.p95_ms"]["sample_count"] == 5
 assert len(merged["aggregations"]["launch_cold"]["sealed_shard_sha256"]) == 5
+
+invalid_type = copy.deepcopy(json.loads(pathlib.Path(shard_paths[0]).read_text(encoding="utf-8")))
+invalid_type["phases"]["launch_cold"]["samples"][0]["terminal_application_type"] = "Background"
+invalid_type["evidence_sha256"] = module["canonical_hash"](invalid_type)
+invalid_path = root / "cold-invalid-type.json"
+invalid_path.write_text(json.dumps(invalid_type), encoding="utf-8")
+try:
+    merge(argparse.Namespace(
+        app="/tmp/Wrenflow.app",
+        result=str(base_path),
+        candidate_id="candidate-fixture",
+        shard=[str(invalid_path), *shard_paths[1:]],
+    ))
+except module["EvidenceError"]:
+    pass
+else:
+    raise SystemExit("cold merge accepted an unbounded terminal ApplicationType")
+
 try:
     merge(argparse.Namespace(
         app="/tmp/Wrenflow.app", result=str(base_path), candidate_id="candidate-fixture", shard=shard_paths[:4],

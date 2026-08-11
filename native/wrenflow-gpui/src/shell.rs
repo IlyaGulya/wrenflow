@@ -168,14 +168,25 @@ impl MacShell {
         clear_event_sender();
     }
 
-    pub fn show_main_window(self) {
-        // SAFETY: no arguments cross the FFI boundary.
-        unsafe { wrenflow_shell_show_main_window() };
+    pub fn show_main_window(self) -> Result<(), ShellError> {
+        // SAFETY: no arguments cross the FFI boundary; Swift returns a closed
+        // status only after verifying AppKit accepted the regular policy.
+        let result = unsafe { wrenflow_shell_show_main_window() };
+        status_result(result, "show main window")
     }
 
-    pub fn hide_main_window(self) {
-        // SAFETY: no arguments cross the FFI boundary.
-        unsafe { wrenflow_shell_hide_main_window() };
+    pub fn hide_main_window(self) -> Result<(), ShellError> {
+        // SAFETY: no arguments cross the FFI boundary; Swift returns a closed
+        // status only after verifying AppKit accepted the accessory policy.
+        let result = unsafe { wrenflow_shell_hide_main_window() };
+        status_result(result, "hide main window")
+    }
+
+    pub fn ensure_accessory_policy(self) -> Result<(), ShellError> {
+        // SAFETY: no arguments cross the FFI boundary; Swift synchronously
+        // applies and verifies the accessory activation policy on main.
+        let result = unsafe { wrenflow_shell_ensure_accessory_policy() };
+        status_result(result, "ensure accessory policy")
     }
 
     pub fn apply_window_layout(self, layout: WindowLayout) -> Result<(), ShellError> {
@@ -419,8 +430,9 @@ unsafe extern "C" {
         callback: extern "C" fn(i32, *const c_char),
     ) -> i32;
     fn wrenflow_shell_shutdown();
-    fn wrenflow_shell_show_main_window();
-    fn wrenflow_shell_hide_main_window();
+    fn wrenflow_shell_show_main_window() -> i32;
+    fn wrenflow_shell_hide_main_window() -> i32;
+    fn wrenflow_shell_ensure_accessory_policy() -> i32;
     fn wrenflow_shell_apply_window_layout(layout: i32) -> i32;
     fn wrenflow_shell_apply_theme_preference(preference: i32) -> i32;
     fn wrenflow_shell_update_tray(json: *const c_char) -> i32;

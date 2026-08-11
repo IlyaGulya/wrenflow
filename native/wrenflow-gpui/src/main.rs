@@ -90,12 +90,43 @@ struct AppWindowContext {
 
 type AppWindowSlot = Rc<RefCell<Option<AppWindowContext>>>;
 
+#[derive(Default)]
+struct InitialWindowPolicyReporter {
+    reported: bool,
+}
+
+impl InitialWindowPolicyReporter {
+    fn ready(
+        &mut self,
+        route: NavigationTarget,
+        policy_ready: bool,
+        foreground: bool,
+    ) -> Option<DiagnosticCode> {
+        if self.reported || route == NavigationTarget::Loading || !policy_ready {
+            return None;
+        }
+        self.reported = true;
+        Some(if foreground {
+            DiagnosticCode::WindowPolicyForegroundReady
+        } else {
+            DiagnosticCode::WindowPolicyAccessoryReady
+        })
+    }
+}
+
 impl Render for ShellView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let hide_shell = self.shell;
 
         div()
-            .on_action(move |_: &HideSettings, _, _| hide_shell.hide_main_window())
+            .on_action(move |_: &HideSettings, _, _| {
+                if hide_shell.hide_main_window().is_err() {
+                    report_diagnostic_failure(
+                        DiagnosticCategory::Bridge,
+                        DiagnosticCode::WindowPolicyApplyFailed,
+                    );
+                }
+            })
             .size_full()
             .child(self.screens.clone())
     }
@@ -157,6 +188,7 @@ fn run(
     };
     let runtime_handle = runtime_instance.handle.clone();
     let runtime_instance = Arc::new(Mutex::new(Some(runtime_instance)));
+    let suppress_automatic_window = performance_request.is_some();
 
     let application = Application::new().with_assets(ui::WrenflowAssets);
     let reopen_model = Rc::new(RefCell::new(None::<gpui::Entity<AppModel>>));
@@ -180,7 +212,12 @@ fn run(
             reopen_shell
                 .apply_window_layout(WindowLayout::Settings)
                 .ok();
-            reopen_shell.show_main_window();
+            if reopen_shell.show_main_window().is_err() {
+                report_diagnostic_failure(
+                    DiagnosticCategory::Bridge,
+                    DiagnosticCode::WindowPolicyApplyFailed,
+                );
+            }
         }
     });
     application.run(move |cx: &mut App| {
@@ -260,6 +297,7 @@ fn run(
             Rc::clone(&app_window),
             shell,
             shell_self_test || accessibility_self_test,
+            suppress_automatic_window,
         );
         report_shell_capabilities(&async_runtime, &runtime_handle);
         if wrenflow_runtime::recovery::mark_production_launch_ready().is_err() {
@@ -421,10 +459,12 @@ fn poll_window_policy(
     app_window: AppWindowSlot,
     shell: MacShell,
     force_visible: bool,
+    suppress_automatic_window: bool,
 ) {
     cx.spawn(async move |cx| {
         let mut last_route = None;
         let mut auto_visible = false;
+        let mut terminal_policy = InitialWindowPolicyReporter::default();
         loop {
             Timer::after(Duration::from_millis(40)).await;
             let route = match cx.update(|cx| app_model.read(cx).presentation().active_route) {
@@ -436,11 +476,13 @@ fn poll_window_policy(
             }
             last_route = Some(route);
 
-            let wants_auto_window = force_visible || route_opens_automatically(route);
-            if wants_auto_window && !auto_visible {
-                if cx
-                    .update(|cx| ensure_app_window(cx, &app_model, &app_window))
-                    .is_err()
+            let wants_auto_window =
+                wants_automatic_window(route, force_visible, suppress_automatic_window);
+            let (policy_ready, foreground_ready) = if wants_auto_window {
+                if !auto_visible
+                    && cx
+                        .update(|cx| ensure_app_window(cx, &app_model, &app_window))
+                        .is_err()
                 {
                     report_diagnostic_failure(
                         DiagnosticCategory::Bridge,
@@ -453,20 +495,71 @@ fn poll_window_policy(
                         DiagnosticCategory::Bridge,
                         DiagnosticCode::GpuiWindowLayoutFailed,
                     );
+                    continue;
                 }
-                shell.show_main_window();
-                auto_visible = true;
-            } else if !wants_auto_window && auto_visible {
+                match shell.show_main_window() {
+                    Ok(()) => {
+                        auto_visible = true;
+                        (true, true)
+                    }
+                    Err(_) => {
+                        report_diagnostic_failure(
+                            DiagnosticCategory::Bridge,
+                            DiagnosticCode::WindowPolicyApplyFailed,
+                        );
+                        (false, true)
+                    }
+                }
+            } else if auto_visible {
                 let _ = cx.update(|cx| remove_app_window(cx, &app_window));
-                shell.hide_main_window();
                 auto_visible = false;
-            } else if app_window.borrow().is_some()
-                && shell.apply_window_layout(window_layout(route)).is_err()
-            {
-                report_diagnostic_failure(
-                    DiagnosticCategory::Bridge,
-                    DiagnosticCode::GpuiWindowLayoutFailed,
-                );
+                match shell.hide_main_window() {
+                    Ok(()) => (true, false),
+                    Err(_) => {
+                        report_diagnostic_failure(
+                            DiagnosticCategory::Bridge,
+                            DiagnosticCode::WindowPolicyApplyFailed,
+                        );
+                        (false, false)
+                    }
+                }
+            } else if app_window.borrow().is_some() {
+                if shell.apply_window_layout(window_layout(route)).is_err() {
+                    report_diagnostic_failure(
+                        DiagnosticCategory::Bridge,
+                        DiagnosticCode::GpuiWindowLayoutFailed,
+                    );
+                    continue;
+                }
+                match shell.show_main_window() {
+                    Ok(()) => (true, true),
+                    Err(_) => {
+                        report_diagnostic_failure(
+                            DiagnosticCategory::Bridge,
+                            DiagnosticCode::WindowPolicyApplyFailed,
+                        );
+                        (false, true)
+                    }
+                }
+            } else {
+                match shell.ensure_accessory_policy() {
+                    Ok(()) => (true, false),
+                    Err(_) => {
+                        report_diagnostic_failure(
+                            DiagnosticCategory::Bridge,
+                            DiagnosticCode::WindowPolicyApplyFailed,
+                        );
+                        (false, false)
+                    }
+                }
+            };
+
+            if let Some(code) = terminal_policy.ready(route, policy_ready, foreground_ready) {
+                emit_diagnostic(DiagnosticEvent::new(
+                    DiagnosticCategory::Lifecycle,
+                    DiagnosticLevel::Info,
+                    code,
+                ));
             }
         }
     })
@@ -490,6 +583,14 @@ fn route_opens_automatically(route: NavigationTarget) -> bool {
         route,
         NavigationTarget::Onboarding | NavigationTarget::PermissionRecovery
     )
+}
+
+fn wants_automatic_window(
+    route: NavigationTarget,
+    force_visible: bool,
+    suppress_automatic_window: bool,
+) -> bool {
+    force_visible || (route_opens_automatically(route) && !suppress_automatic_window)
 }
 
 fn poll_shell_events(
@@ -554,7 +655,12 @@ fn poll_shell_events(
                             DiagnosticCode::GpuiWindowLayoutFailed,
                         );
                     }
-                    environment.shell.show_main_window();
+                    if environment.shell.show_main_window().is_err() {
+                        report_diagnostic_failure(
+                            DiagnosticCategory::Bridge,
+                            DiagnosticCode::WindowPolicyApplyFailed,
+                        );
+                    }
                 } else {
                     report_diagnostic_failure(
                         DiagnosticCategory::Lifecycle,
@@ -1374,8 +1480,10 @@ fn launch_at_login_snapshot(observation: LaunchAtLoginObservation) -> LaunchAtLo
 mod tests {
     use super::{
         accessibility_action, begin_update_operation, hotkey_keycode, menu_bar_ready_code,
-        route_opens_automatically, shell_event_action, shell_event_opens_window, window_layout,
-        AppAction, DiagnosticCode, NavigationTarget, RuntimeShellUpdate, ShellEvent, WindowLayout,
+        route_opens_automatically, shell_event_action, shell_event_opens_window,
+        wants_automatic_window, window_layout, AppAction, DiagnosticCode,
+        InitialWindowPolicyReporter, NavigationTarget, RuntimeShellUpdate, ShellEvent,
+        WindowLayout,
     };
     use wrenflow_gpui::ui::AccessibilityAction;
 
@@ -1600,6 +1708,65 @@ mod tests {
                 && accessibility_poller < quit
                 && quit < ready
         );
+    }
+
+    #[test]
+    fn terminal_window_policy_is_truthful_and_emitted_once() {
+        assert!(wants_automatic_window(
+            NavigationTarget::Onboarding,
+            false,
+            false
+        ));
+        assert!(!wants_automatic_window(
+            NavigationTarget::Onboarding,
+            false,
+            true
+        ));
+        assert!(wants_automatic_window(
+            NavigationTarget::PermissionRecovery,
+            true,
+            true
+        ));
+
+        let mut accessory = InitialWindowPolicyReporter::default();
+        assert_eq!(
+            accessory.ready(NavigationTarget::Loading, true, false),
+            None
+        );
+        assert_eq!(
+            accessory.ready(NavigationTarget::Onboarding, false, false),
+            None
+        );
+        assert_eq!(
+            accessory.ready(NavigationTarget::Onboarding, true, false),
+            Some(DiagnosticCode::WindowPolicyAccessoryReady)
+        );
+        assert_eq!(
+            accessory.ready(NavigationTarget::PermissionRecovery, true, true),
+            None
+        );
+
+        let mut foreground = InitialWindowPolicyReporter::default();
+        assert_eq!(
+            foreground.ready(NavigationTarget::PermissionRecovery, true, true),
+            Some(DiagnosticCode::WindowPolicyForegroundReady)
+        );
+        assert_eq!(
+            foreground.ready(NavigationTarget::Settings, true, false),
+            None
+        );
+
+        let source = include_str!("main.rs");
+        assert!(source.contains("let suppress_automatic_window = performance_request.is_some();"));
+        assert!(source.contains(
+            "shell_self_test || accessibility_self_test,\n            suppress_automatic_window,"
+        ));
+        let swift = include_str!("../macos/WrenflowShell.swift");
+        assert!(swift.contains("if NSApp.activationPolicy() == policy { return true }"));
+        assert!(swift.contains("guard let settingsWindow else { return false }"));
+        assert!(swift.contains(
+            "return NSApp.setActivationPolicy(policy) && NSApp.activationPolicy() == policy"
+        ));
     }
 
     #[test]
