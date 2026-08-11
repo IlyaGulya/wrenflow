@@ -46,6 +46,8 @@ jobs:
       - name: Select Xcode 26.3
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+      - name: Install pinned Rust components before parallel tasks
+        run: mise run setup-rust-components
       - name: Verify current macOS support contract
         run: |
           mise exec -- scripts/verify-macos-support.sh ci current
@@ -71,6 +73,8 @@ jobs:
       - name: Select Xcode 16.2
         run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+      - name: Install pinned Rust components before parallel tasks
+        run: mise run setup-rust-components
       - name: Verify minimum macOS support contract
         run: |
           mise exec -- scripts/verify-macos-support.sh ci minimum

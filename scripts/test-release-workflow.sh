@@ -72,6 +72,10 @@ require_pattern "contents: write" "$BUILD_WORKFLOW"
 require_pattern "mise run setup-release-tools" "$BUILD_WORKFLOW"
 require_pattern "Install pinned Rust lint components" "$BUILD_WORKFLOW"
 require_pattern "mise run setup-rust-components" "$BUILD_WORKFLOW"
+if [[ "$(grep -Fc 'run: mise run setup-rust-components' "$BUILD_WORKFLOW")" -ne 3 ]]; then
+    echo "Every Build job that launches parallel Rust tasks must preinstall pinned components" >&2
+    exit 1
+fi
 require_pattern 'rustup component add --toolchain "$RUSTUP_TOOLCHAIN" clippy rustfmt' "$REPO_DIR/mise.toml"
 require_pattern 'ripgrep = "14.1.1"' "$REPO_DIR/mise.toml"
 require_pattern "rg --version" "$REPO_DIR/mise.toml"
