@@ -18,6 +18,7 @@ import math
 import os
 import pathlib
 import plistlib
+import queue
 import re
 import signal
 import shutil
@@ -25,6 +26,7 @@ import sqlite3
 import statistics
 import subprocess
 import sys
+import threading
 import time
 from typing import Any, Iterable
 
@@ -60,6 +62,11 @@ REQUIRED_TEMPLATES = {
     "Time Profiler",
 }
 SUPPORTING_TEMPLATES = {"Power Profiler"}
+SAMPLING_CONTRACT = "fixed-count-monotonic-v1"
+SAMPLING_AVERAGE_GAP_MULTIPLIER = 1.25
+SAMPLING_MAX_GAP_MULTIPLIER = 2.0
+SAMPLING_DEADLINE_EXTRA_INTERVALS = 2.0
+TOP_EVENT_COUNT_MODE = "e"
 HUMAN_COLD_DEFINITION = (
     "human-confirmed first post-boot or >=60-second quiesced LaunchServices start"
 )
@@ -780,6 +787,143 @@ def validate_self_test_diagnostics(
         raise EvidenceError("signed self-test diagnostics do not contain exactly 20 paired unique transcriptions")
 
 
+def idle_wakeup_rate(previous: int, current: int, interval_seconds: float) -> float:
+    if current < previous:
+        raise EvidenceError("top idle-wakeup counter moved backwards")
+    if not math.isfinite(interval_seconds) or interval_seconds <= 0:
+        raise EvidenceError("top sample interval is not a positive finite value")
+    return (current - previous) / interval_seconds
+
+
+def sampling_summary(
+    samples: list[dict[str, Any]],
+    *,
+    baseline_elapsed_seconds: float,
+    baseline_at_unix_ms: int,
+    baseline_idle_wakeups: int,
+    requested_duration_seconds: float,
+    requested_interval_seconds: float,
+    require_full_count: bool,
+    require_full_duration: bool,
+) -> dict[str, Any]:
+    if not samples:
+        raise EvidenceError("sampling phase contains no samples")
+    numeric_inputs = (
+        baseline_elapsed_seconds,
+        requested_duration_seconds,
+        requested_interval_seconds,
+    )
+    if not all(isinstance(value, (int, float)) and math.isfinite(value) for value in numeric_inputs):
+        raise EvidenceError("sampling contract contains a non-finite numeric input")
+    if baseline_elapsed_seconds < 0 or requested_duration_seconds <= 0 or requested_interval_seconds <= 0:
+        raise EvidenceError("sampling contract contains a non-positive duration or interval")
+    if not isinstance(baseline_at_unix_ms, int) or baseline_at_unix_ms <= 0:
+        raise EvidenceError("sampling baseline wall timestamp is invalid")
+    if not isinstance(baseline_idle_wakeups, int) or baseline_idle_wakeups < 0:
+        raise EvidenceError("sampling baseline idle-wakeup counter is invalid")
+
+    expected_count = math.ceil(requested_duration_seconds / requested_interval_seconds)
+    if require_full_count and len(samples) != expected_count:
+        raise EvidenceError(
+            f"sampling phase has {len(samples)} rows; requires exactly {expected_count}"
+        )
+
+    previous_elapsed = float(baseline_elapsed_seconds)
+    previous_wall_ms = baseline_at_unix_ms
+    previous_idle_wakeups = baseline_idle_wakeups
+    observed_intervals: list[float] = []
+    for sample in samples:
+        elapsed = sample.get("elapsed_seconds")
+        wall_ms = sample.get("timestamp_unix_ms")
+        observed_interval = sample.get("observed_interval_seconds")
+        idle_wakeups = sample.get("idle_wakeups_counter")
+        recorded_rate = sample.get("idle_wakeups_per_s")
+        finite_values = (elapsed, observed_interval, recorded_rate)
+        if not all(isinstance(value, (int, float)) and math.isfinite(value) for value in finite_values):
+            raise EvidenceError("sampling row contains a non-finite timing or wakeup value")
+        if not isinstance(wall_ms, int) or wall_ms <= previous_wall_ms:
+            raise EvidenceError("sampling wall timestamps are duplicated or reordered")
+        if not isinstance(idle_wakeups, int) or idle_wakeups < 0:
+            raise EvidenceError("sampling row has an invalid idle-wakeup counter")
+        elapsed = float(elapsed)
+        observed_interval = float(observed_interval)
+        recorded_rate = float(recorded_rate)
+        if elapsed <= previous_elapsed:
+            raise EvidenceError("sampling monotonic timestamps are duplicated or reordered")
+        elapsed_delta = elapsed - previous_elapsed
+        if not math.isclose(observed_interval, elapsed_delta, rel_tol=0.0, abs_tol=0.002):
+            raise EvidenceError("sampling row interval differs from its monotonic timestamp delta")
+        wall_delta = (wall_ms - previous_wall_ms) / 1000.0
+        if abs(wall_delta - observed_interval) > 0.5:
+            raise EvidenceError("sampling wall timestamp drifted from monotonic time")
+        if observed_interval > requested_interval_seconds * SAMPLING_MAX_GAP_MULTIPLIER:
+            raise EvidenceError("sampling phase contains an overlong collection gap")
+        expected_rate = idle_wakeup_rate(
+            previous_idle_wakeups,
+            idle_wakeups,
+            observed_interval,
+        )
+        if not math.isclose(recorded_rate, expected_rate, rel_tol=0.0, abs_tol=0.000002):
+            raise EvidenceError("sampling row idle-wakeup rate does not match its counter delta")
+        observed_intervals.append(observed_interval)
+        previous_elapsed = elapsed
+        previous_wall_ms = wall_ms
+        previous_idle_wakeups = idle_wakeups
+
+    coverage = float(samples[-1]["elapsed_seconds"]) - float(baseline_elapsed_seconds)
+    average_gap = coverage / len(samples)
+    if require_full_duration and coverage + 0.002 < requested_duration_seconds:
+        raise EvidenceError("sampling phase does not cover the requested wall-clock duration")
+    if average_gap > requested_interval_seconds * SAMPLING_AVERAGE_GAP_MULTIPLIER:
+        raise EvidenceError("sampling phase effective cadence is below the allowed bound")
+    maximum_coverage = (
+        SAMPLING_AVERAGE_GAP_MULTIPLIER * expected_count * requested_interval_seconds
+        + SAMPLING_DEADLINE_EXTRA_INTERVALS * requested_interval_seconds
+    )
+    if coverage > maximum_coverage + 0.002:
+        raise EvidenceError("sampling phase exceeded its hard collection deadline")
+
+    return {
+        "contract": SAMPLING_CONTRACT,
+        "baseline_elapsed_seconds": round(float(baseline_elapsed_seconds), 6),
+        "baseline_at_unix_ms": baseline_at_unix_ms,
+        "baseline_idle_wakeups": baseline_idle_wakeups,
+        "target_sample_count": expected_count,
+        "observed_sample_count": len(samples),
+        "wall_coverage_seconds": round(coverage, 6),
+        "average_observed_interval_seconds": round(average_gap, 6),
+        "maximum_observed_interval_seconds": round(max(observed_intervals), 6),
+        "effective_samples_per_second": round(len(samples) / coverage, 6),
+        "average_gap_multiplier_limit": SAMPLING_AVERAGE_GAP_MULTIPLIER,
+        "maximum_gap_multiplier_limit": SAMPLING_MAX_GAP_MULTIPLIER,
+    }
+
+
+def time_weighted_mean(samples: list[dict[str, Any]], key: str) -> float:
+    weighted = sum(
+        float(sample[key]) * float(sample["observed_interval_seconds"])
+        for sample in samples
+    )
+    duration = sum(float(sample["observed_interval_seconds"]) for sample in samples)
+    if duration <= 0 or not math.isfinite(weighted):
+        raise EvidenceError(f"cannot calculate time-weighted {key}")
+    return weighted / duration
+
+
+def start_line_reader(stream: Any) -> queue.Queue[tuple[str, float, int] | None]:
+    lines: queue.Queue[tuple[str, float, int] | None] = queue.Queue()
+
+    def read_lines() -> None:
+        try:
+            for output_line in stream:
+                lines.put((output_line, time.monotonic(), int(time.time() * 1000)))
+        finally:
+            lines.put(None)
+
+    threading.Thread(target=read_lines, name="wrenflow-top-reader", daemon=True).start()
+    return lines
+
+
 def sample_phase(args: argparse.Namespace) -> None:
     app = require_app(args.app)
     output = pathlib.Path(args.output)
@@ -792,11 +936,17 @@ def sample_phase(args: argparse.Namespace) -> None:
         raise EvidenceError("duration must contain at least two sample intervals")
     if args.interval < 1.0 or not args.interval.is_integer():
         raise EvidenceError("macOS top requires a whole-second sample interval of at least one second")
-    sample_total = math.ceil(args.duration / args.interval) + 1
+    # macOS top treats -s as a delay after each collection pass, so its own
+    # overhead makes wall-clock duration an invalid proxy for sample density.
+    # Collect the fixed budget count, then validate the observed cadence and
+    # wall coverage independently against a bounded monotonic deadline.
+    target_sample_count = math.ceil(args.duration / args.interval)
     command = [
         "/usr/bin/top",
+        "-c",
+        TOP_EVENT_COUNT_MODE,
         "-l",
-        str(sample_total + 1),
+        str(target_sample_count + 1),
         "-s",
         str(int(args.interval)),
         "-pid",
@@ -816,20 +966,59 @@ def sample_phase(args: argparse.Namespace) -> None:
     observer_settle = float(getattr(args, "observer_settle_seconds", 0.0))
     samples: list[dict[str, Any]] = []
     previous_idlew: int | None = None
+    previous_row_mono: float | None = None
+    baseline_elapsed_seconds: float | None = None
+    baseline_at_unix_ms: int | None = None
+    baseline_idle_wakeups: int | None = None
+    collection_deadline: float | None = None
     last_fd: int | None = None
     last_fd_at = 0.0
     seen_rows = 0
     assert process.stdout is not None
+    line_queue = start_line_reader(process.stdout)
     try:
-        for line in process.stdout:
+        while True:
+            wait_deadline = collection_deadline
+            if wait_deadline is None:
+                wait_deadline = started_mono + max(30.0, args.interval * 2.0)
+            remaining = wait_deadline - time.monotonic()
+            if remaining <= 0:
+                raise EvidenceError("top exceeded the bounded sampling deadline")
+            try:
+                queued_line = line_queue.get(timeout=remaining)
+            except queue.Empty as error:
+                raise EvidenceError("top exceeded the bounded sampling deadline") from error
+            if queued_line is None:
+                break
+            line, current_mono, current_wall_ms = queued_line
+            if collection_deadline is not None and (
+                current_mono > collection_deadline or time.monotonic() > collection_deadline
+            ):
+                raise EvidenceError("top exceeded the bounded sampling deadline")
+            if not line:
+                raise EvidenceError("top exceeded the bounded sampling deadline")
             fields = line.split()
             if not fields or fields[0] != str(pid) or len(fields) < 6:
                 if expected_auto_exit and exact_pid(identity, required=False) is None:
                     break
                 continue
             seen_rows += 1
+            if not fields[4].isdigit():
+                raise EvidenceError(f"cannot parse absolute top idle-wakeup counter: {fields[4]}")
+            idlew = int(fields[4])
             if seen_rows == 1:
-                previous_idlew = int(fields[4]) if fields[4].isdigit() else None
+                previous_idlew = idlew
+                previous_row_mono = current_mono
+                baseline_elapsed_seconds = current_mono - started_mono
+                baseline_at_unix_ms = current_wall_ms
+                baseline_idle_wakeups = idlew
+                collection_deadline = (
+                    current_mono
+                    + SAMPLING_AVERAGE_GAP_MULTIPLIER
+                    * target_sample_count
+                    * args.interval
+                    + SAMPLING_DEADLINE_EXTRA_INTERVALS * args.interval
+                )
                 if start_signal is not None:
                     if not start_signal.is_absolute() or start_signal.exists() or start_signal.is_symlink():
                         raise EvidenceError("self-test start signal path is unsafe or already exists")
@@ -840,25 +1029,27 @@ def sample_phase(args: argparse.Namespace) -> None:
                         handle.flush()
                         os.fsync(handle.fileno())
                 continue
-            current_mono = time.monotonic()
+            if previous_idlew is None or previous_row_mono is None:
+                raise EvidenceError("top sampling baseline was not captured")
+            observed_interval = current_mono - previous_row_mono
+            wakeups = idle_wakeup_rate(previous_idlew, idlew, observed_interval)
+            previous_idlew = idlew
+            previous_row_mono = current_mono
             fd_measured = False
             if current_mono - last_fd_at >= args.fd_interval or last_fd is None:
                 last_fd = count_fds(pid)
                 last_fd_at = current_mono
                 fd_measured = True
-            idlew = int(fields[4]) if fields[4].isdigit() else None
-            wakeups = None
-            if idlew is not None and previous_idlew is not None and idlew >= previous_idlew:
-                wakeups = (idlew - previous_idlew) / args.interval
-            previous_idlew = idlew
             try:
                 sample = {
-                    "timestamp_unix_ms": int(time.time() * 1000),
+                    "timestamp_unix_ms": current_wall_ms,
                     "elapsed_seconds": round(current_mono - started_mono, 6),
+                    "observed_interval_seconds": round(observed_interval, 6),
                     "cpu_percent": float(fields[1]),
                     "rss_mib": round(parse_memory(fields[2]), 6),
                     "threads": int(fields[3].split("/", 1)[0]),
-                    "idle_wakeups_per_s": round(wakeups, 6) if wakeups is not None else None,
+                    "idle_wakeups_counter": idlew,
+                    "idle_wakeups_per_s": round(wakeups, 6),
                     "energy_impact": float(fields[5]),
                     "file_descriptors": last_fd,
                     "file_descriptors_measured": fd_measured,
@@ -866,7 +1057,7 @@ def sample_phase(args: argparse.Namespace) -> None:
             except ValueError as error:
                 raise EvidenceError(f"cannot parse top row: {line.strip()}") from error
             samples.append(sample)
-            if len(samples) >= sample_total or current_mono - started_mono >= args.duration:
+            if len(samples) >= target_sample_count:
                 break
     finally:
         if process.poll() is None:
@@ -890,10 +1081,26 @@ def sample_phase(args: argparse.Namespace) -> None:
         )
     elif current_executable != identity["executable_path"]:
         raise EvidenceError("candidate process exited or changed identity during sampling")
-    minimum_samples = 20 if expected_auto_exit else math.floor(args.duration / args.interval) - 1
+    minimum_samples = 20 if expected_auto_exit else target_sample_count
     if len(samples) < minimum_samples:
         stderr = process.stderr.read().strip() if process.stderr else ""
         raise EvidenceError(f"insufficient samples ({len(samples)}): {stderr}")
+    if (
+        baseline_elapsed_seconds is None
+        or baseline_at_unix_ms is None
+        or baseline_idle_wakeups is None
+    ):
+        raise EvidenceError("sampling baseline is missing")
+    sampling = sampling_summary(
+        samples,
+        baseline_elapsed_seconds=baseline_elapsed_seconds,
+        baseline_at_unix_ms=baseline_at_unix_ms,
+        baseline_idle_wakeups=baseline_idle_wakeups,
+        requested_duration_seconds=args.duration,
+        requested_interval_seconds=args.interval,
+        require_full_count=not expected_auto_exit,
+        require_full_duration=not expected_auto_exit,
+    )
     ended_ms = int(time.time() * 1000)
     diagnostics_path = pathlib.Path(args.diagnostics)
     diagnostics_start_ms = int(getattr(args, "diagnostics_start_ms", started_ms))
@@ -919,6 +1126,7 @@ def sample_phase(args: argparse.Namespace) -> None:
         "ended_at_unix_ms": ended_ms,
         "requested_duration_seconds": args.duration,
         "sample_interval_seconds": args.interval,
+        "sampling": sampling,
         "samples": samples,
         "diagnostics": diagnostics,
     }
@@ -934,13 +1142,18 @@ def sample_phase(args: argparse.Namespace) -> None:
     wakeups = [sample["idle_wakeups_per_s"] for sample in samples if sample["idle_wakeups_per_s"] is not None]
     energy = [sample["energy_impact"] for sample in samples]
     prefix = args.phase
-    set_metric(result, f"{prefix}.duration_seconds", samples[-1]["elapsed_seconds"], 1)
-    set_metric(result, f"{prefix}.cpu.avg_percent", statistics.fmean(cpu), len(cpu))
+    set_metric(result, f"{prefix}.duration_seconds", sampling["wall_coverage_seconds"], 1)
+    set_metric(result, f"{prefix}.cpu.avg_percent", time_weighted_mean(samples, "cpu_percent"), len(cpu))
     set_metric(result, f"{prefix}.cpu.p95_percent", percentile(cpu), len(cpu))
-    set_metric(result, f"{prefix}.energy.avg_impact", statistics.fmean(energy), len(energy))
+    set_metric(result, f"{prefix}.energy.avg_impact", time_weighted_mean(samples, "energy_impact"), len(energy))
     set_metric(result, f"{prefix}.energy.p95_impact", percentile(energy), len(energy))
     if wakeups:
-        set_metric(result, f"{prefix}.wakeups.avg_per_s", statistics.fmean(wakeups), len(wakeups))
+        set_metric(
+            result,
+            f"{prefix}.wakeups.avg_per_s",
+            time_weighted_mean(samples, "idle_wakeups_per_s"),
+            len(wakeups),
+        )
         set_metric(result, f"{prefix}.wakeups.p95_per_s", percentile(wakeups), len(wakeups))
     current_peak_rss = max(rss)
     prior_peak = result["metrics"].get("memory.peak_mib", {})
@@ -1885,6 +2098,75 @@ def metric_evidence_role(result: dict[str, Any], key: str, metric: dict[str, Any
     return None
 
 
+def check_idle_sampling(result: dict[str, Any], label: str) -> list[str]:
+    failures: list[str] = []
+    phase = result.get("phases", {}).get("idle")
+    idle_metric_keys = {
+        "idle.duration_seconds",
+        "idle.cpu.avg_percent",
+        "idle.cpu.p95_percent",
+        "idle.wakeups.avg_per_s",
+        "idle.wakeups.p95_per_s",
+        "idle.energy.avg_impact",
+        "idle.energy.p95_impact",
+    }
+    if phase is None:
+        if idle_metric_keys & set(result.get("metrics", {})):
+            failures.append(f"{label}: idle metrics have no raw idle sampling phase")
+        return failures
+    if not isinstance(phase, dict) or phase.get("phase") != "idle":
+        return [f"{label}: idle sampling phase has an invalid shape"]
+    samples = phase.get("samples")
+    sampling = phase.get("sampling")
+    if not isinstance(samples, list) or not isinstance(sampling, dict):
+        return [f"{label}: idle sampling phase is missing raw samples or cadence summary"]
+    try:
+        recomputed = sampling_summary(
+            samples,
+            baseline_elapsed_seconds=sampling.get("baseline_elapsed_seconds"),
+            baseline_at_unix_ms=sampling.get("baseline_at_unix_ms"),
+            baseline_idle_wakeups=sampling.get("baseline_idle_wakeups"),
+            requested_duration_seconds=phase.get("requested_duration_seconds"),
+            requested_interval_seconds=phase.get("sample_interval_seconds"),
+            require_full_count=True,
+            require_full_duration=True,
+        )
+        if sampling != recomputed:
+            raise EvidenceError("stored cadence summary differs from raw idle samples")
+        for sample in samples:
+            for key in ("cpu_percent", "energy_impact"):
+                value = sample.get(key)
+                if not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise EvidenceError(f"idle sample has invalid {key}")
+        cpu = [float(sample["cpu_percent"]) for sample in samples]
+        energy = [float(sample["energy_impact"]) for sample in samples]
+        wakeups = [float(sample["idle_wakeups_per_s"]) for sample in samples]
+        expected = {
+            "idle.duration_seconds": (recomputed["wall_coverage_seconds"], 1),
+            "idle.cpu.avg_percent": (time_weighted_mean(samples, "cpu_percent"), len(samples)),
+            "idle.cpu.p95_percent": (percentile(cpu), len(samples)),
+            "idle.wakeups.avg_per_s": (
+                time_weighted_mean(samples, "idle_wakeups_per_s"),
+                len(samples),
+            ),
+            "idle.wakeups.p95_per_s": (percentile(wakeups), len(samples)),
+            "idle.energy.avg_impact": (
+                time_weighted_mean(samples, "energy_impact"),
+                len(samples),
+            ),
+            "idle.energy.p95_impact": (percentile(energy), len(samples)),
+        }
+        for key, (value, sample_count) in expected.items():
+            actual = result.get("metrics", {}).get(key)
+            if not isinstance(actual, dict):
+                raise EvidenceError(f"idle sampling phase is missing derived metric {key}")
+            if actual.get("sample_count") != sample_count or actual.get("value") != round(float(value), 6):
+                raise EvidenceError(f"derived metric {key} differs from raw idle samples")
+    except (EvidenceError, TypeError, ValueError) as error:
+        failures.append(f"{label}: {error}")
+    return failures
+
+
 def check_provenance(result: dict[str, Any], label: str) -> list[str]:
     failures = []
     host = result.get("host", {})
@@ -1897,6 +2179,7 @@ def check_provenance(result: dict[str, Any], label: str) -> list[str]:
         failures.append(f"{label}: evidence is not explicitly sanitized and path-free")
     if result.get("phases", {}).get("signed_self_test", {}).get("model_cache_staged") is True:
         failures.append(f"{label}: cache-staged functional smoke cannot become release evidence")
+    failures.extend(check_idle_sampling(result, label))
     if host.get("missing_required_templates"):
         failures.append(f"{label}: missing Instruments templates: {host['missing_required_templates']}")
     if role == "physical_interactive":

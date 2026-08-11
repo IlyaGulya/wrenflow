@@ -12,6 +12,58 @@ def evidence_hash(result):
     return hashlib.sha256(encoded).hexdigest()
 
 
+def idle_phase_and_metrics():
+    baseline_elapsed = 0.5
+    baseline_wall_ms = 1_000_000
+    baseline_wakeups = 100
+    samples = []
+    for index in range(1800):
+        samples.append({
+            "timestamp_unix_ms": baseline_wall_ms + (index + 1) * 1000,
+            "elapsed_seconds": baseline_elapsed + index + 1,
+            "observed_interval_seconds": 1.0,
+            "cpu_percent": 0.0,
+            "rss_mib": 100.0,
+            "threads": 4,
+            "idle_wakeups_counter": baseline_wakeups,
+            "idle_wakeups_per_s": 0.0,
+            "energy_impact": 0.0,
+            "file_descriptors": 8,
+            "file_descriptors_measured": index % 5 == 0,
+        })
+    sampling = {
+        "contract": "fixed-count-monotonic-v1",
+        "baseline_elapsed_seconds": baseline_elapsed,
+        "baseline_at_unix_ms": baseline_wall_ms,
+        "baseline_idle_wakeups": baseline_wakeups,
+        "target_sample_count": 1800,
+        "observed_sample_count": 1800,
+        "wall_coverage_seconds": 1800.0,
+        "average_observed_interval_seconds": 1.0,
+        "maximum_observed_interval_seconds": 1.0,
+        "effective_samples_per_second": 1.0,
+        "average_gap_multiplier_limit": 1.25,
+        "maximum_gap_multiplier_limit": 2.0,
+    }
+    phase = {
+        "phase": "idle",
+        "requested_duration_seconds": 1800.0,
+        "sample_interval_seconds": 1.0,
+        "sampling": sampling,
+        "samples": samples,
+    }
+    metrics = {
+        "idle.duration_seconds": {"value": 1800.0, "sample_count": 1, "evidence": []},
+        "idle.cpu.avg_percent": {"value": 0.0, "sample_count": 1800, "evidence": []},
+        "idle.cpu.p95_percent": {"value": 0.0, "sample_count": 1800, "evidence": []},
+        "idle.wakeups.avg_per_s": {"value": 0.0, "sample_count": 1800, "evidence": []},
+        "idle.wakeups.p95_per_s": {"value": 0.0, "sample_count": 1800, "evidence": []},
+        "idle.energy.avg_impact": {"value": 0.0, "sample_count": 1800, "evidence": []},
+        "idle.energy.p95_impact": {"value": 0.0, "sample_count": 1800, "evidence": []},
+    }
+    return phase, metrics
+
+
 def make_result(role, budgets):
     metrics = {}
     assigned = set(budgets["evidence_policy"][role])
@@ -35,6 +87,11 @@ def make_result(role, budgets):
                 "sample_count": budget["min_samples"],
                 "evidence": evidence,
             }
+    phases = {}
+    if role == "constrained_noninteractive":
+        idle_phase, idle_metrics = idle_phase_and_metrics()
+        phases["idle"] = idle_phase
+        metrics.update(idle_metrics)
     eligibility = {
         "github_m1_7gb_constrained_preflight": role == "constrained_noninteractive",
         "physical_supported_interactive": role == "physical_interactive",
@@ -65,12 +122,13 @@ def make_result(role, budgets):
         "candidate_id": "synthetic-verifier-fixture",
         "metrics": metrics,
         "phases": ({
+            **phases,
             "post_event_tap_synthetic": {
                 "classification": "post_event_tap_synthetic",
                 "source": "signed_wrenflow_typed_hotkey_callback",
                 "tcc_or_microphone_evidence": False,
             }
-        } if synthetic else {}),
+        } if synthetic else phases),
         "sanitized": True,
         "sealed": True,
     }

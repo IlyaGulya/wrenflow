@@ -17,12 +17,15 @@ mise exec -- python3 -m py_compile "$HARNESS"
 mise exec -- jq -e '
   .schema_version == 1 and
   .budget_version == "gpui-performance-v1" and
+  .workload.idle_seconds == 1800 and
   (.required_instruments_templates | length) == 7 and
   .supporting_instruments_templates == ["Power Profiler"] and
   ((.required_instruments_templates - .supporting_instruments_templates) | length) == 7 and
   ((.supporting_instruments_templates - .required_instruments_templates) | length) == 1 and
   ([.budgets[].comparison] | all(. == "<=" or . == ">=" or . == "==")) and
   ([.budgets[] | select(.metric == "cycles.completed.count" or .metric == "history.rows.count") | .comparison] | all(. == "==")) and
+  ([.budgets[] | select(.metric == "idle.cpu.avg_percent" or .metric == "idle.cpu.p95_percent" or .metric == "idle.energy.avg_impact" or .metric == "idle.energy.p95_impact") | .min_samples] | all(. == 1800)) and
+  ([.budgets[] | select(.metric == "idle.wakeups.avg_per_s" or .metric == "idle.wakeups.p95_per_s") | .min_samples] | all(. == 1799)) and
   ([.evidence_policy.constrained_noninteractive[], .evidence_policy.post_event_tap_synthetic[], .evidence_policy.physical_interactive[]] | length) == (.budgets | length) and
   ([.evidence_policy.constrained_noninteractive[], .evidence_policy.post_event_tap_synthetic[], .evidence_policy.physical_interactive[]] | unique | length) == (.budgets | length)
 ' "$BUDGETS" >/dev/null
@@ -236,6 +239,126 @@ except module["EvidenceError"]:
 else:
     raise SystemExit("cold merge accepted fewer than five fresh-runner shards")
 ' "$HARNESS" "$TEST_ROOT"
+
+mise exec -- python3 -c '
+import copy, io, math, runpy, sys
+module = runpy.run_path(sys.argv[1])
+assert module["TOP_EVENT_COUNT_MODE"] == "e"
+reader = module["start_line_reader"](io.StringIO("header one\nheader two\npid row\n"))
+reader_items = [reader.get(timeout=1) for _ in range(4)]
+assert [item[0] if item is not None else None for item in reader_items] == [
+    "header one\n", "header two\n", "pid row\n", None,
+]
+
+BASELINE_ELAPSED = 0.5
+BASELINE_WALL_MS = 1_000_000
+BASELINE_WAKEUPS = 100
+
+def make_samples(intervals):
+    samples = []
+    elapsed = BASELINE_ELAPSED
+    wall_ms = BASELINE_WALL_MS
+    counter = BASELINE_WAKEUPS
+    for index, interval in enumerate(intervals):
+        elapsed = round(elapsed + interval, 6)
+        wall_ms += max(1, round(interval * 1000))
+        counter += 1
+        samples.append({
+            "timestamp_unix_ms": wall_ms,
+            "elapsed_seconds": elapsed,
+            "observed_interval_seconds": round(interval, 6),
+            "cpu_percent": float(index % 2),
+            "rss_mib": 100.0,
+            "threads": 4,
+            "idle_wakeups_counter": counter,
+            "idle_wakeups_per_s": round(1.0 / interval, 6),
+            "energy_impact": float((index + 1) % 2),
+            "file_descriptors": 8,
+            "file_descriptors_measured": index % 5 == 0,
+        })
+    return samples
+
+def summarize(samples, *, duration=1800.0, require_full_count=True):
+    return module["sampling_summary"](
+        samples,
+        baseline_elapsed_seconds=BASELINE_ELAPSED,
+        baseline_at_unix_ms=BASELINE_WALL_MS,
+        baseline_idle_wakeups=BASELINE_WAKEUPS,
+        requested_duration_seconds=duration,
+        requested_interval_seconds=1.0,
+        require_full_count=require_full_count,
+        require_full_duration=True,
+    )
+
+samples = make_samples([1.11] * 1800)
+summary = summarize(samples)
+assert summary["observed_sample_count"] == 1800
+assert summary["wall_coverage_seconds"] == 1998.0
+assert summary["average_observed_interval_seconds"] == 1.11
+
+def rejected(samples, message, *, duration=1800.0, require_full_count=True):
+    try:
+        summarize(samples, duration=duration, require_full_count=require_full_count)
+    except module["EvidenceError"]:
+        return
+    raise SystemExit(message)
+
+# Exact CI shape: full wall duration but only 1623 rows cannot satisfy unchanged budgets.
+rejected(
+    make_samples([1800.0 / 1623.0] * 1623),
+    "sampling contract accepted the exact undersampled CI shape",
+)
+rejected(make_samples([0.9] * 1800), "sampling contract accepted short wall coverage")
+rejected(make_samples([1.26] * 1800), "sampling contract accepted too-low effective cadence")
+long_gap = make_samples([1.0] * 1799 + [2.01])
+rejected(long_gap, "sampling contract accepted an overlong gap")
+
+duplicate_wall = copy.deepcopy(samples)
+duplicate_wall[10]["timestamp_unix_ms"] = duplicate_wall[9]["timestamp_unix_ms"]
+rejected(duplicate_wall, "sampling contract accepted duplicate wall timestamps")
+forward_wall_jump = copy.deepcopy(samples)
+for sample in forward_wall_jump[10:]:
+    sample["timestamp_unix_ms"] += 5_000
+rejected(forward_wall_jump, "sampling contract accepted a wall-clock jump")
+reordered_mono = copy.deepcopy(samples)
+reordered_mono[10]["elapsed_seconds"] = reordered_mono[9]["elapsed_seconds"]
+rejected(reordered_mono, "sampling contract accepted reordered monotonic timestamps")
+nonfinite = copy.deepcopy(samples)
+nonfinite[10]["observed_interval_seconds"] = math.nan
+rejected(nonfinite, "sampling contract accepted a non-finite interval")
+reset_counter = copy.deepcopy(samples)
+reset_counter[10]["idle_wakeups_counter"] = reset_counter[9]["idle_wakeups_counter"] - 1
+rejected(reset_counter, "sampling contract accepted an idle-wakeup counter reset")
+
+assert math.isclose(module["idle_wakeup_rate"](10, 11, 1.1), 0.909090909, abs_tol=1e-9)
+weighted = [
+    {"cpu_percent": 0.0, "observed_interval_seconds": 1.0},
+    {"cpu_percent": 3.0, "observed_interval_seconds": 2.0},
+]
+assert module["time_weighted_mean"](weighted, "cpu_percent") == 2.0
+
+phase = {
+    "phase": "idle",
+    "requested_duration_seconds": 1800.0,
+    "sample_interval_seconds": 1.0,
+    "sampling": summary,
+    "samples": samples,
+}
+metrics = {}
+def metric(key, value, count):
+    metrics[key] = {"value": round(float(value), 6), "sample_count": count, "evidence": []}
+metric("idle.duration_seconds", summary["wall_coverage_seconds"], 1)
+metric("idle.cpu.avg_percent", module["time_weighted_mean"](samples, "cpu_percent"), 1800)
+metric("idle.cpu.p95_percent", module["percentile"](sample["cpu_percent"] for sample in samples), 1800)
+metric("idle.wakeups.avg_per_s", module["time_weighted_mean"](samples, "idle_wakeups_per_s"), 1800)
+metric("idle.wakeups.p95_per_s", module["percentile"](sample["idle_wakeups_per_s"] for sample in samples), 1800)
+metric("idle.energy.avg_impact", module["time_weighted_mean"](samples, "energy_impact"), 1800)
+metric("idle.energy.p95_impact", module["percentile"](sample["energy_impact"] for sample in samples), 1800)
+result = {"phases": {"idle": phase}, "metrics": metrics}
+assert module["check_idle_sampling"](result, "fixture") == []
+result["metrics"]["idle.cpu.avg_percent"]["value"] += 0.1
+assert any("differs from raw idle samples" in failure for failure in module["check_idle_sampling"](result, "fixture"))
+' "$HARNESS"
 
 if "$FIXTURE_DOWNLOADER" relative-fixture.wav >/dev/null 2>&1; then
     echo "Fixture downloader accepted a relative destination" >&2
