@@ -182,6 +182,15 @@ assert "request_exact_typed_quit(identity, pid)" in self_test_source
 wrapper_source = inspect.getsource(module["run_signed_self_test"])
 assert "write_failure_summary" in wrapper_source
 sample_source = inspect.getsource(module["sample_phase"])
+context_reset = sample_source.index(
+    "replace_sampling_failure_context(failure_context_owner, None)"
+)
+sampler_ended = sample_source.index("process_stderr =")
+context_populated = sample_source.index(
+    "replace_sampling_failure_context(failure_context_owner, current_failure_context)"
+)
+report_validation = sample_source.index("report = validate_self_test_report")
+assert context_reset < sampler_ended < context_populated < report_validation
 accepted_row = sample_source.index("samples.append(sample)")
 observer_ack = sample_source.index("observer_ack_evidence = maybe_create_observer_ack")
 sample_limit = sample_source.index("if len(samples) >= target_sample_count")
@@ -190,6 +199,33 @@ reader_delivery = sample_source.index("reader_delivery_delay =")
 boundary_detection = sample_source.index("new_boundary_correlations = {")
 boundary_fd = sample_source.index("last_fd = count_fds(pid)")
 assert reader_delivery < boundary_detection < boundary_fd < accepted_row
+
+owner = module["argparse"].Namespace(
+    _sampling_failure_context={
+        "sampling_contract": module["IDLE_SAMPLING_CONTRACT"],
+        "row_count": 1800,
+    }
+)
+module["replace_sampling_failure_context"](owner, None)
+assert owner._sampling_failure_context is None
+active_context = {
+    "sampling_contract": module["ACTIVE_SAMPLING_CONTRACT"],
+    "row_count": 47,
+    "history_ready_count": 1,
+    "direct_start_count": 20,
+    "direct_completion_count": 20,
+}
+module["replace_sampling_failure_context"](owner, active_context)
+summary_error = module["failure_summary_error"](
+    module["EvidenceError"]("injected report validation failure"),
+    owner._sampling_failure_context,
+)
+assert isinstance(summary_error, module["SamplingEvidenceError"])
+assert summary_error.details == active_context
+assert summary_error.details["sampling_contract"] == module["ACTIVE_SAMPLING_CONTRACT"]
+assert summary_error.details["row_count"] == 47
+assert summary_error.details["direct_start_count"] == 20
+assert summary_error.details["direct_completion_count"] == 20
 ' "$HARNESS"
 
 mise exec -- python3 -c '

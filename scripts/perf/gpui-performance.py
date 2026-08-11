@@ -1481,6 +1481,27 @@ def sampling_failure_details(
     return details
 
 
+def replace_sampling_failure_context(
+    owner: argparse.Namespace | None,
+    details: dict[str, Any] | None,
+) -> None:
+    if owner is not None:
+        owner._sampling_failure_context = details
+
+
+def failure_summary_error(
+    error: BaseException,
+    context: Any,
+) -> BaseException:
+    if not isinstance(error, SamplingEvidenceError) and isinstance(context, dict):
+        return SamplingEvidenceError(
+            "closed_evidence_failure",
+            "closed performance evidence failure",
+            **context,
+        )
+    return error
+
+
 def sample_phase(args: argparse.Namespace) -> None:
     app = require_app(args.app)
     output = pathlib.Path(args.output)
@@ -1516,6 +1537,11 @@ def sample_phase(args: argparse.Namespace) -> None:
     start_signal_value = getattr(args, "start_signal", None)
     start_signal = pathlib.Path(start_signal_value) if start_signal_value else None
     expected_auto_exit = completion_report is not None
+    sampling_contract = (
+        ACTIVE_SAMPLING_CONTRACT if expected_auto_exit else IDLE_SAMPLING_CONTRACT
+    )
+    failure_context_owner = getattr(args, "failure_context", None)
+    replace_sampling_failure_context(failure_context_owner, None)
     fixture_manifest = getattr(args, "fixture_manifest", None)
     observer_settle = float(getattr(args, "observer_settle_seconds", 0.0))
     observer_ack_value = getattr(args, "observer_ack", None)
@@ -1688,12 +1714,18 @@ def sample_phase(args: argparse.Namespace) -> None:
             process.kill()
             process.wait(timeout=5)
     process_stderr = process.stderr.read() if process.stderr else ""
+    ended_ms = int(time.time() * 1000)
+    diagnostics = read_diagnostics(diagnostics_path, diagnostics_start_ms, ended_ms)
+    current_failure_context = sampling_failure_details(
+        samples,
+        contract=sampling_contract,
+        process_returncode=process.returncode,
+        process_stderr=process_stderr,
+        diagnostics=diagnostics,
+        session_id=observer_session_id,
+    )
+    replace_sampling_failure_context(failure_context_owner, current_failure_context)
     if sampling_loop_error is not None:
-        failed_diagnostics = read_diagnostics(
-            diagnostics_path,
-            diagnostics_start_ms,
-            int(time.time() * 1000),
-        )
         code = (
             sampling_loop_error.code
             if isinstance(sampling_loop_error, SamplingEvidenceError)
@@ -1709,14 +1741,10 @@ def sample_phase(args: argparse.Namespace) -> None:
             str(sampling_loop_error),
             **sampling_failure_details(
                 samples,
-                contract=(
-                    ACTIVE_SAMPLING_CONTRACT
-                    if expected_auto_exit
-                    else IDLE_SAMPLING_CONTRACT
-                ),
+                contract=sampling_contract,
                 process_returncode=process.returncode,
                 process_stderr=process_stderr,
-                diagnostics=failed_diagnostics,
+                diagnostics=diagnostics,
                 session_id=observer_session_id,
                 existing=existing,
             ),
@@ -1750,18 +1778,10 @@ def sample_phase(args: argparse.Namespace) -> None:
             f"insufficient samples ({len(samples)})",
             **sampling_failure_details(
                 samples,
-                contract=(
-                    ACTIVE_SAMPLING_CONTRACT
-                    if expected_auto_exit
-                    else IDLE_SAMPLING_CONTRACT
-                ),
+                contract=sampling_contract,
                 process_returncode=process.returncode,
                 process_stderr=process_stderr,
-                diagnostics=read_diagnostics(
-                    diagnostics_path,
-                    diagnostics_start_ms,
-                    int(time.time() * 1000),
-                ),
+                diagnostics=diagnostics,
                 session_id=observer_session_id,
                 existing={
                     "observed_sample_count": len(samples),
@@ -1775,21 +1795,6 @@ def sample_phase(args: argparse.Namespace) -> None:
         or baseline_idle_wakeups is None
     ):
         raise EvidenceError("sampling baseline is missing")
-    ended_ms = int(time.time() * 1000)
-    diagnostics = read_diagnostics(diagnostics_path, diagnostics_start_ms, ended_ms)
-    sampling_contract = (
-        ACTIVE_SAMPLING_CONTRACT if expected_auto_exit else IDLE_SAMPLING_CONTRACT
-    )
-    failure_context_owner = getattr(args, "failure_context", None)
-    if failure_context_owner is not None:
-        failure_context_owner._sampling_failure_context = sampling_failure_details(
-            samples,
-            contract=sampling_contract,
-            process_returncode=process.returncode,
-            process_stderr=process_stderr,
-            diagnostics=diagnostics,
-            session_id=observer_session_id,
-        )
     try:
         sampling = sampling_summary(
             samples,
@@ -1909,6 +1914,7 @@ def request_exact_typed_quit(identity: dict[str, Any], pid: int) -> None:
 
 
 def _run_signed_self_test(args: argparse.Namespace) -> None:
+    args._sampling_failure_context = None
     args._failure_stage = "preflight"
     app = require_app(args.app)
     fixture, fixture_manifest = validate_transcription_fixture(args.fixture)
@@ -1985,6 +1991,7 @@ def _run_signed_self_test(args: argparse.Namespace) -> None:
         if args.verified_model_cache:
             stage_verified_model_cache(pathlib.Path(args.verified_model_cache), data_root)
 
+        args._sampling_failure_context = None
         args._failure_stage = "idle"
         sample_phase(
             argparse.Namespace(
@@ -2018,6 +2025,7 @@ def _run_signed_self_test(args: argparse.Namespace) -> None:
         idle_result["updated_at"] = now_iso()
         write_json(output, idle_result)
 
+        args._sampling_failure_context = None
         args._failure_stage = "cycles_20"
         sample_phase(
             argparse.Namespace(
@@ -2221,14 +2229,8 @@ def run_signed_self_test(args: argparse.Namespace) -> None:
         _run_signed_self_test(args)
     except BaseException as error:
         if summary_path is not None:
-            summary_error = error
             context = getattr(args, "_sampling_failure_context", None)
-            if not isinstance(error, SamplingEvidenceError) and isinstance(context, dict):
-                summary_error = SamplingEvidenceError(
-                    "closed_evidence_failure",
-                    "closed performance evidence failure",
-                    **context,
-                )
+            summary_error = failure_summary_error(error, context)
             write_failure_summary(
                 summary_path,
                 phase=getattr(args, "_failure_stage", "unknown"),

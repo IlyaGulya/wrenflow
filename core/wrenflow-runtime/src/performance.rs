@@ -795,7 +795,6 @@ async fn activate_model(
                 if snapshot.models.active_model_id.as_deref()
                     == Some(DEFAULT_SELECTED_LOCAL_MODEL_ID) =>
             {
-                let completed = Instant::now();
                 let (loading_started, loading_started_at_unix_ms) =
                     loading_started.ok_or(PerformanceFailureCode::ModelTransition)?;
                 if !models.transcription().is_ready()
@@ -803,6 +802,7 @@ async fn activate_model(
                 {
                     return Err(PerformanceFailureCode::ModelActivation);
                 }
+                let completed = Instant::now();
                 let model_ready_at_unix_ms = unix_ms_after(loading_started_at_unix_ms);
                 return Ok(ModelTimings {
                     activation_started_at_unix_ms,
@@ -1417,6 +1417,25 @@ mod tests {
         assert!(!encoded.contains("audio_file"));
         assert!(!encoded.contains("device"));
         assert!(!encoded.contains("path"));
+    }
+
+    #[test]
+    fn verified_model_ready_endpoint_follows_full_presence_verification() {
+        let source = include_str!("performance.rs");
+        let Some(function) = source.split("async fn activate_model").nth(1) else {
+            panic!("activate_model source must exist");
+        };
+        let Some(verification) = function.find("!model_downloader::is_model_present") else {
+            panic!("activate_model must verify the complete model before reporting readiness");
+        };
+        let Some(completed) = function.find("let completed = Instant::now();") else {
+            panic!("activate_model must capture its verified-ready monotonic endpoint");
+        };
+        let Some(model_ready) = function.find("let model_ready_at_unix_ms") else {
+            panic!("activate_model must capture its verified-ready wall endpoint");
+        };
+        assert!(verification < completed);
+        assert!(completed < model_ready);
     }
 
     #[test]
