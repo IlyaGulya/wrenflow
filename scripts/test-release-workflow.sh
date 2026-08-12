@@ -106,7 +106,7 @@ require_frozen_stable_baseline_contract() {
         grep -Fqx -- "$required" <<< "$publish_block" || return 1
     done
     grep -Fqx -- "    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag == ''" "$file" || return 1
-    [[ "$(grep -Fxc -- "    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag == ''" "$file")" -eq 2 ]] || return 1
+    [[ "$(grep -Fxc -- "    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag == ''" "$file")" -eq 3 ]] || return 1
     grep -Fqx -- '      verifier_source_commit: e233cc6db6b37307e9774db228ab11ecc4d0673c' "$release_file" || return 1
     [[ "$(grep -Fxc -- '      verifier_source_commit: e233cc6db6b37307e9774db228ab11ecc4d0673c' "$release_file")" -eq 1 ]] || return 1
     grep -Fqx -- '      actions: read' "$release_file" || return 1
@@ -124,7 +124,7 @@ require_frozen_source_history_contract() {
     ' "$file")"
     compatibility_block="$(awk '
         $0 == "  compatibility-minimum:" { capture = 1 }
-        capture && $0 == "  build_release:" { exit }
+        capture && $0 == "  verify_private_release_draft:" { exit }
         capture { print }
     ' "$file")"
     build_block="$(awk '
@@ -144,6 +144,65 @@ require_frozen_source_history_contract() {
     [[ "$(grep -Fxc -- '        run: mise run test' <<< "$compatibility_block")" -eq 1 ]] || return 1
     [[ "$(grep -Fxc -- '          mise run test' <<< "$build_block")" -eq 1 ]] || return 1
     ! grep -Fqx -- '          fetch-depth: 0' <<< "$verify_pr_block"
+}
+
+workflow_job_block() {
+    local file="$1"
+    local job="$2"
+    awk -v target="  $job:" '
+        $0 == target { capture = 1 }
+        capture && $0 != target && $0 ~ /^  [A-Za-z0-9_-]+:$/ { exit }
+        capture { print }
+    ' "$file"
+}
+
+require_private_draft_permission_contract() {
+    local build="$1"
+    local release="$2"
+    local promotion="$3"
+    local preflight build_release publish beta_verify stable_verify compatibility frozen verify_pr promote
+    preflight="$(workflow_job_block "$build" verify_private_release_draft)"
+    build_release="$(workflow_job_block "$build" build_release)"
+    publish="$(workflow_job_block "$build" publish)"
+    beta_verify="$(workflow_job_block "$build" verify_staged_or_published)"
+    stable_verify="$(workflow_job_block "$build" verify_staged_release)"
+    compatibility="$(workflow_job_block "$build" compatibility-minimum)"
+    frozen="$(workflow_job_block "$build" verify_frozen_performance_baseline)"
+    verify_pr="$(workflow_job_block "$build" verify-pr)"
+    promote="$(workflow_job_block "$promotion" promote)"
+    [[ -n "$preflight" && -n "$build_release" && -n "$publish" &&
+       -n "$beta_verify" && -n "$stable_verify" && -n "$compatibility" &&
+       -n "$frozen" && -n "$verify_pr" && -n "$promote" ]] || return 1
+
+    [[ "$(grep -Fxc -- '      contents: write' <<< "$preflight")" -eq 1 ]] || return 1
+    grep -Fqx -- "    if: inputs.release_tag != ''" <<< "$preflight" || return 1
+    grep -Fqx -- '      - name: Require exact empty tagless private stable draft' <<< "$preflight" || return 1
+    grep -Fqx -- '    needs: verify_private_release_draft' <<< "$build_release" || return 1
+    grep -Fqx -- "          (inputs.release_tag == '' || needs.verify_private_release_draft.result == 'success') }}" \
+        <<< "$build_release" || return 1
+
+    local block
+    for block in "$build_release" "$beta_verify" "$compatibility" "$frozen" "$verify_pr"; do
+        [[ "$(grep -Fxc -- '      contents: read' <<< "$block")" -eq 1 ]] || return 1
+        ! grep -Fqx -- '      contents: write' <<< "$block" || return 1
+    done
+    grep -Fqx -- "    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag == ''" \
+        <<< "$beta_verify" || return 1
+    ! grep -Fq -- 'private-release-api.py' <<< "$beta_verify" || return 1
+
+    [[ "$(grep -Fxc -- '      contents: write' <<< "$stable_verify")" -eq 1 ]] || return 1
+    grep -Fqx -- "    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag != ''" \
+        <<< "$stable_verify" || return 1
+    grep -Fqx -- '      - name: Re-download and verify immutable private stable candidate' \
+        <<< "$stable_verify" || return 1
+    grep -Fq -- 'private-release-api.py download' <<< "$stable_verify" || return 1
+
+    [[ "$(grep -Fxc -- '      contents: write' <<< "$publish")" -eq 1 ]] || return 1
+    grep -Fq -- 'private-release-api.py upload' <<< "$publish" || return 1
+    [[ "$(grep -Fxc -- '      contents: write' "$build")" -eq 3 ]] || return 1
+    [[ "$(grep -Fxc -- '      contents: write' <<< "$promote")" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc -- '      contents: write' "$release")" -eq 2 ]] || return 1
+    grep -Fqx -- '      actions: read' "$release" || return 1
 }
 
 require_pattern "workflow_call:" "$BUILD_WORKFLOW"
@@ -226,6 +285,8 @@ require_pattern '[tasks.test-frozen-performance-baseline]' "$REPO_DIR/mise.toml"
 require_pattern 'scripts/verify-frozen-performance-baseline.py' "$REPO_DIR/mise.toml"
 require_frozen_stable_baseline_contract "$BUILD_WORKFLOW"
 require_frozen_source_history_contract "$BUILD_WORKFLOW"
+require_private_draft_permission_contract \
+    "$BUILD_WORKFLOW" "$RELEASE_WORKFLOW" "$PROMOTION_WORKFLOW"
 require_pattern "scripts/perf/gpui-performance.py merge-cold" "$BUILD_WORKFLOW"
 require_pattern '[[ ${#COLD_SHARDS[@]} -eq 20 ]]' "$BUILD_WORKFLOW"
 require_pattern 'MERGE_ARGS+=(--shard "$shard")' "$BUILD_WORKFLOW"
@@ -257,6 +318,7 @@ require_pattern '${{ env.PERFORMANCE_REPORT }}' "$BUILD_WORKFLOW"
 require_pattern "Upload sanitized constrained evidence" "$BUILD_WORKFLOW"
 require_pattern "publish:" "$BUILD_WORKFLOW"
 require_pattern "verify_staged_or_published:" "$BUILD_WORKFLOW"
+require_pattern "verify_staged_release:" "$BUILD_WORKFLOW"
 require_pattern "contents: read" "$BUILD_WORKFLOW"
 require_pattern "contents: write" "$BUILD_WORKFLOW"
 require_pattern "mise run setup-release-tools" "$BUILD_WORKFLOW"
@@ -668,6 +730,90 @@ PY
 expect_frozen_history_rejected unnecessary-pr-history \
     "$REPO_SCOPE_FIXTURE/build-frozen-unnecessary-pr-history.yml"
 
+expect_private_permission_rejected() {
+    local label="$1"
+    local build="${2:-$BUILD_WORKFLOW}"
+    local release="${3:-$RELEASE_WORKFLOW}"
+    local promotion="${4:-$PROMOTION_WORKFLOW}"
+    if require_private_draft_permission_contract "$build" "$release" "$promotion"; then
+        echo "Private draft permission audit accepted $label" >&2
+        exit 1
+    fi
+}
+
+mutate_job_permission() {
+    local input="$1"
+    local output="$2"
+    local job="$3"
+    local before="$4"
+    local after="$5"
+    mise exec -- python3 - "$input" "$output" "$job" "$before" "$after" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+source = Path(sys.argv[1]).read_text()
+target = f"  {sys.argv[3]}:\n"
+start = source.index(target)
+match = re.search(r"^  [A-Za-z0-9_-]+:\n", source[start + len(target):], re.MULTILINE)
+end = len(source) if match is None else start + len(target) + match.start()
+block = source[start:end]
+before = f"      contents: {sys.argv[4]}\n"
+after = f"      contents: {sys.argv[5]}\n"
+if block.count(before) != 1:
+    raise SystemExit(f"permission fixture drifted for {sys.argv[3]}")
+Path(sys.argv[2]).write_text(source[:start] + block.replace(before, after, 1) + source[end:])
+PY
+}
+
+mutate_job_permission "$BUILD_WORKFLOW" \
+    "$REPO_SCOPE_FIXTURE/build-private-preflight-read.yml" \
+    verify_private_release_draft write read
+expect_private_permission_rejected private-preflight-read \
+    "$REPO_SCOPE_FIXTURE/build-private-preflight-read.yml"
+
+mutate_job_permission "$BUILD_WORKFLOW" \
+    "$REPO_SCOPE_FIXTURE/build-release-write.yml" \
+    build_release read write
+expect_private_permission_rejected beta-build-write \
+    "$REPO_SCOPE_FIXTURE/build-release-write.yml"
+
+mutate_job_permission "$BUILD_WORKFLOW" \
+    "$REPO_SCOPE_FIXTURE/build-beta-verify-write.yml" \
+    verify_staged_or_published read write
+expect_private_permission_rejected beta-verify-write \
+    "$REPO_SCOPE_FIXTURE/build-beta-verify-write.yml"
+
+mutate_job_permission "$BUILD_WORKFLOW" \
+    "$REPO_SCOPE_FIXTURE/build-stable-verify-read.yml" \
+    verify_staged_release write read
+expect_private_permission_rejected stable-verify-read \
+    "$REPO_SCOPE_FIXTURE/build-stable-verify-read.yml"
+
+mutate_job_permission "$BUILD_WORKFLOW" \
+    "$REPO_SCOPE_FIXTURE/build-pr-write.yml" \
+    verify-pr read write
+expect_private_permission_rejected untrusted-pr-write \
+    "$REPO_SCOPE_FIXTURE/build-pr-write.yml"
+
+mutate_job_permission "$BUILD_WORKFLOW" \
+    "$REPO_SCOPE_FIXTURE/build-publish-read.yml" \
+    publish write read
+expect_private_permission_rejected release-publish-read \
+    "$REPO_SCOPE_FIXTURE/build-publish-read.yml"
+
+mutate_job_permission "$PROMOTION_WORKFLOW" \
+    "$REPO_SCOPE_FIXTURE/promotion-read.yml" \
+    promote write read
+expect_private_permission_rejected promotion-read \
+    "$BUILD_WORKFLOW" "$RELEASE_WORKFLOW" "$REPO_SCOPE_FIXTURE/promotion-read.yml"
+
+mutate_job_permission "$RELEASE_WORKFLOW" \
+    "$REPO_SCOPE_FIXTURE/release-caller-read.yml" \
+    build-staged-stable-release write read
+expect_private_permission_rejected reusable-caller-read \
+    "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/release-caller-read.yml" "$PROMOTION_WORKFLOW"
+
 validate_empty_tagless_draft_fixture() {
     local release_json="$1"
     local refs_json="$2"
@@ -825,8 +971,9 @@ audit_tagless_source_contract() {
     require_pattern "Require exact empty tagless private stable draft" "$build"
     require_pattern 'git/matching-refs/tags/$RELEASE_TAG' "$build"
     require_pattern '([.[] | select(.ref == $ref)] | length) == 0' "$build"
-    if [[ "$(grep -Fc 'ref: ${{ inputs.release_source_commit || github.sha }}' "$build")" -ne 2 ]]; then
-        echo "Stable build and minimum-OS jobs must both checkout the explicit release source" >&2
+    if [[ "$(grep -Fc 'ref: ${{ inputs.release_source_commit || github.sha }}' "$build")" -ne 2 ]] || \
+       [[ "$(grep -Fc 'ref: ${{ inputs.release_source_commit }}' "$build")" -ne 1 ]]; then
+        echo "Stable preflight, build, and minimum-OS jobs must checkout the explicit release source" >&2
         return 1
     fi
     reject_pattern 'TAG_COMMIT=$(git rev-list -n 1 "$TAG")' "$build"

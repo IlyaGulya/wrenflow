@@ -136,34 +136,24 @@ jobs:
       - name: Verify minimum support bundle
         run: mise exec -- scripts/verify-macos-support.sh bundle build/gpui/Wrenflow.app
 
-  build_release:
-    if: github.event_name != 'pull_request'
-    runs-on: macos-26
-    timeout-minutes: 45
+  verify_private_release_draft:
+    if: inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
-      contents: read
-    outputs:
-      skip: ${{ steps.skip.outputs.skip }}
-      publish_tag: ${{ steps.version.outputs.tag }}
-      source_commit: ${{ steps.version.outputs.source_commit }}
+      contents: write
     env:
-      HAS_SIGNING_CERT: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 != '' && secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD != '' && secrets.KEYCHAIN_PASSWORD != '' }}
-      HAS_NOTARIZE: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
       RELEASE_TAG: ${{ inputs.release_tag }}
       RELEASE_ID: ${{ inputs.release_id }}
       RELEASE_TOOL_SOURCE_COMMIT: ${{ inputs.release_tool_source_commit }}
       RELEASE_SOURCE_COMMIT: ${{ inputs.release_source_commit }}
-      IS_RELEASE: ${{ inputs.release_tag != '' }}
-      IS_BETA: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.release_tag == '' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.release_source_commit || github.sha }}
-          fetch-depth: 0
+          ref: ${{ inputs.release_source_commit }}
           persist-credentials: false
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        if: inputs.release_tag != ''
         with:
           ref: ${{ inputs.release_tool_source_commit }}
           path: .release-workflow
@@ -172,7 +162,6 @@ jobs:
           persist-credentials: false
 
       - name: Require reviewed private draft tooling source
-        if: inputs.release_tag != ''
         run: |
           if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "aa025228f4f8d12e29c866b6be43eb2c0bf0834c" ] || \
              [ "$(git -C .release-workflow rev-parse HEAD)" != "$RELEASE_TOOL_SOURCE_COMMIT" ]; then
@@ -180,26 +169,9 @@ jobs:
             exit 1
           fi
 
-      - name: Check if release-please commit
-        id: skip
-        run: |
-          MSG=$(git log -1 --pretty=%s)
-          if [ "${{ env.IS_BETA }}" = "true" ] && echo "$MSG" | grep -qE '^chore\(main\): release'; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Select Xcode 26.3
-        if: steps.skip.outputs.skip != 'true'
-        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
-
-      - name: Install mise
-        if: steps.skip.outputs.skip != 'true'
-        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
 
       - name: Require exact empty tagless private stable draft
-        if: steps.skip.outputs.skip != 'true' && env.IS_RELEASE == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RECOVERY_CONFIRMATION: ${{ inputs.confirmation }}
@@ -228,16 +200,63 @@ jobs:
             --source "$RELEASE_SOURCE_COMMIT" \
             --state empty \
             --output stable-release-source.json
-          gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" \
+          mise exec -- gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" \
             > stable-tag-refs.json
-          jq -e --argjson id "$RELEASE_ID" --arg tag "$RELEASE_TAG" --arg source "$RELEASE_SOURCE_COMMIT" '
+          # shellcheck disable=SC2016
+          mise exec -- jq -e --argjson id "$RELEASE_ID" --arg tag "$RELEASE_TAG" --arg source "$RELEASE_SOURCE_COMMIT" '
             (keys | sort) == (["assets", "id", "isDraft", "isPrerelease", "tagName", "targetCommitish"] | sort) and
             .id == $id and .tagName == $tag and .targetCommitish == $source and
             .isDraft == true and .isPrerelease == false and .assets == []
           ' stable-release-source.json >/dev/null
-          jq -e --arg ref "refs/tags/$RELEASE_TAG" '
+          # shellcheck disable=SC2016
+          mise exec -- jq -e --arg ref "refs/tags/$RELEASE_TAG" '
             type == "array" and ([.[] | select(.ref == $ref)] | length) == 0
           ' stable-tag-refs.json >/dev/null
+
+  build_release:
+    needs: verify_private_release_draft
+    if: >-
+      ${{ always() && github.event_name != 'pull_request' &&
+          (inputs.release_tag == '' || needs.verify_private_release_draft.result == 'success') }}
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      skip: ${{ steps.skip.outputs.skip }}
+      publish_tag: ${{ steps.version.outputs.tag }}
+      source_commit: ${{ steps.version.outputs.source_commit }}
+    env:
+      HAS_SIGNING_CERT: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 != '' && secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD != '' && secrets.KEYCHAIN_PASSWORD != '' }}
+      HAS_NOTARIZE: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      RELEASE_SOURCE_COMMIT: ${{ inputs.release_source_commit }}
+      IS_RELEASE: ${{ inputs.release_tag != '' }}
+      IS_BETA: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.release_tag == '' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.release_source_commit || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check if release-please commit
+        id: skip
+        run: |
+          MSG=$(git log -1 --pretty=%s)
+          if [ "${{ env.IS_BETA }}" = "true" ] && echo "$MSG" | grep -qE '^chore\(main\): release'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Select Xcode 26.3
+        if: steps.skip.outputs.skip != 'true'
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+
+      - name: Install mise
+        if: steps.skip.outputs.skip != 'true'
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
 
       - name: Install pinned Rust lint components
         if: steps.skip.outputs.skip != 'true'
@@ -954,15 +973,12 @@ jobs:
 
   verify_staged_or_published:
     needs: [build_release, publish]
-    if: needs.build_release.outputs.skip != 'true'
+    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag == ''
     runs-on: macos-26
     timeout-minutes: 15
     permissions:
       contents: read
     env:
-      RELEASE_ID: ${{ inputs.release_id }}
-      RELEASE_TOOL_SOURCE_COMMIT: ${{ inputs.release_tool_source_commit }}
-      IS_RELEASE: ${{ inputs.release_tag != '' }}
       PUBLISH_TAG: ${{ needs.build_release.outputs.publish_tag }}
       SOURCE_COMMIT: ${{ needs.build_release.outputs.source_commit }}
     steps:
@@ -970,41 +986,15 @@ jobs:
         with:
           ref: ${{ needs.build_release.outputs.source_commit }}
           persist-credentials: false
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        if: env.IS_RELEASE == 'true'
-        with:
-          ref: ${{ inputs.release_tool_source_commit }}
-          path: .release-workflow
-          sparse-checkout: scripts/private-release-api.py
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-      - name: Require reviewed private draft tooling source
-        if: env.IS_RELEASE == 'true'
-        run: |
-          if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "aa025228f4f8d12e29c866b6be43eb2c0bf0834c" ] || \
-             [ "$(git -C .release-workflow rev-parse HEAD)" != "$RELEASE_TOOL_SOURCE_COMMIT" ]; then
-            echo "Private draft tooling does not match the reviewed immutable source" >&2
-            exit 1
-          fi
       - name: Select Xcode 26.3
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
-      - name: Re-download and verify immutable staged or published candidate
+      - name: Re-download and verify immutable published beta candidate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p downloaded
-          if [ "$IS_RELEASE" = "true" ]; then
-            mise exec -- python3 .release-workflow/scripts/private-release-api.py download \
-              --repo "$GITHUB_REPOSITORY" \
-              --release-id "$RELEASE_ID" \
-              --tag "$PUBLISH_TAG" \
-              --source "$SOURCE_COMMIT" \
-              --state staged \
-              --directory "$PWD/downloaded"
-          else
-            gh release download "$PUBLISH_TAG" --repo "$GITHUB_REPOSITORY" --dir downloaded
-          fi
+          gh release download "$PUBLISH_TAG" --repo "$GITHUB_REPOSITORY" --dir downloaded
           (cd downloaded && shasum -a 256 -c SHA256SUMS)
           SOURCE=$(jq -r '.source.commit' downloaded/release-evidence.json)
           EVIDENCE_SHA=$(jq -r '.artifact.sha256' downloaded/release-evidence.json)
@@ -1014,6 +1004,70 @@ jobs:
             exit 1
           fi
           VERIFY_ROOT=$(mktemp -d /tmp/wrenflow-published.XXXXXX)
+          MOUNT="$VERIFY_ROOT/mount"
+          mkdir "$MOUNT"
+          trap 'hdiutil detach "$MOUNT" >/dev/null 2>&1 || true; rm -rf "$VERIFY_ROOT"' EXIT
+          hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" downloaded/Wrenflow.dmg
+          ditto "$MOUNT/Wrenflow.app" "$VERIFY_ROOT/Wrenflow.app"
+          hdiutil detach "$MOUNT"
+          scripts/verify-release-artifact.sh \
+            "$VERIFY_ROOT/Wrenflow.app" downloaded/Wrenflow.dmg --require-notarized
+
+  verify_staged_release:
+    needs: [build_release, publish]
+    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag != ''
+    runs-on: macos-26
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      RELEASE_ID: ${{ inputs.release_id }}
+      RELEASE_TOOL_SOURCE_COMMIT: ${{ inputs.release_tool_source_commit }}
+      PUBLISH_TAG: ${{ needs.build_release.outputs.publish_tag }}
+      SOURCE_COMMIT: ${{ needs.build_release.outputs.source_commit }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.build_release.outputs.source_commit }}
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.release_tool_source_commit }}
+          path: .release-workflow
+          sparse-checkout: scripts/private-release-api.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Require reviewed private draft tooling source
+        run: |
+          if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "aa025228f4f8d12e29c866b6be43eb2c0bf0834c" ] || \
+             [ "$(git -C .release-workflow rev-parse HEAD)" != "$RELEASE_TOOL_SOURCE_COMMIT" ]; then
+            echo "Private draft tooling does not match the reviewed immutable source" >&2
+            exit 1
+          fi
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+      - name: Re-download and verify immutable private stable candidate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p downloaded
+          mise exec -- python3 .release-workflow/scripts/private-release-api.py download \
+            --repo "$GITHUB_REPOSITORY" \
+            --release-id "$RELEASE_ID" \
+            --tag "$PUBLISH_TAG" \
+            --source "$SOURCE_COMMIT" \
+            --state staged \
+            --directory "$PWD/downloaded"
+          (cd downloaded && shasum -a 256 -c SHA256SUMS)
+          SOURCE=$(jq -r '.source.commit' downloaded/release-evidence.json)
+          EVIDENCE_SHA=$(jq -r '.artifact.sha256' downloaded/release-evidence.json)
+          ACTUAL_SHA=$(shasum -a 256 downloaded/Wrenflow.dmg | awk '{print $1}')
+          if [ "$SOURCE" != "$SOURCE_COMMIT" ] || [ "$EVIDENCE_SHA" != "$ACTUAL_SHA" ]; then
+            echo "Staged candidate does not match source/evidence" >&2
+            exit 1
+          fi
+          VERIFY_ROOT=$(mktemp -d /tmp/wrenflow-staged.XXXXXX)
           MOUNT="$VERIFY_ROOT/mount"
           mkdir "$MOUNT"
           trap 'hdiutil detach "$MOUNT" >/dev/null 2>&1 || true; rm -rf "$VERIFY_ROOT"' EXIT

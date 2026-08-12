@@ -103,7 +103,9 @@ verify_source_contract() {
 
     rg -F 'Refuse to overwrite staged or published candidate bytes' \
         "$REPO_DIR/.github/workflows/build.yml" >/dev/null
-    rg -F 'Re-download and verify immutable staged or published candidate' \
+    rg -F 'Re-download and verify immutable published beta candidate' \
+        "$REPO_DIR/.github/workflows/build.yml" >/dev/null
+    rg -F 'Re-download and verify immutable private stable candidate' \
         "$REPO_DIR/.github/workflows/build.yml" >/dev/null
     rg -F 'Require exact empty tagless private stable draft' \
         "$REPO_DIR/.github/workflows/build.yml" >/dev/null
