@@ -23,6 +23,7 @@ import re
 import signal
 import shutil
 import sqlite3
+import stat
 import statistics
 import subprocess
 import sys
@@ -43,6 +44,16 @@ SELF_TEST_OBSERVER_ACK_NAME = "performance-observer-ack-v1"
 INTERACTION_ENV = "WRENFLOW_PERFORMANCE_INTERACTION"
 INTERACTION_CONTRACT = "synthetic-in-process-v1"
 INTERACTION_REPORT_NAME = "performance-interaction-v1.json"
+RETAINED_UI_ENV = "WRENFLOW_PERFORMANCE_RETAINED_UI"
+RETAINED_UI_CONTRACT = "physical-instruments-v1"
+RETAINED_WORKLOAD_NAME = "performance-retained-workload-v1.json"
+RETAINED_WORKLOAD_READY_NAME = "performance-retained-workload-ready-v1"
+RETAINED_WORKLOAD_ACK_NAME = "performance-retained-workload-ack-v1"
+RETAINED_UI_NAME = "performance-retained-ui-v1.json"
+RETAINED_UI_READY_NAME = "performance-retained-ui-ready-v1"
+RETAINED_EXIT_ACK_NAME = "performance-retained-exit-ack-v1"
+RETAINED_WORKLOAD_CONTRACT = "gpui-performance-retained-workload-v1"
+RETAINED_UI_CHECKPOINT_CONTRACT = "gpui-performance-retained-ui-v1"
 INTERACTION_PULSE_HOLD_MS = 350.0
 SELF_TEST_START_NAME = "performance-start-v1"
 CURRENT_DATA_NAMESPACE = "me.gulya.wrenflow/gpui-v1"
@@ -735,6 +746,187 @@ def validate_self_test_report(
         raise EvidenceError("signed self-test must report exactly 20 finite cycle timings")
     validate_self_test_timeline(timings)
     return report
+
+
+def retained_paths(data_root: pathlib.Path) -> dict[str, pathlib.Path]:
+    return {
+        "workload": data_root / RETAINED_WORKLOAD_NAME,
+        "workload_ready": data_root / RETAINED_WORKLOAD_READY_NAME,
+        "workload_ack": data_root / RETAINED_WORKLOAD_ACK_NAME,
+        "ui": data_root / RETAINED_UI_NAME,
+        "ui_ready": data_root / RETAINED_UI_READY_NAME,
+        "exit_ack": data_root / RETAINED_EXIT_ACK_NAME,
+    }
+
+
+def validate_exact_root_child(
+    path: pathlib.Path,
+    *,
+    data_root: pathlib.Path,
+    name: str,
+    require_existing: bool,
+    require_empty: bool,
+) -> None:
+    if (
+        not path.is_absolute()
+        or path != data_root / name
+        or data_root.is_symlink()
+        or not data_root.is_dir()
+    ):
+        raise EvidenceError(f"{name} must be the exact disposable-root child")
+    if require_existing:
+        if path.is_symlink() or not path.is_file():
+            raise EvidenceError(f"{name} must be an existing regular non-symlink file")
+        if stat.S_IMODE(path.stat().st_mode) != 0o600:
+            raise EvidenceError(f"{name} must have exact mode 0600")
+        if require_empty and path.stat().st_size != 0:
+            raise EvidenceError(f"{name} must be zero-byte")
+    elif path.exists() or path.is_symlink():
+        raise EvidenceError(f"{name} already exists")
+
+
+def create_exact_empty_ack(path: pathlib.Path, *, data_root: pathlib.Path, name: str) -> None:
+    validate_exact_root_child(
+        path,
+        data_root=data_root,
+        name=name,
+        require_existing=False,
+        require_empty=True,
+    )
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.flush()
+        os.fsync(handle.fileno())
+    directory = os.open(data_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    validate_exact_root_child(
+        path,
+        data_root=data_root,
+        name=name,
+        require_existing=True,
+        require_empty=True,
+    )
+
+
+def validate_retained_checkpoint(
+    path: pathlib.Path,
+    *,
+    data_root: pathlib.Path,
+    expected_pid: int,
+    expected_session_id: str,
+    fixture_manifest: dict[str, Any],
+    phase: str,
+) -> dict[str, Any]:
+    if phase not in {"workload_observed", "ui_retained"}:
+        raise EvidenceError("retained checkpoint phase is not a closed contract value")
+    name = RETAINED_WORKLOAD_NAME if phase == "workload_observed" else RETAINED_UI_NAME
+    validate_exact_root_child(
+        path,
+        data_root=data_root,
+        name=name,
+        require_existing=True,
+        require_empty=False,
+    )
+    if path.stat().st_size <= 0 or path.stat().st_size > 64 * 1024:
+        raise EvidenceError("retained checkpoint has an invalid bounded size")
+    checkpoint = read_json(path)
+    validate_retained_checkpoint_document(
+        checkpoint,
+        expected_pid=expected_pid,
+        expected_session_id=expected_session_id,
+        fixture_manifest=fixture_manifest,
+        phase=phase,
+    )
+    return checkpoint
+
+
+def validate_retained_checkpoint_document(
+    checkpoint: Any,
+    *,
+    expected_pid: int,
+    expected_session_id: str,
+    fixture_manifest: dict[str, Any],
+    phase: str,
+) -> None:
+    if phase not in {"workload_observed", "ui_retained"}:
+        raise EvidenceError("retained checkpoint phase is not a closed contract value")
+    contract = (
+        RETAINED_WORKLOAD_CONTRACT
+        if phase == "workload_observed"
+        else RETAINED_UI_CHECKPOINT_CONTRACT
+    )
+    expected_keys = {
+        "schema_version",
+        "contract",
+        "phase",
+        "fixture",
+        "process",
+        "session_id",
+        "model",
+        "requested",
+        "completed",
+        "history",
+        "timings",
+        "observer_acknowledged",
+        "interaction_completed",
+        "retained_exit_acknowledged",
+        "passed",
+    }
+    audio = fixture_manifest.get("audio", {})
+    expected_fixture = {
+        "id": fixture_manifest.get("fixture_id"),
+        "sha256": fixture_manifest.get("sha256"),
+        "bytes": fixture_manifest.get("bytes"),
+        "channels": audio.get("channels"),
+        "sample_rate_hz": audio.get("sample_rate_hz"),
+        "bits_per_sample": audio.get("bits_per_sample"),
+        "duration_ms": int(float(audio.get("duration_seconds", 0)) * 1_000),
+    }
+    if (
+        not isinstance(checkpoint, dict)
+        or set(checkpoint) != expected_keys
+        or checkpoint.get("schema_version") != 1
+        or checkpoint.get("contract") != contract
+        or checkpoint.get("phase") != phase
+        or checkpoint.get("fixture") != expected_fixture
+        or checkpoint.get("process") != {"pid": expected_pid}
+        or checkpoint.get("session_id") != expected_session_id
+        or checkpoint.get("model")
+        != {
+            "id": DEFAULT_MODEL_ID,
+            "revision": DEFAULT_MODEL_REVISION,
+            "engine_instances": 1,
+            "warmed": True,
+            "downloaded": True,
+        }
+        or checkpoint.get("requested") != {"cycles": 20, "history_rows": 50}
+        or checkpoint.get("completed") != {"cycles": 20, "history_rows": 50}
+        or checkpoint.get("history") != {"schema_version": 1, "integrity_ok": True}
+        or checkpoint.get("observer_acknowledged") is not True
+        or checkpoint.get("interaction_completed") is not False
+        or checkpoint.get("retained_exit_acknowledged") is not False
+        or checkpoint.get("passed") is not True
+    ):
+        raise EvidenceError("retained checkpoint differs from its closed product contract")
+    timings = checkpoint.get("timings")
+    if not isinstance(timings, dict) or set(timings) != {
+        *SELF_TEST_ABSOLUTE_TIMING_KEYS,
+        "model_download_ms",
+        "model_cold_load_ms",
+        "total_ms",
+        "cycles_ms",
+    }:
+        raise EvidenceError("retained checkpoint timing shape is invalid")
+    if not isinstance(timings.get("cycles_ms"), list) or len(timings["cycles_ms"]) != 20:
+        raise EvidenceError("retained checkpoint does not contain exactly 20 cycle timings")
+    validate_self_test_timeline(timings)
 
 
 def validate_interaction_report(path: pathlib.Path) -> dict[str, Any]:
@@ -1568,11 +1760,21 @@ def sample_phase(args: argparse.Namespace) -> None:
     ]
     completion_report_value = getattr(args, "completion_report", None)
     completion_report = pathlib.Path(completion_report_value) if completion_report_value else None
+    retained_checkpoint_value = getattr(args, "retained_checkpoint", None)
+    retained_checkpoint_path = (
+        pathlib.Path(retained_checkpoint_value) if retained_checkpoint_value else None
+    )
+    retained_ready_value = getattr(args, "retained_ready", None)
+    retained_ready = pathlib.Path(retained_ready_value) if retained_ready_value else None
     start_signal_value = getattr(args, "start_signal", None)
     start_signal = pathlib.Path(start_signal_value) if start_signal_value else None
     expected_auto_exit = completion_report is not None
+    expected_retained = retained_checkpoint_path is not None
+    expected_active = expected_auto_exit or expected_retained
+    if expected_auto_exit and expected_retained:
+        raise EvidenceError("active sampler cannot both retain and await auto-exit")
     sampling_contract = (
-        ACTIVE_SAMPLING_CONTRACT if expected_auto_exit else IDLE_SAMPLING_CONTRACT
+        ACTIVE_SAMPLING_CONTRACT if expected_active else IDLE_SAMPLING_CONTRACT
     )
     failure_context_owner = getattr(args, "failure_context", None)
     replace_sampling_failure_context(failure_context_owner, None)
@@ -1582,18 +1784,45 @@ def sample_phase(args: argparse.Namespace) -> None:
     observer_ack = pathlib.Path(observer_ack_value) if observer_ack_value else None
     observer_session_id = getattr(args, "observer_session_id", None)
     observer_ack_evidence: dict[str, Any] | None = None
-    if expected_auto_exit:
+    active_root = (
+        completion_report.parent
+        if completion_report is not None
+        else retained_checkpoint_path.parent
+        if retained_checkpoint_path is not None
+        else None
+    )
+    retained_checkpoint: dict[str, Any] | None = None
+    if expected_active:
         if observer_ack is None or not isinstance(observer_session_id, str):
             raise EvidenceError("signed self-test sampler requires its observer ack contract")
-        assert completion_report is not None
+        if not isinstance(fixture_manifest, dict):
+            raise EvidenceError("signed self-test sampler requires the pinned fixture manifest")
+        assert active_root is not None
         validate_observer_ack_path(
             observer_ack,
-            data_root=completion_report.parent,
+            data_root=active_root,
             require_existing=False,
         )
+        if expected_retained:
+            if retained_ready is None:
+                raise EvidenceError("retained sampler requires its exact ready signal")
+            validate_exact_root_child(
+                retained_checkpoint_path,
+                data_root=active_root,
+                name=RETAINED_WORKLOAD_NAME,
+                require_existing=False,
+                require_empty=False,
+            )
+            validate_exact_root_child(
+                retained_ready,
+                data_root=active_root,
+                name=RETAINED_WORKLOAD_READY_NAME,
+                require_existing=False,
+                require_empty=True,
+            )
     elif observer_ack is not None or observer_session_id is not None:
         raise EvidenceError("observer ack is valid only for the signed self-test sampler")
-    if expected_auto_exit:
+    if expected_active:
         command[4] = str(
             target_sample_count
             + math.ceil(SELF_TEST_AUTO_EXIT_GRACE_SECONDS / args.interval)
@@ -1641,7 +1870,7 @@ def sample_phase(args: argparse.Namespace) -> None:
                 raise EvidenceError("top exceeded the bounded sampling deadline")
             fields = line.split()
             if not fields or fields[0] != str(pid) or len(fields) < 6:
-                if expected_auto_exit and exact_pid(identity, required=False) is None:
+                if expected_active and exact_pid(identity, required=False) is None:
                     break
                 continue
             seen_rows += 1
@@ -1652,7 +1881,7 @@ def sample_phase(args: argparse.Namespace) -> None:
                 baseline_elapsed_seconds = current_mono - started_mono
                 baseline_at_unix_ms = current_wall_ms
                 baseline_idle_wakeups = idlew
-                if expected_auto_exit:
+                if expected_active:
                     collection_deadline = current_mono + args.duration
                 else:
                     collection_deadline = (
@@ -1682,7 +1911,7 @@ def sample_phase(args: argparse.Namespace) -> None:
             reader_delivery_delay = max(0.0, time.monotonic() - current_mono)
             row_diagnostics: list[dict[str, Any]] | None = None
             new_boundary_correlations: set[str] = set()
-            if expected_auto_exit:
+            if expected_active:
                 row_diagnostics = read_diagnostics(
                     diagnostics_path,
                     diagnostics_start_ms,
@@ -1727,15 +1956,35 @@ def sample_phase(args: argparse.Namespace) -> None:
                 raise EvidenceError(f"cannot parse top row: {line.strip()}") from error
             samples.append(sample)
             if observer_ack is not None and observer_ack_evidence is None:
-                assert completion_report is not None
+                assert active_root is not None
                 observer_ack_evidence = maybe_create_observer_ack(
                     row_diagnostics or [],
                     session_id=observer_session_id,
                     resource_row_timestamp_unix_ms=sample["timestamp_unix_ms"],
                     path=observer_ack,
-                    data_root=completion_report.parent,
+                    data_root=active_root,
                 )
-            if len(samples) >= target_sample_count and not expected_auto_exit:
+            if expected_retained and observer_ack_evidence is not None:
+                assert retained_ready is not None
+                assert retained_checkpoint_path is not None
+                if retained_ready.exists() or retained_ready.is_symlink():
+                    validate_exact_root_child(
+                        retained_ready,
+                        data_root=active_root,
+                        name=RETAINED_WORKLOAD_READY_NAME,
+                        require_existing=True,
+                        require_empty=True,
+                    )
+                    retained_checkpoint = validate_retained_checkpoint(
+                        retained_checkpoint_path,
+                        data_root=active_root,
+                        expected_pid=pid,
+                        expected_session_id=observer_session_id,
+                        fixture_manifest=fixture_manifest,
+                        phase="workload_observed",
+                    )
+                    break
+            if len(samples) >= target_sample_count and not expected_active:
                 break
     except EvidenceError as error:
         sampling_loop_error = error
@@ -1803,9 +2052,18 @@ def sample_phase(args: argparse.Namespace) -> None:
             expected_pid=pid,
             fixture_manifest=fixture_manifest,
         )
+    elif expected_retained:
+        if observer_ack is None or observer_ack_evidence is None:
+            raise EvidenceError("retained sampler never reached observer ack acceptance")
+        assert active_root is not None
+        validate_observer_ack_path(observer_ack, data_root=active_root, require_existing=True)
+        if retained_checkpoint is None:
+            raise EvidenceError("retained sampler never observed its workload checkpoint")
+        if current_executable != identity["executable_path"]:
+            raise EvidenceError("retained candidate exited before workload observer acceptance")
     elif current_executable != identity["executable_path"]:
         raise EvidenceError("candidate process exited or changed identity during sampling")
-    minimum_samples = 20 if expected_auto_exit else target_sample_count
+    minimum_samples = 20 if expected_active else target_sample_count
     if len(samples) < minimum_samples:
         raise SamplingEvidenceError(
             "insufficient_samples",
@@ -1882,6 +2140,10 @@ def sample_phase(args: argparse.Namespace) -> None:
         phase["self_test_report"] = report
         phase["self_test_report_sha256"] = sha256_file(completion_report)
         phase["observer_ack"] = observer_ack_evidence
+    elif retained_checkpoint is not None:
+        phase["retained_workload_checkpoint"] = retained_checkpoint
+        phase["retained_workload_checkpoint_sha256"] = sha256_file(retained_checkpoint_path)
+        phase["observer_ack"] = observer_ack_evidence
     result["phases"][args.phase] = phase
     cpu = [sample["cpu_percent"] for sample in samples]
     wakeups = [sample["idle_wakeups_per_s"] for sample in samples if sample["idle_wakeups_per_s"] is not None]
@@ -1901,8 +2163,9 @@ def sample_phase(args: argparse.Namespace) -> None:
         )
         set_metric(result, f"{prefix}.wakeups.p95_per_s", percentile(wakeups), len(wakeups))
     update_global_resource_metrics(result)
-    if args.phase == "cycles_20" and report is not None:
-        warmup_completed_at = report["timings"]["warmup_completed_at_unix_ms"]
+    active_report = report or retained_checkpoint
+    if args.phase == "cycles_20" and active_report is not None:
+        warmup_completed_at = active_report["timings"]["warmup_completed_at_unix_ms"]
         post_warm_samples = [
             sample
             for sample in samples
@@ -1922,13 +2185,17 @@ def sample_phase(args: argparse.Namespace) -> None:
             raise EvidenceError("recording phase has no correlated recording_started/recording_stopped pair")
         set_metric(result, "recording.duration_seconds", recording_duration, 1)
     if args.phase == "cycles_20":
+        if retained_checkpoint is not None:
+            phase["self_test_report"] = retained_checkpoint
         add_cycle_growth_metrics(result, phase)
-        if report is not None:
-            set_metric(result, "model.download.p95_ms", report["timings"]["model_download_ms"], 1)
-            set_metric(result, "model.cold_load.p95_ms", report["timings"]["model_cold_load_ms"], 1)
+        if retained_checkpoint is not None:
+            phase.pop("self_test_report", None)
+        if active_report is not None:
+            set_metric(result, "model.download.p95_ms", active_report["timings"]["model_download_ms"], 1)
+            set_metric(result, "model.cold_load.p95_ms", active_report["timings"]["model_cold_load_ms"], 1)
     if args.phase == "history_50":
         add_history_count(result, pathlib.Path(args.history_db))
-    if report is not None:
+    if active_report is not None:
         add_history_count(result, pathlib.Path(args.history_db))
     result["updated_at"] = now_iso()
     write_json(output, result)
@@ -1947,12 +2214,115 @@ def request_exact_typed_quit(identity: dict[str, Any], pid: int) -> None:
     raise EvidenceError("exact candidate ignored the typed SIGUSR1 quit request")
 
 
+def wait_for_retained_checkpoint(
+    path: pathlib.Path,
+    ready: pathlib.Path,
+    *,
+    data_root: pathlib.Path,
+    expected_pid: int,
+    expected_session_id: str,
+    fixture_manifest: dict[str, Any],
+    phase: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    ready_name = (
+        RETAINED_WORKLOAD_READY_NAME
+        if phase == "workload_observed"
+        else RETAINED_UI_READY_NAME
+    )
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if ready.exists() or ready.is_symlink():
+            validate_exact_root_child(
+                ready,
+                data_root=data_root,
+                name=ready_name,
+                require_existing=True,
+                require_empty=True,
+            )
+            return validate_retained_checkpoint(
+                path,
+                data_root=data_root,
+                expected_pid=expected_pid,
+                expected_session_id=expected_session_id,
+                fixture_manifest=fixture_manifest,
+                phase=phase,
+            )
+        time.sleep(0.05)
+    raise EvidenceError(f"retained {phase} checkpoint was not published within its bound")
+
+
+def show_retained_window(
+    *,
+    app: pathlib.Path,
+    identity: dict[str, Any],
+    pid: int,
+    diagnostics: pathlib.Path,
+    session_id: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    if executable_for_pid(pid) != identity["executable_path"]:
+        raise EvidenceError("retained candidate identity changed before typed settings reveal")
+    requested_at = int(time.time() * 1000)
+    os.kill(pid, signal.SIGUSR2)
+    deadline = time.monotonic() + timeout_seconds
+    shown: dict[str, Any] | None = None
+    last_state: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        records = read_diagnostics(diagnostics, requested_at - 50)
+        failures = [
+            record
+            for record in records
+            if record.get("session_id") == session_id
+            and record.get("code") == "window_policy_apply_failed"
+            and record.get("timestamp_unix_ms", 0) >= requested_at
+        ]
+        if failures:
+            raise EvidenceError("retained window policy application failed")
+        shown_markers = [
+            record
+            for record in records
+            if record.get("session_id") == session_id
+            and record.get("code") == "performance_retained_window_shown"
+            and record.get("timestamp_unix_ms", 0) >= requested_at
+        ]
+        if shown_markers:
+            shown = shown_markers[-1]
+            last_state = query_launch_services_state(app=app, pid=pid)
+            if launch_services_state_matches(
+                last_state, {"code": "window_policy_foreground_ready"}
+            ):
+                return {
+                    "contract": "same-pid-typed-settings-v1",
+                    "typed_show_requested_at_unix_ms": requested_at,
+                    "retained_window_shown_at_unix_ms": shown["timestamp_unix_ms"],
+                    "launch_services_observed_at_unix_ms": int(time.time() * 1000),
+                    "terminal_application_type": "Foreground",
+                    "pid": pid,
+                    "session_id": session_id,
+                    "launch_services_state": last_state,
+                }
+        if executable_for_pid(pid) != identity["executable_path"]:
+            raise EvidenceError("retained candidate exited while revealing its window")
+        time.sleep(0.02)
+    raise EvidenceError(
+        "retained typed settings reveal did not reach exact same-session Foreground state: "
+        f"{last_state}"
+    )
+
+
 def _run_signed_self_test(args: argparse.Namespace) -> None:
     args._sampling_failure_context = None
     args._failure_stage = "preflight"
     app = require_app(args.app)
     fixture, fixture_manifest = validate_transcription_fixture(args.fixture)
     data_root = validate_empty_disposable_root(args.data_root)
+    if args.retain_ui and args.interaction:
+        raise EvidenceError(
+            "retained UI mode excludes the clipboard/Cmd+V synthetic interaction selector"
+        )
+    if args.malloc_stack_logging and not args.retain_ui:
+        raise EvidenceError("self-test MallocStackLogging is valid only for retained UI mode")
     output = pathlib.Path(args.output)
     if not output.is_absolute() or output.is_symlink() or output.is_relative_to(data_root):
         raise EvidenceError("self-test evidence output must be absolute, non-symlinked, and outside its data root")
@@ -1962,7 +2332,12 @@ def _run_signed_self_test(args: argparse.Namespace) -> None:
     observer_ack = data_root / SELF_TEST_OBSERVER_ACK_NAME
     diagnostics = data_root / CURRENT_DATA_NAMESPACE / "diagnostics/events.ndjson"
     history_db = data_root / CURRENT_DATA_NAMESPACE / "history.sqlite"
-    private_outputs = (report, start_signal, interaction_report) if args.interaction else (report, start_signal)
+    retained = retained_paths(data_root)
+    private_outputs = [report, start_signal]
+    if args.interaction:
+        private_outputs.append(interaction_report)
+    if args.retain_ui:
+        private_outputs.extend(retained.values())
     for path in private_outputs:
         if path.exists() or path.is_symlink():
             raise EvidenceError(f"self-test disposable artifact already exists: {path.name}")
@@ -1988,6 +2363,10 @@ def _run_signed_self_test(args: argparse.Namespace) -> None:
     ]
     if args.interaction:
         launch_command.extend(["--env", f"{INTERACTION_ENV}={INTERACTION_CONTRACT}"])
+    if args.retain_ui:
+        launch_command.extend(["--env", f"{RETAINED_UI_ENV}={RETAINED_UI_CONTRACT}"])
+    if args.malloc_stack_logging:
+        launch_command.extend(["--env", "MallocStackLogging=1"])
     launch_command.extend([str(app), "--args", SELF_TEST_ARGUMENT])
     launch = subprocess.run(
         launch_command,
@@ -1999,6 +2378,7 @@ def _run_signed_self_test(args: argparse.Namespace) -> None:
         raise EvidenceError(f"LaunchServices rejected the signed self-test: {launch.stderr.strip()}")
 
     pid = None
+    interaction = None
     try:
         launch_observation = wait_for_route_aware_launch(
             app=app,
@@ -2059,10 +2439,29 @@ def _run_signed_self_test(args: argparse.Namespace) -> None:
         idle_result["updated_at"] = now_iso()
         write_json(output, idle_result)
 
+        leak_baseline = None
+        if args.malloc_stack_logging:
+            leak_baseline, baseline_evidence = capture_leaks_summary(
+                pid=pid,
+                identity=identity,
+                timeout_seconds=args.leaks_timeout,
+            )
+            idle_result = load_result(output)
+            idle_result["phases"]["leaks_stacklogged"] = {
+                "phase": "leaks_stacklogged",
+                "contract": "same-pid-direct-twenty-v1",
+                "pid": pid,
+                "session_id": ready["session_id"],
+                "stack_logging_confirmed": True,
+                "baseline": leak_baseline,
+            }
+            idle_result["traces"].append(baseline_evidence)
+            idle_result["updated_at"] = now_iso()
+            write_json(output, idle_result)
+
         args._sampling_failure_context = None
         args._failure_stage = "cycles_20"
-        sample_phase(
-            argparse.Namespace(
+        cycle_arguments = dict(
                 app=str(app),
                 phase="cycles_20",
                 duration=args.timeout,
@@ -2071,7 +2470,6 @@ def _run_signed_self_test(args: argparse.Namespace) -> None:
                 output=str(output),
                 diagnostics=str(diagnostics),
                 history_db=str(history_db),
-                completion_report=str(report),
                 start_signal=str(start_signal),
                 observer_ack=str(observer_ack),
                 observer_session_id=ready["session_id"],
@@ -2079,13 +2477,180 @@ def _run_signed_self_test(args: argparse.Namespace) -> None:
                 observer_settle_seconds=args.observer_settle_seconds,
                 diagnostics_start_ms=launched_ms,
                 failure_context=args,
-            )
         )
+        if args.retain_ui:
+            cycle_arguments.update(
+                retained_checkpoint=str(retained["workload"]),
+                retained_ready=str(retained["workload_ready"]),
+            )
+        else:
+            cycle_arguments["completion_report"] = str(report)
+        sample_phase(argparse.Namespace(**cycle_arguments))
+
+        workload_checkpoint = None
+        ui_checkpoint = None
+        retained_window = None
+        if args.retain_ui:
+            workload_checkpoint = validate_retained_checkpoint(
+                retained["workload"],
+                data_root=data_root,
+                expected_pid=pid,
+                expected_session_id=ready["session_id"],
+                fixture_manifest=fixture_manifest,
+                phase="workload_observed",
+            )
+            retained_result = load_result(output)
+            if args.malloc_stack_logging:
+                assert leak_baseline is not None
+                leak_comparison, comparison_evidence = capture_leaks_summary(
+                    pid=pid,
+                    identity=identity,
+                    timeout_seconds=args.leaks_timeout,
+                )
+                active_diagnostics = retained_result["phases"]["cycles_20"]["diagnostics"]
+                add_retained_leak_comparison(
+                    retained_result,
+                    baseline=leak_baseline,
+                    comparison=leak_comparison,
+                    baseline_evidence=baseline_evidence,
+                    comparison_evidence=comparison_evidence,
+                    diagnostics=active_diagnostics,
+                    session_id=ready["session_id"],
+                )
+            retained_result["updated_at"] = now_iso()
+            write_json(output, retained_result)
+            create_exact_empty_ack(
+                retained["workload_ack"],
+                data_root=data_root,
+                name=RETAINED_WORKLOAD_ACK_NAME,
+            )
+            ui_checkpoint = wait_for_retained_checkpoint(
+                retained["ui"],
+                retained["ui_ready"],
+                data_root=data_root,
+                expected_pid=pid,
+                expected_session_id=ready["session_id"],
+                fixture_manifest=fixture_manifest,
+                phase="ui_retained",
+                timeout_seconds=args.retained_ready_timeout,
+            )
+            if args.interaction:
+                interaction = validate_interaction_report(interaction_report)
+            for key in (
+                "fixture",
+                "process",
+                "session_id",
+                "model",
+                "requested",
+                "completed",
+                "history",
+                "timings",
+                "observer_acknowledged",
+            ):
+                if ui_checkpoint.get(key) != workload_checkpoint.get(key):
+                    raise EvidenceError("retained UI checkpoint differs from its workload checkpoint")
+            retained_window = show_retained_window(
+                app=app,
+                identity=identity,
+                pid=pid,
+                diagnostics=diagnostics,
+                session_id=ready["session_id"],
+                timeout_seconds=args.launch_timeout,
+            )
+            retained_result = load_result(output)
+            retained_result["phases"]["retained_ui"] = {
+                "contract": "same-signed-pid-physical-observer-v1",
+                "pid": pid,
+                "session_id": ready["session_id"],
+                "workload_checkpoint": workload_checkpoint,
+                "workload_checkpoint_sha256": canonical_payload_sha256(
+                    workload_checkpoint
+                ),
+                "ui_checkpoint": ui_checkpoint,
+                "ui_checkpoint_sha256": canonical_payload_sha256(ui_checkpoint),
+                "window": retained_window,
+                "exit_ack_name": RETAINED_EXIT_ACK_NAME,
+                "exit_acknowledged": False,
+                "final_report_observed": False,
+            }
+            retained_result["updated_at"] = now_iso()
+            write_json(output, retained_result)
+            print(
+                f"retained signed PID {pid} is ready for private Instruments/UI observation; "
+                f"finish with retained-ack: {output}",
+                flush=True,
+            )
+            deadline = time.monotonic() + args.retained_timeout
+            while time.monotonic() < deadline and executable_for_pid(pid) is not None:
+                time.sleep(0.1)
+            if executable_for_pid(pid) is not None:
+                raise EvidenceError("retained candidate did not exit after its bounded observer ack")
+            validate_exact_root_child(
+                retained["exit_ack"],
+                data_root=data_root,
+                name=RETAINED_EXIT_ACK_NAME,
+                require_existing=True,
+                require_empty=True,
+            )
+            final_report = validate_self_test_report(
+                report,
+                expected_pid=pid,
+                fixture_manifest=fixture_manifest,
+            )
+            assert ui_checkpoint is not None
+            for key in (
+                "fixture",
+                "process",
+                "session_id",
+                "model",
+                "requested",
+                "completed",
+                "history",
+            ):
+                if final_report.get(key) != ui_checkpoint.get(key):
+                    raise EvidenceError("final self-test report differs from retained checkpoint")
+            for key in (
+                "ready_at_unix_ms",
+                "started_at_unix_ms",
+                "history_ready_at_unix_ms",
+                "activation_started_at_unix_ms",
+                "loading_started_at_unix_ms",
+                "model_ready_at_unix_ms",
+                "warmup_completed_at_unix_ms",
+                "model_download_ms",
+                "model_cold_load_ms",
+                "cycles_ms",
+            ):
+                if final_report["timings"].get(key) != ui_checkpoint["timings"].get(key):
+                    raise EvidenceError("final self-test timeline differs from retained workload")
+            if (
+                final_report["timings"]["completed_at_unix_ms"]
+                <= ui_checkpoint["timings"]["completed_at_unix_ms"]
+            ):
+                raise EvidenceError("final report did not follow the retained observer barrier")
+            retained_result = load_result(output)
+            active_phase = retained_result["phases"]["cycles_20"]
+            active_phase["self_test_report"] = final_report
+            active_phase["self_test_report_sha256"] = sha256_file(report)
+            active_phase["diagnostics"] = read_diagnostics(
+                diagnostics, launched_ms, int(time.time() * 1000)
+            )
+            validate_self_test_diagnostics(
+                active_phase["diagnostics"], session_id=ready["session_id"]
+            )
+            active_phase["cycle_resource_mapping"] = active_cycle_evidence(active_phase)
+            retained_phase = retained_result["phases"]["retained_ui"]
+            retained_phase["exit_acknowledged"] = True
+            retained_phase["final_report_observed"] = True
+            retained_phase["final_report"] = final_report
+            retained_phase["final_report_sha256"] = canonical_payload_sha256(final_report)
+            retained_result["updated_at"] = now_iso()
+            write_json(output, retained_result)
         args._failure_stage = "finalize"
         final_result = load_result(output)
-        interaction = None
         if args.interaction:
-            interaction = validate_interaction_report(interaction_report)
+            if interaction is None:
+                interaction = validate_interaction_report(interaction_report)
             evidence = [{
                 "kind": "post_event_tap_synthetic",
                 "name": interaction_report.name,
@@ -2148,6 +2713,9 @@ def _run_signed_self_test(args: argparse.Namespace) -> None:
             "interaction_classification": (
                 "post_event_tap_synthetic" if interaction is not None else "none"
             ),
+            "retained_ui_contract": (
+                "same-signed-pid-physical-observer-v1" if args.retain_ui else "none"
+            ),
             "model_cache_staged": bool(args.verified_model_cache),
         }
         if args.verified_model_cache:
@@ -2183,6 +2751,106 @@ def failure_summary_path(args: argparse.Namespace) -> pathlib.Path | None:
             "failure summary must be the exact absolute constrained result sibling"
         )
     return path
+
+
+def validate_retained_ack_phase(
+    phase: Any, *, expected_pid: int
+) -> tuple[int, str]:
+    if not isinstance(phase, dict) or set(phase) != {
+        "contract",
+        "pid",
+        "session_id",
+        "workload_checkpoint",
+        "workload_checkpoint_sha256",
+        "ui_checkpoint",
+        "ui_checkpoint_sha256",
+        "window",
+        "exit_ack_name",
+        "exit_acknowledged",
+        "final_report_observed",
+    }:
+        raise EvidenceError("retained result is not waiting at the closed UI observer barrier")
+    pid = phase.get("pid")
+    session_id = phase.get("session_id")
+    if (
+        phase.get("contract") != "same-signed-pid-physical-observer-v1"
+        or not isinstance(pid, int)
+        or isinstance(pid, bool)
+        or not re.fullmatch(r"s-[0-9a-f]{16}", session_id or "")
+        or phase.get("exit_ack_name") != RETAINED_EXIT_ACK_NAME
+        or phase.get("exit_acknowledged") is not False
+        or phase.get("final_report_observed") is not False
+        or pid != expected_pid
+    ):
+        raise EvidenceError("retained result does not match the exact live signed process")
+    window = phase.get("window")
+    if (
+        not re.fullmatch(r"[0-9a-f]{64}", phase.get("workload_checkpoint_sha256", ""))
+        or not re.fullmatch(r"[0-9a-f]{64}", phase.get("ui_checkpoint_sha256", ""))
+    ):
+        raise EvidenceError("retained result checkpoint digests are invalid")
+    validate_retained_window(window, pid=pid, session_id=session_id)
+    return pid, session_id
+
+
+def retained_ack(args: argparse.Namespace) -> None:
+    app = require_app(args.app)
+    result_path = pathlib.Path(args.result)
+    data_root = pathlib.Path(args.data_root)
+    if (
+        not result_path.is_absolute()
+        or result_path.is_symlink()
+        or not result_path.is_file()
+        or not data_root.is_absolute()
+        or data_root.is_symlink()
+        or not data_root.is_dir()
+        or result_path.is_relative_to(data_root)
+    ):
+        raise EvidenceError("retained ack requires an absolute external result and disposable root")
+    result = load_result(result_path, app)
+    identity = result["candidate"]
+    live_pid = exact_pid(identity)
+    phase = result.get("phases", {}).get("retained_ui")
+    pid, session_id = validate_retained_ack_phase(phase, expected_pid=live_pid)
+    if executable_for_pid(pid) != identity["executable_path"]:
+        raise EvidenceError("retained result does not match the exact live signed process")
+    paths = retained_paths(data_root)
+    fixture_manifest = read_json(FIXTURE_MANIFEST)
+    workload_checkpoint = validate_retained_checkpoint(
+        paths["workload"],
+        data_root=data_root,
+        expected_pid=pid,
+        expected_session_id=session_id,
+        fixture_manifest=fixture_manifest,
+        phase="workload_observed",
+    )
+    ui_checkpoint = validate_retained_checkpoint(
+        paths["ui"],
+        data_root=data_root,
+        expected_pid=pid,
+        expected_session_id=session_id,
+        fixture_manifest=fixture_manifest,
+        phase="ui_retained",
+    )
+    if (
+        workload_checkpoint != phase["workload_checkpoint"]
+        or ui_checkpoint != phase["ui_checkpoint"]
+        or canonical_payload_sha256(workload_checkpoint)
+        != phase["workload_checkpoint_sha256"]
+        or canonical_payload_sha256(ui_checkpoint) != phase["ui_checkpoint_sha256"]
+    ):
+        raise EvidenceError("retained checkpoint content changed after observer acceptance")
+    retained_state = query_launch_services_state(app=app, pid=pid)
+    if not launch_services_state_matches(
+        retained_state, {"code": "window_policy_foreground_ready"}
+    ):
+        raise EvidenceError("retained process is no longer in its accepted Foreground UI state")
+    create_exact_empty_ack(
+        paths["exit_ack"],
+        data_root=data_root,
+        name=RETAINED_EXIT_ACK_NAME,
+    )
+    print(f"acknowledged retained signed PID {pid}; waiting harness will verify typed exit")
 
 
 def write_failure_summary(
@@ -3425,21 +4093,22 @@ def parse_leaks_summary(output: str, *, expected_pid: int) -> tuple[int, int]:
     return count, leaked_bytes
 
 
-def scan_leaks(args: argparse.Namespace) -> None:
-    app = require_app(args.app)
-    result_path = pathlib.Path(args.result)
-    result = load_result(result_path, app)
-    identity = result["candidate"]
-    pid = exact_pid(identity)
+def capture_leaks_summary(
+    *,
+    pid: int,
+    identity: dict[str, Any],
+    timeout_seconds: float,
+    sudo: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     command = ["/usr/bin/leaks", "-q", "--fullStacks", "--noContent", str(pid)]
-    if args.sudo:
+    if sudo:
         command = ["/usr/bin/sudo", "-n", *command]
     process = subprocess.run(
         command,
         text=True,
         capture_output=True,
         check=False,
-        timeout=args.timeout,
+        timeout=timeout_seconds,
     )
     output = "\n".join(part for part in (process.stdout, process.stderr) if part)
     count, leaked_bytes = parse_leaks_summary(output, expected_pid=pid)
@@ -3447,21 +4116,122 @@ def scan_leaks(args: argparse.Namespace) -> None:
         raise EvidenceError("candidate process exited or changed identity during the live leak scan")
     if process.returncode != 0 and count == 0:
         raise EvidenceError(f"macOS leaks exited {process.returncode} despite reporting zero leaks")
-    canonical_summary = f"leaks-stacklogged-summary-v1\ncount={count}\nbytes={leaked_bytes}\n"
-    evidence = [{
-        "kind": "macos_leaks_privileged_live_attach" if args.sudo else "macos_leaks_live_attach",
-        "name": "leaks-stacklogged-summary-v1",
-        "sha256": hashlib.sha256(output.encode()).hexdigest(),
-    }]
-    phase = result["phases"].get("leaks_stacklogged")
     captured_at = int(time.time() * 1000)
+    canonical_summary = f"leaks-stacklogged-summary-v1\ncount={count}\nbytes={leaked_bytes}\n"
     summary = {
         "count": count,
         "bytes": leaked_bytes,
         "captured_at_unix_ms": captured_at,
         "canonical_summary_sha256": hashlib.sha256(canonical_summary.encode()).hexdigest(),
-        "private_raw_output_sha256": evidence[0]["sha256"],
+        "private_raw_output_sha256": hashlib.sha256(output.encode()).hexdigest(),
     }
+    evidence = {
+        "kind": "macos_leaks_privileged_live_attach" if sudo else "macos_leaks_live_attach",
+        "name": "leaks-stacklogged-summary-v1",
+        "sha256": summary["private_raw_output_sha256"],
+    }
+    return summary, evidence
+
+
+def direct_cycle_correlations(
+    diagnostics: list[dict[str, Any]], session_id: str
+) -> list[dict[str, Any]]:
+    pairs = direct_cycle_pairs(diagnostics, session_id)
+    correlations = {pair["correlation_id"] for pair in pairs}
+    recording = {
+        record.get("correlation_id")
+        for record in diagnostics
+        if record.get("session_id") == session_id
+        and record.get("code") in {"recording_started", "recording_stopped"}
+        and record.get("correlation_id")
+    }
+    if len(pairs) != 20 or len(correlations) != 20 or correlations & recording:
+        raise EvidenceError(
+            "retained Malloc comparison requires exactly 20 paired non-recording direct cycles"
+        )
+    return pairs
+
+
+def add_retained_leak_comparison(
+    result: dict[str, Any],
+    *,
+    baseline: dict[str, Any],
+    comparison: dict[str, Any],
+    baseline_evidence: dict[str, Any],
+    comparison_evidence: dict[str, Any],
+    diagnostics: list[dict[str, Any]],
+    session_id: str,
+) -> None:
+    pairs = direct_cycle_correlations(diagnostics, session_id)
+    retained_diagnostics = [
+        {
+            key: record[key]
+            for key in (
+                "timestamp_unix_ms",
+                "session_id",
+                "correlation_id",
+                "code",
+            )
+        }
+        for record in diagnostics
+        if record.get("session_id") == session_id
+        and record.get("code") in {
+            "recording_started",
+            "recording_stopped",
+            "transcription_started",
+            "transcription_completed",
+        }
+    ]
+    if baseline["captured_at_unix_ms"] >= pairs[0]["started_at_unix_ms"]:
+        raise EvidenceError("Malloc baseline was not captured before the first direct cycle")
+    if comparison["captured_at_unix_ms"] <= pairs[-1]["completed_at_unix_ms"]:
+        raise EvidenceError("Malloc comparison was not captured after the final direct cycle")
+    count_delta = int(comparison["count"]) - int(baseline["count"])
+    bytes_delta = int(comparison["bytes"]) - int(baseline["bytes"])
+    result["phases"]["leaks_stacklogged"] = {
+        "phase": "leaks_stacklogged",
+        "contract": "same-pid-direct-twenty-v1",
+        "pid": result["phases"]["cycles_20"]["pid"],
+        "session_id": session_id,
+        "stack_logging_confirmed": True,
+        "baseline": baseline,
+        "comparison": comparison,
+        "closed_cycle_count": 20,
+        "first_correlation_id": pairs[0]["correlation_id"],
+        "last_correlation_id": pairs[-1]["correlation_id"],
+        "diagnostics": retained_diagnostics,
+        "count_delta": count_delta,
+        "bytes_delta": bytes_delta,
+    }
+    if baseline_evidence not in result["traces"]:
+        result["traces"].append(baseline_evidence)
+    result["traces"].append(comparison_evidence)
+    set_metric(
+        result,
+        "leaks.definite.growth_count",
+        max(0, count_delta),
+        20,
+        [baseline_evidence, comparison_evidence],
+    )
+
+
+def scan_leaks(args: argparse.Namespace) -> None:
+    app = require_app(args.app)
+    result_path = pathlib.Path(args.result)
+    result = load_result(result_path, app)
+    identity = result["candidate"]
+    pid = exact_pid(identity)
+    summary, evidence_item = capture_leaks_summary(
+        pid=pid,
+        identity=identity,
+        timeout_seconds=args.timeout,
+        sudo=args.sudo,
+    )
+    count = int(summary["count"])
+    leaked_bytes = int(summary["bytes"])
+    evidence = [evidence_item]
+    phase = result["phases"].get("leaks_stacklogged")
+    captured_at = int(summary["captured_at_unix_ms"])
     if args.mode == "baseline":
         if phase is not None:
             raise EvidenceError("stack-logged leak baseline already exists in this result")
@@ -3624,6 +4394,11 @@ def canonical_hash(result: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def canonical_payload_sha256(value: Any) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def contains_absolute_path(value: Any) -> bool:
     if isinstance(value, dict):
         return any(contains_absolute_path(item) for item in value.values())
@@ -3671,7 +4446,10 @@ def evidence_role(result: dict[str, Any]) -> str | None:
         and constrained_host_facts_valid(host)
     ):
         return "constrained_noninteractive"
-    if eligibility.get("physical_supported_interactive"):
+    if (
+        eligibility.get("physical_supported_interactive") is True
+        and physical_host_facts_valid(host)
+    ):
         return "physical_interactive"
     return None
 
@@ -3706,6 +4484,41 @@ def constrained_host_facts_valid(host: dict[str, Any]) -> bool:
     )
 
 
+def physical_host_facts_valid(host: dict[str, Any]) -> bool:
+    github = host.get("github")
+    templates = host.get("xctrace_templates")
+    return (
+        isinstance(host.get("os_version"), str)
+        and re.fullmatch(r"(?:14|26)(?:\.[0-9]+){1,2}", host["os_version"]) is not None
+        and host.get("architecture") == "arm64"
+        and host.get("chip") in {"Apple M1", "Apple M1 Max"}
+        and isinstance(host.get("memory_bytes"), int)
+        and not isinstance(host.get("memory_bytes"), bool)
+        and host["memory_bytes"] > 0
+        and isinstance(host.get("logical_cpu_count"), int)
+        and not isinstance(host.get("logical_cpu_count"), bool)
+        and host["logical_cpu_count"] > 0
+        and isinstance(host.get("xcode_version"), str)
+        and re.fullmatch(r"Xcode [0-9]+(?:\.[0-9]+){1,2}", host["xcode_version"])
+        is not None
+        and isinstance(host.get("xcode_build"), str)
+        and re.fullmatch(r"Build version [A-Za-z0-9.]+", host["xcode_build"])
+        is not None
+        and isinstance(host.get("xctrace_version"), str)
+        and re.fullmatch(
+            r"xctrace version [0-9]+(?:\.[0-9]+){1,2} \([A-Za-z0-9.]+\)",
+            host["xctrace_version"],
+        )
+        is not None
+        and isinstance(templates, list)
+        and all(isinstance(template, str) for template in templates)
+        and REQUIRED_TEMPLATES.issubset(set(templates))
+        and host.get("missing_required_templates") == []
+        and isinstance(github, dict)
+        and github.get("actions") is False
+    )
+
+
 def metric_evidence_role(result: dict[str, Any], key: str, metric: dict[str, Any]) -> str | None:
     synthetic_metrics = {
         "latency.hotkey_handler_to_overlay.p95_ms",
@@ -3729,6 +4542,325 @@ def metric_evidence_role(result: dict[str, Any], key: str, metric: dict[str, Any
     ):
         return "post_event_tap_synthetic"
     return None
+
+
+def validate_retained_window(window: Any, *, pid: int, session_id: str) -> None:
+    expected_keys = {
+        "contract",
+        "typed_show_requested_at_unix_ms",
+        "retained_window_shown_at_unix_ms",
+        "launch_services_observed_at_unix_ms",
+        "terminal_application_type",
+        "pid",
+        "session_id",
+        "launch_services_state",
+    }
+    state = window.get("launch_services_state") if isinstance(window, dict) else None
+    if (
+        not isinstance(window, dict)
+        or set(window) != expected_keys
+        or window.get("contract") != "same-pid-typed-settings-v1"
+        or window.get("pid") != pid
+        or window.get("session_id") != session_id
+        or window.get("terminal_application_type") != "Foreground"
+        or state
+        != {
+            "returncode": 0,
+            "stdout_shape": "exact_fields",
+            "stderr_category": "empty",
+            "bundle_id_matches": True,
+            "bundle_path_matches": True,
+            "pid_matches": True,
+            "application_type": "Foreground",
+        }
+        or not all(
+            isinstance(window.get(key), int) and not isinstance(window.get(key), bool)
+            for key in (
+                "typed_show_requested_at_unix_ms",
+                "retained_window_shown_at_unix_ms",
+                "launch_services_observed_at_unix_ms",
+            )
+        )
+        or not (
+            window["typed_show_requested_at_unix_ms"]
+            <= window["retained_window_shown_at_unix_ms"]
+            <= window["launch_services_observed_at_unix_ms"]
+        )
+    ):
+        raise EvidenceError("retained result does not prove its exact same-PID Foreground window")
+
+
+def validate_retained_final_report(
+    report: Any, *, checkpoint: dict[str, Any], pid: int, session_id: str
+) -> None:
+    allowed_keys = {
+        "schema_version",
+        "contract",
+        "fixture",
+        "process",
+        "session_id",
+        "model",
+        "requested",
+        "completed",
+        "history",
+        "timings",
+        "quit_requested",
+        "passed",
+        "failure_code",
+    }
+    required_keys = allowed_keys - {"failure_code"}
+    if (
+        not isinstance(report, dict)
+        or not required_keys.issubset(report)
+        or not set(report).issubset(allowed_keys)
+        or report.get("schema_version") != 1
+        or report.get("contract") != SELF_TEST_CONTRACT
+        or report.get("process") != {"pid": pid}
+        or report.get("session_id") != session_id
+        or report.get("quit_requested") is not True
+        or report.get("passed") is not True
+        or report.get("failure_code") not in (None, "none")
+    ):
+        raise EvidenceError("retained final report differs from the closed self-test contract")
+    for key in ("fixture", "model", "requested", "completed", "history"):
+        if report.get(key) != checkpoint.get(key):
+            raise EvidenceError("retained final report differs from its UI checkpoint")
+    timings = report.get("timings")
+    if not isinstance(timings, dict) or set(timings) != {
+        *SELF_TEST_ABSOLUTE_TIMING_KEYS,
+        "model_download_ms",
+        "model_cold_load_ms",
+        "total_ms",
+        "cycles_ms",
+    }:
+        raise EvidenceError("retained final report timing shape is invalid")
+    validate_self_test_timeline(timings)
+    checkpoint_timings = checkpoint["timings"]
+    for key in (
+        "ready_at_unix_ms",
+        "started_at_unix_ms",
+        "history_ready_at_unix_ms",
+        "activation_started_at_unix_ms",
+        "loading_started_at_unix_ms",
+        "model_ready_at_unix_ms",
+        "warmup_completed_at_unix_ms",
+        "model_download_ms",
+        "model_cold_load_ms",
+        "cycles_ms",
+    ):
+        if timings.get(key) != checkpoint_timings.get(key):
+            raise EvidenceError("retained final report timeline differs from its UI checkpoint")
+    if timings["completed_at_unix_ms"] <= checkpoint_timings["completed_at_unix_ms"]:
+        raise EvidenceError("retained final report did not follow its observer barrier")
+
+
+def validate_leak_summary(summary: Any) -> None:
+    if not isinstance(summary, dict) or set(summary) != {
+        "count",
+        "bytes",
+        "captured_at_unix_ms",
+        "canonical_summary_sha256",
+        "private_raw_output_sha256",
+    }:
+        raise EvidenceError("retained leak summary has an open or invalid shape")
+    if not all(
+        isinstance(summary.get(key), int)
+        and not isinstance(summary.get(key), bool)
+        and summary[key] >= 0
+        for key in ("count", "bytes", "captured_at_unix_ms")
+    ):
+        raise EvidenceError("retained leak summary has invalid bounded values")
+    if (summary["count"] == 0) != (summary["bytes"] == 0):
+        raise EvidenceError("retained leak summary has inconsistent count and bytes")
+    canonical = (
+        "leaks-stacklogged-summary-v1\n"
+        f"count={summary['count']}\nbytes={summary['bytes']}\n"
+    )
+    if (
+        summary["canonical_summary_sha256"]
+        != hashlib.sha256(canonical.encode()).hexdigest()
+        or re.fullmatch(r"[0-9a-f]{64}", summary["private_raw_output_sha256"])
+        is None
+    ):
+        raise EvidenceError("retained leak summary digest is invalid")
+
+
+def check_retained_physical_evidence(
+    result: dict[str, Any], label: str
+) -> list[str]:
+    try:
+        retained = result.get("phases", {}).get("retained_ui")
+        expected_retained_keys = {
+            "contract",
+            "pid",
+            "session_id",
+            "workload_checkpoint",
+            "workload_checkpoint_sha256",
+            "ui_checkpoint",
+            "ui_checkpoint_sha256",
+            "window",
+            "exit_ack_name",
+            "exit_acknowledged",
+            "final_report_observed",
+            "final_report",
+            "final_report_sha256",
+        }
+        if not isinstance(retained, dict) or set(retained) != expected_retained_keys:
+            raise EvidenceError("physical evidence lacks the closed retained observer phase")
+        pid = retained.get("pid")
+        session_id = retained.get("session_id")
+        if (
+            retained.get("contract") != "same-signed-pid-physical-observer-v1"
+            or not isinstance(pid, int)
+            or isinstance(pid, bool)
+            or not re.fullmatch(r"s-[0-9a-f]{16}", session_id or "")
+            or retained.get("exit_ack_name") != RETAINED_EXIT_ACK_NAME
+            or retained.get("exit_acknowledged") is not True
+            or retained.get("final_report_observed") is not True
+        ):
+            raise EvidenceError("physical evidence did not complete its retained observer barrier")
+        fixture_manifest = read_json(FIXTURE_MANIFEST)
+        workload = retained.get("workload_checkpoint")
+        ui = retained.get("ui_checkpoint")
+        validate_retained_checkpoint_document(
+            workload,
+            expected_pid=pid,
+            expected_session_id=session_id,
+            fixture_manifest=fixture_manifest,
+            phase="workload_observed",
+        )
+        validate_retained_checkpoint_document(
+            ui,
+            expected_pid=pid,
+            expected_session_id=session_id,
+            fixture_manifest=fixture_manifest,
+            phase="ui_retained",
+        )
+        if (
+            canonical_payload_sha256(workload)
+            != retained.get("workload_checkpoint_sha256")
+            or canonical_payload_sha256(ui) != retained.get("ui_checkpoint_sha256")
+        ):
+            raise EvidenceError("retained checkpoint digest differs from its closed content")
+        for key in (
+            "fixture",
+            "process",
+            "session_id",
+            "model",
+            "requested",
+            "completed",
+            "history",
+            "timings",
+            "observer_acknowledged",
+        ):
+            if ui.get(key) != workload.get(key):
+                raise EvidenceError("retained UI checkpoint differs from its workload checkpoint")
+        validate_retained_window(retained.get("window"), pid=pid, session_id=session_id)
+        final_report = retained.get("final_report")
+        validate_retained_final_report(
+            final_report, checkpoint=ui, pid=pid, session_id=session_id
+        )
+        if canonical_payload_sha256(final_report) != retained.get("final_report_sha256"):
+            raise EvidenceError("retained final report digest differs from its closed content")
+        if (
+            final_report["timings"]["completed_at_unix_ms"]
+            < retained["window"]["launch_services_observed_at_unix_ms"]
+        ):
+            raise EvidenceError("retained final report preceded its physical window observation")
+
+        signed = result.get("phases", {}).get("signed_self_test")
+        if (
+            not isinstance(signed, dict)
+            or signed.get("pid") != pid
+            or signed.get("retained_ui_contract")
+            != "same-signed-pid-physical-observer-v1"
+            or signed.get("interaction_classification") != "none"
+            or signed.get("auto_exit_observed") is not True
+        ):
+            raise EvidenceError("physical result is not bound to the retained signed self-test")
+
+        leaks = result.get("phases", {}).get("leaks_stacklogged")
+        expected_leak_keys = {
+            "phase",
+            "contract",
+            "pid",
+            "session_id",
+            "stack_logging_confirmed",
+            "baseline",
+            "comparison",
+            "closed_cycle_count",
+            "first_correlation_id",
+            "last_correlation_id",
+            "diagnostics",
+            "count_delta",
+            "bytes_delta",
+        }
+        if (
+            not isinstance(leaks, dict)
+            or set(leaks) != expected_leak_keys
+            or leaks.get("phase") != "leaks_stacklogged"
+            or leaks.get("contract") != "same-pid-direct-twenty-v1"
+            or leaks.get("pid") != pid
+            or leaks.get("session_id") != session_id
+            or leaks.get("stack_logging_confirmed") is not True
+            or leaks.get("closed_cycle_count") != 20
+        ):
+            raise EvidenceError("physical evidence lacks the closed retained leak phase")
+        baseline = leaks.get("baseline")
+        comparison = leaks.get("comparison")
+        validate_leak_summary(baseline)
+        validate_leak_summary(comparison)
+        diagnostics = leaks.get("diagnostics")
+        if (
+            not isinstance(diagnostics, list)
+            or len(diagnostics) != 40
+            or any(
+            not isinstance(record, dict)
+            or set(record)
+            != {"timestamp_unix_ms", "session_id", "correlation_id", "code"}
+            or record.get("code")
+            not in {"transcription_started", "transcription_completed"}
+            for record in diagnostics
+            )
+        ):
+            raise EvidenceError("retained leak diagnostics have an open or invalid shape")
+        pairs = direct_cycle_correlations(diagnostics, session_id)
+        if (
+            leaks.get("first_correlation_id") != pairs[0]["correlation_id"]
+            or leaks.get("last_correlation_id") != pairs[-1]["correlation_id"]
+            or baseline["captured_at_unix_ms"] >= pairs[0]["started_at_unix_ms"]
+            or comparison["captured_at_unix_ms"] <= pairs[-1]["completed_at_unix_ms"]
+            or baseline["captured_at_unix_ms"] >= workload["timings"]["started_at_unix_ms"]
+            or comparison["captured_at_unix_ms"]
+            <= workload["timings"]["completed_at_unix_ms"]
+            or comparison["captured_at_unix_ms"]
+            >= retained["window"]["typed_show_requested_at_unix_ms"]
+            or leaks.get("count_delta") != comparison["count"] - baseline["count"]
+            or leaks.get("bytes_delta") != comparison["bytes"] - baseline["bytes"]
+        ):
+            raise EvidenceError("retained leak comparison differs from its direct cycles")
+        evidence = [
+            {
+                "kind": "macos_leaks_live_attach",
+                "name": "leaks-stacklogged-summary-v1",
+                "sha256": baseline["private_raw_output_sha256"],
+            },
+            {
+                "kind": "macos_leaks_live_attach",
+                "name": "leaks-stacklogged-summary-v1",
+                "sha256": comparison["private_raw_output_sha256"],
+            },
+        ]
+        metric = result.get("metrics", {}).get("leaks.definite.growth_count")
+        if metric != {
+            "value": round(float(max(0, leaks["count_delta"])), 6),
+            "sample_count": 20,
+            "evidence": evidence,
+        } or any(item not in result.get("traces", []) for item in evidence):
+            raise EvidenceError("definite-leak metric differs from retained Malloc evidence")
+    except (EvidenceError, KeyError, TypeError, ValueError) as error:
+        return [f"{label}: {error}"]
+    return []
 
 
 def check_idle_sampling(result: dict[str, Any], label: str) -> list[str]:
@@ -4035,6 +5167,7 @@ def check_provenance(result: dict[str, Any], label: str) -> list[str]:
     if host.get("missing_required_templates"):
         failures.append(f"{label}: missing Instruments templates: {host['missing_required_templates']}")
     if role == "physical_interactive":
+        failures.extend(check_retained_physical_evidence(result, label))
         power = host.get("power", {})
         if power.get("source") != "ac":
             failures.append(f"{label}: physical interaction evidence was not captured on AC power")
@@ -4063,6 +5196,11 @@ def verify(args: argparse.Namespace) -> None:
     budgets = read_json(pathlib.Path(args.budgets))
     if budgets.get("schema_version") != SCHEMA_VERSION:
         raise EvidenceError("unsupported budget schema")
+    if budgets.get("toolchain_policy") != {
+        "constrained": "exact Xcode 16.2 selected on the GitHub-hosted macos-14 runner",
+        "physical_interactive": "record the actual selected non-unknown Xcode build and xctrace template inventory on the supported physical host",
+    }:
+        raise EvidenceError("performance toolchain policy is missing or not closed")
     for label, result in results:
         if result.get("schema_version") != SCHEMA_VERSION:
             raise EvidenceError(f"unsupported result schema: {label}")
@@ -4258,7 +5396,29 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run the explicitly post-event-tap synthetic typed-callback/overlay/paste phase",
     )
+    command.add_argument(
+        "--retain-ui",
+        action="store_true",
+        help="retain the exact signed PID behind closed workload/UI observer acknowledgements",
+    )
+    command.add_argument(
+        "--malloc-stack-logging",
+        action="store_true",
+        help="capture same-PID MallocStackLogging baseline/compare around the direct 20 cycles",
+    )
+    command.add_argument("--leaks-timeout", type=float, default=120.0)
+    command.add_argument("--retained-ready-timeout", type=float, default=300.0)
+    command.add_argument("--retained-timeout", type=float, default=14_700.0)
     command.set_defaults(func=run_signed_self_test)
+
+    command = subparsers.add_parser(
+        "retained-ack",
+        help="release one exact same-PID retained physical observer barrier",
+    )
+    command.add_argument("--app", required=True)
+    command.add_argument("--result", required=True)
+    command.add_argument("--data-root", required=True)
+    command.set_defaults(func=retained_ack)
 
     command = subparsers.add_parser("launch", help="measure LaunchServices-to-ready latency")
     command.add_argument("--app", required=True)

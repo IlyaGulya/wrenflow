@@ -131,6 +131,10 @@ run = "mise exec -- python3 scripts/perf/gpui-performance.py sample"
 description = "Run the two-gate signed GPUI fixture workload through LaunchServices"
 run = "mise exec -- python3 scripts/perf/gpui-performance.py self-test"
 
+[tasks.performance-retained-ack]
+description = "Release one exact same-PID retained physical performance observer barrier"
+run = "mise exec -- python3 scripts/perf/gpui-performance.py retained-ack"
+
 [tasks.performance-leaks]
 description = "Attach macOS leaks to the exact running signed GPUI candidate"
 run = "mise exec -- python3 scripts/perf/gpui-performance.py leaks"

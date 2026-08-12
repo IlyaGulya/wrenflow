@@ -25,6 +25,7 @@ use wrenflow_gpui::{
     screens::AppScreens,
     ui,
 };
+use wrenflow_runtime::performance::PerformanceSelfTestRequest;
 use wrenflow_runtime::support::{SupportContext, SupportUpdateState};
 use wrenflow_runtime::update::{
     UpdateChannel, UpdateCheckOutcome, UpdateError, UpdateFailureCode, UpdateSession,
@@ -51,6 +52,7 @@ struct ShellView {
 struct ShellEnvironment {
     shell: MacShell,
     runtime_handle: RuntimeHandle,
+    retained_window_observer: bool,
 }
 
 enum RuntimeShellUpdate {
@@ -279,6 +281,9 @@ fn run(
             }
         };
 
+        let retained_window_observer = performance_request
+            .as_ref()
+            .is_some_and(PerformanceSelfTestRequest::retains_physical_ui);
         let (shell, shell_events) = match MacShell::install(WINDOW_TITLE, env!("CARGO_PKG_VERSION"))
         {
             Ok(installed) => installed,
@@ -386,6 +391,7 @@ fn run(
             ShellEnvironment {
                 shell,
                 runtime_handle: runtime_handle.clone(),
+                retained_window_observer,
             },
         );
         poll_accessibility(
@@ -823,11 +829,11 @@ fn poll_shell_events(
                     .ok()
                     .and_then(Result::ok);
                 if let Some(route) = route {
-                    if environment
+                    let layout_ready = environment
                         .shell
                         .apply_window_layout(window_layout(route))
-                        .is_err()
-                    {
+                        .is_ok();
+                    if !layout_ready {
                         report_diagnostic_failure(
                             DiagnosticCategory::Bridge,
                             DiagnosticCode::GpuiWindowLayoutFailed,
@@ -840,6 +846,16 @@ fn poll_shell_events(
                         );
                     } else {
                         mark_app_window_visible(&app_window, &window_lifecycle);
+                        if layout_ready
+                            && route != NavigationTarget::Loading
+                            && environment.retained_window_observer
+                        {
+                            emit_diagnostic(DiagnosticEvent::new(
+                                DiagnosticCategory::Lifecycle,
+                                DiagnosticLevel::Info,
+                                DiagnosticCode::PerformanceRetainedWindowShown,
+                            ));
+                        }
                     }
                 } else {
                     report_diagnostic_failure(
@@ -2232,6 +2248,31 @@ mod tests {
         assert!(performance.contains("WRENFLOW_PERFORMANCE_FIXTURE"));
         assert!(performance.contains("WRENFLOW_PERFORMANCE_DATA_ROOT"));
         assert!(performance.contains("WRENFLOW_PERFORMANCE_REPORT"));
+        assert!(performance.contains("retained_excludes_interaction"));
+        let Some(retained_gate) = main.find("retains_physical_ui") else {
+            panic!("retained selector reaches the native shell boundary");
+        };
+        let Some(shell_events) = main.find("fn poll_shell_events") else {
+            panic!("typed shell event consumer exists");
+        };
+        let Some(retained_marker) = main.find("DiagnosticCode::PerformanceRetainedWindowShown")
+        else {
+            panic!("retained show has a dedicated diagnostic");
+        };
+        assert!(retained_gate < shell_events && shell_events < retained_marker);
+        let retained_path = &main[shell_events..];
+        let Some(show) = retained_path.find("environment.shell.show_main_window()") else {
+            panic!("typed shell event applies foreground policy");
+        };
+        let Some(visible) = retained_path.find("mark_app_window_visible") else {
+            panic!("typed shell event marks the GPUI root visible");
+        };
+        let Some(marker) = retained_path.find("DiagnosticCode::PerformanceRetainedWindowShown")
+        else {
+            panic!("typed shell event emits retained readiness");
+        };
+        assert!(show < visible && visible < marker);
+        assert!(retained_path.contains("route != NavigationTarget::Loading"));
     }
 
     #[test]

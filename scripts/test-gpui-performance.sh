@@ -19,6 +19,8 @@ mise exec -- jq -e '
   .budget_version == "gpui-performance-v1" and
   .workload.idle_seconds == 1800 and
   .workload.launch_samples.cold == 20 and
+  .toolchain_policy.constrained == "exact Xcode 16.2 selected on the GitHub-hosted macos-14 runner" and
+  (.toolchain_policy.physical_interactive | contains("actual selected non-unknown Xcode")) and
   ([.budgets[] | select(.metric == "launch.cold.p95_ms") | .min_samples] == [20]) and
   (.required_instruments_templates | length) == 7 and
   .supporting_instruments_templates == ["Power Profiler"] and
@@ -45,6 +47,15 @@ grep -Fq 'gpui-performance-v1' "$DOC"
 grep -Fq -- '--performance-self-test' "$DOC"
 grep -Fq 'WRENFLOW_PERFORMANCE_SELF_TEST=gpui-performance-v1' "$DOC"
 grep -Fq 'WRENFLOW_PERFORMANCE_INTERACTION=synthetic-in-process-v1' "$DOC"
+grep -Fq -- '--retain-ui --malloc-stack-logging' "$DOC"
+grep -Fq 'mutually exclusive with the synthetic' "$DOC"
+if grep -Fq 'retained command above. Both scans' "$DOC" && grep -Fq 'add `--sudo`' "$DOC"; then
+    echo "Retained documentation advertises unsupported sudo plumbing" >&2
+    exit 1
+fi
+grep -Fq 'performance-retained-ack' "$DOC"
+grep -Fq 'same signed PID' "$DOC"
+grep -Fq 'actual selected compatible Xcode version/build' "$DOC"
 grep -Fq 'tcc_or_microphone_evidence=false' "$DOC"
 grep -Fq 'substituting a standalone' "$DOC"
 grep -Fq 'test binary' "$DOC"
@@ -197,6 +208,15 @@ start_signal_use = self_test_source.index("start_signal=str(start_signal)")
 assert initial_accessory_barrier < idle_call < post_idle_barrier < cycle_call < start_signal_use
 assert "except BaseException:" in self_test_source
 assert "request_exact_typed_quit(identity, pid)" in self_test_source
+retain_guard = self_test_source.index("if args.retain_ui and args.interaction")
+launch_retain_env = self_test_source.index("f\"{RETAINED_UI_ENV}={RETAINED_UI_CONTRACT}\"")
+workload_ack = self_test_source.index("RETAINED_WORKLOAD_ACK_NAME")
+typed_show = self_test_source.index("show_retained_window(")
+final_report = self_test_source.index("final_report = validate_self_test_report(")
+assert retain_guard < launch_retain_env < workload_ack < typed_show < final_report
+assert "performance_retained_window_shown" in inspect.getsource(module["show_retained_window"])
+assert "if args.malloc_stack_logging and not args.retain_ui" in self_test_source
+assert "launch_command.extend([\"--env\", \"MallocStackLogging=1\"])" in self_test_source
 wrapper_source = inspect.getsource(module["run_signed_self_test"])
 assert "write_failure_summary" in wrapper_source
 sample_source = inspect.getsource(module["sample_phase"])
@@ -1737,6 +1757,46 @@ fi
 
 mise exec -- python3 "$FIXTURES/generate-hybrid-verifier-fixture.py" \
     "$BUDGETS" "$TEST_ROOT/constrained.json" "$TEST_ROOT/physical.json"
+mise exec -- python3 - "$HARNESS" "$TEST_ROOT/physical.json" "$TEST_ROOT/constrained.json" <<'PY'
+import copy
+import json
+import pathlib
+import runpy
+import sys
+
+module = runpy.run_path(sys.argv[1])
+physical = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+constrained = json.loads(pathlib.Path(sys.argv[3]).read_text(encoding="utf-8"))
+assert module["evidence_role"](physical) == "physical_interactive"
+assert module["evidence_role"](constrained) == "constrained_noninteractive"
+assert module["check_retained_physical_evidence"](physical, "physical") == []
+for mutation in ("missing", "tampered", "relabelled", "open_window"):
+    invalid = copy.deepcopy(physical)
+    if mutation == "missing":
+        invalid["phases"].pop("retained_ui")
+    elif mutation == "tampered":
+        invalid["phases"]["leaks_stacklogged"]["count_delta"] = 1
+    elif mutation == "relabelled":
+        invalid["metrics"]["leaks.definite.growth_count"]["evidence"][0]["kind"] = "synthetic_verifier_fixture"
+    else:
+        invalid["phases"]["retained_ui"]["window"]["unexpected_private_field"] = "private"
+    invalid["evidence_sha256"] = module["canonical_hash"](invalid)
+    assert module["check_retained_physical_evidence"](invalid, "physical")
+for key, value in (
+    ("xcode_version", "unknown"),
+    ("xcode_build", "unknown"),
+    ("xctrace_version", "unknown"),
+    ("xctrace_templates", []),
+):
+    invalid = copy.deepcopy(physical)
+    invalid["host"][key] = value
+    invalid["evidence_sha256"] = module["canonical_hash"](invalid)
+    assert module["evidence_role"](invalid) is None
+invalid_constrained = copy.deepcopy(constrained)
+invalid_constrained["host"]["xcode_version"] = "Xcode 26.6"
+invalid_constrained["evidence_sha256"] = module["canonical_hash"](invalid_constrained)
+assert module["evidence_role"](invalid_constrained) is None
+PY
 mise exec -- python3 "$HARNESS" verify \
     --profile release \
     --result "$TEST_ROOT/constrained.json" \
@@ -1764,6 +1824,276 @@ if mise exec -- python3 "$HARNESS" verify \
     echo "Constrained-only evidence unexpectedly passed the hybrid release gate" >&2
     exit 1
 fi
+
+mise exec -- python3 - "$HARNESS" "$TEST_ROOT" "$TRANSCRIPTION_FIXTURE" <<'PY'
+import copy
+import json
+import pathlib
+import runpy
+import sys
+
+module = runpy.run_path(sys.argv[1])
+root = pathlib.Path(sys.argv[2]) / "retained-contract"
+root.mkdir()
+manifest = json.loads(pathlib.Path(sys.argv[3]).read_text(encoding="utf-8"))
+session = "s-0123456789abcdef"
+pid = 4242
+audio = manifest["audio"]
+checkpoint = {
+    "schema_version": 1,
+    "contract": module["RETAINED_WORKLOAD_CONTRACT"],
+    "phase": "workload_observed",
+    "fixture": {
+        "id": manifest["fixture_id"],
+        "sha256": manifest["sha256"],
+        "bytes": manifest["bytes"],
+        "channels": audio["channels"],
+        "sample_rate_hz": audio["sample_rate_hz"],
+        "bits_per_sample": audio["bits_per_sample"],
+        "duration_ms": int(audio["duration_seconds"] * 1000),
+    },
+    "process": {"pid": pid},
+    "session_id": session,
+    "model": {
+        "id": module["DEFAULT_MODEL_ID"],
+        "revision": module["DEFAULT_MODEL_REVISION"],
+        "engine_instances": 1,
+        "warmed": True,
+        "downloaded": True,
+    },
+    "requested": {"cycles": 20, "history_rows": 50},
+    "completed": {"cycles": 20, "history_rows": 50},
+    "history": {"schema_version": 1, "integrity_ok": True},
+    "timings": {
+        "ready_at_unix_ms": 1000,
+        "started_at_unix_ms": 1100,
+        "history_ready_at_unix_ms": 1200,
+        "activation_started_at_unix_ms": 1300,
+        "loading_started_at_unix_ms": 1400,
+        "model_ready_at_unix_ms": 1500,
+        "warmup_completed_at_unix_ms": 1600,
+        "completed_at_unix_ms": 50000,
+        "model_download_ms": 100.0,
+        "model_cold_load_ms": 100.0,
+        "total_ms": 49000.0,
+        "cycles_ms": [400.0] * 20,
+    },
+    "observer_acknowledged": True,
+    "interaction_completed": False,
+    "retained_exit_acknowledged": False,
+    "passed": True,
+}
+workload = root / module["RETAINED_WORKLOAD_NAME"]
+workload.write_text(json.dumps(checkpoint), encoding="utf-8")
+workload.chmod(0o600)
+
+workload_copy = root / "workload-copy"
+workload.rename(workload_copy)
+workload.symlink_to(workload_copy)
+try:
+    module["validate_retained_checkpoint"](
+        workload,
+        data_root=root,
+        expected_pid=pid,
+        expected_session_id=session,
+        fixture_manifest=manifest,
+        phase="workload_observed",
+    )
+except module["EvidenceError"]:
+    pass
+else:
+    raise SystemExit("retained checkpoint accepted a symlink")
+workload.unlink()
+workload_copy.rename(workload)
+assert module["validate_retained_checkpoint"](
+    workload,
+    data_root=root,
+    expected_pid=pid,
+    expected_session_id=session,
+    fixture_manifest=manifest,
+    phase="workload_observed",
+)["process"] == {"pid": pid}
+workload.chmod(0o644)
+try:
+    module["validate_retained_checkpoint"](
+        workload,
+        data_root=root,
+        expected_pid=pid,
+        expected_session_id=session,
+        fixture_manifest=manifest,
+        phase="workload_observed",
+    )
+except module["EvidenceError"]:
+    pass
+else:
+    raise SystemExit("retained checkpoint accepted a non-0600 mode")
+workload.chmod(0o600)
+
+for field, value in (("process", {"pid": pid + 1}), ("session_id", "s-fedcba9876543210")):
+    tampered = copy.deepcopy(checkpoint)
+    tampered[field] = value
+    workload.write_text(json.dumps(tampered), encoding="utf-8")
+    try:
+        module["validate_retained_checkpoint"](
+            workload,
+            data_root=root,
+            expected_pid=pid,
+            expected_session_id=session,
+            fixture_manifest=manifest,
+            phase="workload_observed",
+        )
+    except module["EvidenceError"]:
+        pass
+    else:
+        raise SystemExit(f"retained checkpoint accepted wrong {field}")
+workload.write_text(json.dumps(checkpoint), encoding="utf-8")
+
+ack = root / module["RETAINED_EXIT_ACK_NAME"]
+module["create_exact_empty_ack"](
+    ack, data_root=root, name=module["RETAINED_EXIT_ACK_NAME"]
+)
+assert ack.is_file() and ack.stat().st_size == 0
+try:
+    module["create_exact_empty_ack"](
+        ack, data_root=root, name=module["RETAINED_EXIT_ACK_NAME"]
+    )
+except module["EvidenceError"]:
+    pass
+else:
+    raise SystemExit("retained ack accepted a pre-existing path")
+ack.unlink()
+ack.write_bytes(b"payload")
+try:
+    module["validate_exact_root_child"](
+        ack,
+        data_root=root,
+        name=module["RETAINED_EXIT_ACK_NAME"],
+        require_existing=True,
+        require_empty=True,
+    )
+except module["EvidenceError"]:
+    pass
+else:
+    raise SystemExit("retained ack accepted a nonzero payload")
+ack.unlink()
+target = root / "target"
+target.touch()
+ack.symlink_to(target)
+try:
+    module["validate_exact_root_child"](
+        ack,
+        data_root=root,
+        name=module["RETAINED_EXIT_ACK_NAME"],
+        require_existing=True,
+        require_empty=True,
+    )
+except module["EvidenceError"]:
+    pass
+else:
+    raise SystemExit("retained ack accepted a symlink")
+
+def diagnostics(count=20, *, recording=False, duplicate=False):
+    rows = []
+    for index in range(count):
+        correlation = "direct-00" if duplicate else f"direct-{index:02d}"
+        started = 2000 + index * 1000
+        rows.extend([
+            {"session_id": session, "code": "transcription_started", "correlation_id": correlation, "timestamp_unix_ms": started},
+            {"session_id": session, "code": "transcription_completed", "correlation_id": correlation, "timestamp_unix_ms": started + 400},
+        ])
+        if recording and index == 0:
+            rows.append({"session_id": session, "code": "recording_started", "correlation_id": correlation, "timestamp_unix_ms": started - 1})
+    return rows
+
+assert len(module["direct_cycle_correlations"](diagnostics(), session)) == 20
+for invalid in (diagnostics(19), diagnostics(21), diagnostics(recording=True), diagnostics(duplicate=True)):
+    try:
+        module["direct_cycle_correlations"](invalid, session)
+    except module["EvidenceError"]:
+        pass
+    else:
+        raise SystemExit("retained Malloc correlation contract accepted invalid 19/21/recording/duplicate evidence")
+
+leak_result = {
+    "metrics": {},
+    "traces": [],
+    "phases": {"cycles_20": {"pid": pid}},
+}
+module["add_retained_leak_comparison"](
+    leak_result,
+    baseline={"count": 2, "bytes": 64, "captured_at_unix_ms": 1900},
+    comparison={"count": 2, "bytes": 64, "captured_at_unix_ms": 22000},
+    baseline_evidence={"kind": "macos_leaks_live_attach", "name": "baseline", "sha256": "a" * 64},
+    comparison_evidence={"kind": "macos_leaks_live_attach", "name": "comparison", "sha256": "b" * 64},
+    diagnostics=diagnostics(),
+    session_id=session,
+)
+assert leak_result["metrics"]["leaks.definite.growth_count"] == {
+    "value": 0,
+    "sample_count": 20,
+    "evidence": [
+        {"kind": "macos_leaks_live_attach", "name": "baseline", "sha256": "a" * 64},
+        {"kind": "macos_leaks_live_attach", "name": "comparison", "sha256": "b" * 64},
+    ],
+}
+
+parser = module["build_parser"]()
+parsed = parser.parse_args([
+    "self-test", "--app", "/A.app", "--fixture", "/fixture", "--data-root", "/root",
+    "--output", "/result", "--retain-ui", "--malloc-stack-logging",
+])
+assert not parsed.interaction and parsed.retain_ui and parsed.malloc_stack_logging
+
+ui_checkpoint = copy.deepcopy(checkpoint)
+ui_checkpoint["contract"] = module["RETAINED_UI_CHECKPOINT_CONTRACT"]
+ui_checkpoint["phase"] = "ui_retained"
+
+ack_phase = {
+    "contract": "same-signed-pid-physical-observer-v1",
+    "pid": pid,
+    "session_id": session,
+    "workload_checkpoint": checkpoint,
+    "workload_checkpoint_sha256": module["canonical_payload_sha256"](checkpoint),
+    "ui_checkpoint": ui_checkpoint,
+    "ui_checkpoint_sha256": module["canonical_payload_sha256"](ui_checkpoint),
+    "window": {
+        "contract": "same-pid-typed-settings-v1",
+        "typed_show_requested_at_unix_ms": 51000,
+        "retained_window_shown_at_unix_ms": 51001,
+        "launch_services_observed_at_unix_ms": 51002,
+        "pid": pid,
+        "session_id": session,
+        "terminal_application_type": "Foreground",
+        "launch_services_state": {
+            "returncode": 0,
+            "stdout_shape": "exact_fields",
+            "stderr_category": "empty",
+            "bundle_id_matches": True,
+            "bundle_path_matches": True,
+            "pid_matches": True,
+            "application_type": "Foreground",
+        },
+    },
+    "exit_ack_name": module["RETAINED_EXIT_ACK_NAME"],
+    "exit_acknowledged": False,
+    "final_report_observed": False,
+}
+assert module["validate_retained_ack_phase"](ack_phase, expected_pid=pid) == (pid, session)
+for mutation in (
+    {"pid": pid + 1},
+    {"window": {**ack_phase["window"], "pid": pid + 1}},
+    {"window": {**ack_phase["window"], "unexpected_private_field": "private"}},
+    {"session_id": "s-fedcba9876543210"},
+    {"exit_acknowledged": True},
+):
+    invalid = {**ack_phase, **mutation}
+    try:
+        module["validate_retained_ack_phase"](invalid, expected_pid=pid)
+    except module["EvidenceError"]:
+        pass
+    else:
+        raise SystemExit("retained ack accepted wrong PID/session/window or completed state")
+PY
 
 mise exec -- xcrun swiftc "$REPO_DIR/scripts/perf/overlay-observer.swift" \
     -o "$TEST_ROOT/overlay-observer"

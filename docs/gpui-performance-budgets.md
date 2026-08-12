@@ -86,7 +86,9 @@ Required conditions shared by both halves are:
 
 - the exact same immutable arm64 Developer-ID-signed candidate and clean source
   commit;
-- Xcode 16.2 selected and the required Instruments templates present;
+- Xcode 16.2 selected on the constrained macOS 14 runner; on the supported
+  physical host, the actual selected compatible Xcode version/build and
+  `xctrace` template inventory are recorded verbatim rather than relabeled;
 - current pinned Parakeet model already verified, except during the dedicated
   download/load phases;
 - default 60 Hz display, 100% app text scale, light appearance for the numeric
@@ -301,15 +303,10 @@ History service; it never imports or clears user/Flutter data. The harness then
 opens that disposable SQLite database read-only and requires
 `integrity_check=ok`, `user_version=1`,
 the exact six-column `pipeline_history` schema and exactly 50 rows before it
-records the resource envelope. On the
-physical host, separately open, scroll and expand the same 50-entry shape for
-display/frame evidence.
-
-```bash
-mise run performance-sample -- \
-  --app "$WRENFLOW_PERF_APP" --phase history_50 --duration 120 --interval 1 \
-  --output "$WRENFLOW_PERF_CONSTRAINED"
-```
+records the resource envelope. On the physical host, the retained contract
+below opens, scrolls and expands this same disposable 50-entry History in the
+same signed PID for display/frame evidence. It never imports, clears or reads
+the ordinary user data root.
 
 ## Signed post-event-tap synthetic interaction markers
 
@@ -352,6 +349,59 @@ Attach to an already LaunchServices-started exact candidate. The wrapper never
 uses `xctrace --launch`, because launching the Mach-O through Instruments would
 change Wrenflow's responsible process identity.
 
+The physical workflow is a third selector available only beside the exact
+two-gate self-test and is deliberately mutually exclusive with the synthetic
+interaction selector: the latter exercises the real clipboard/Cmd+V path,
+while a retained physical observer must never modify the user's foreground
+application. It keeps the
+process on a disposable absolute data root, captures a MallocStackLogging
+baseline before the workload gate, runs the same 50-History/20-direct-cycle
+workload, compares leaks after the twentieth observer-correlated resource row,
+without invoking the post-event-tap paste phase. It then uses the ordinary
+typed SIGUSR2 settings request and requires the same signed
+PID/session to become a truthful LaunchServices `Foreground` app. Ordinary or
+half-gated launches cannot enable this path.
+
+```bash
+export WRENFLOW_PERF_PHYSICAL_ROOT="$WRENFLOW_PERF_DIR/physical-root"
+mkdir "$WRENFLOW_PERF_PHYSICAL_ROOT"
+mise run performance-self-test -- \
+  --app "$WRENFLOW_PERF_APP" \
+  --fixture "$WRENFLOW_PERF_FIXTURE" \
+  --data-root "$WRENFLOW_PERF_PHYSICAL_ROOT" \
+  --output "$WRENFLOW_PERF_INTERACTIVE" \
+  --retain-ui --malloc-stack-logging
+```
+
+Collect the three `post_event_tap_synthetic` metrics first with the separate
+`--interaction` command above, its disposable interaction root and an owned
+controlled target. Reuse the same still-unsealed candidate-bound output for
+the later retained command while keeping the two disposable roots distinct;
+the retained producer preserves the earlier synthetic phase and metrics. The
+retained command rejects a
+combined `--interaction --retain-ui` invocation before LaunchServices so its
+same-PID UI/leak observation never enters the clipboard, Cmd+V, microphone or
+TCC-sensitive path.
+
+That command remains attached while the same signed PID is navigated and
+traced. The private workload and UI checkpoints are mode-0600, bounded,
+content-free apart from closed timings/counts, and bound to the final report's
+PID/session/fixture/model/History/cycle values. Raw `.trace` bundles and leak
+stacks stay private. After the required traces and History/UI observations are
+complete, release the exact observer barrier from another terminal:
+
+```bash
+mise run performance-retained-ack -- \
+  --app "$WRENFLOW_PERF_APP" \
+  --data-root "$WRENFLOW_PERF_PHYSICAL_ROOT" \
+  --result "$WRENFLOW_PERF_INTERACTIVE"
+```
+
+The runtime then finalizes the ordinary self-test report and only its existing
+typed app cleanup requests quit. Missing, pre-existing, nonzero, symlinked,
+wrong-PID or wrong-session acknowledgements fail closed. Typed SIGUSR1
+shutdown remains available and cancels the retained wait promptly.
+
 ```bash
 mise run performance-trace -- \
   "$WRENFLOW_PERF_APP" "Time Profiler" 600 \
@@ -385,42 +435,29 @@ mise exec -- python3 scripts/perf/gpui-performance.py record-metric \
 
 Record every budget not emitted by the sampler the same way: model download
 and cold load, Settings navigation, 50-row History open, frame pacing, and
-render attribution. Definite leaks use the fail-closed live process guard after
-the constrained idle phase, while the exact signed candidate is still running:
-
-```bash
-mise run performance-leaks -- \
-  --app "$WRENFLOW_PERF_APP" --result "$WRENFLOW_PERF_INTERACTIVE" \
-  --mode baseline
-# Run exactly 20 externally driven, app-correlated cycles.
-mise run performance-leaks -- \
-  --app "$WRENFLOW_PERF_APP" --result "$WRENFLOW_PERF_INTERACTIVE" \
-  --mode compare
-```
-
-When the exact target requires privileged attachment, add `--sudo`; this uses
-only passwordless non-interactive `sudo -n` and otherwise has the identical
-exact-PID parser and path-free evidence contract.
+render attribution. Definite leaks use the fail-closed baseline/compare built
+into the retained command above. Both scans surround exactly the same twenty
+digest-verified fixture transcriptions used for resource evidence; accepted
+correlations have paired `transcription_started`/`completed` markers and no
+recording marker. This evidence therefore needs neither a real
+microphone/hotkey nor `.9.9` M06 human cycles.
 
 Both scans must use the same `MallocStackLogging=1` exact LaunchServices
 process. The guard verifies its PID and executable before and after each
 `/usr/bin/leaks --fullStacks --noContent`, parses exactly one process summary,
 and persists only counts plus hashes of the private raw output and canonical
-path-free summaries. It requires exactly 20 closed app diagnostic correlations
-between scans and budgets only positive definite-leak growth, never the total.
+path-free summaries. It requires exactly 20 closed non-recording direct
+diagnostic correlations between scans and budgets only positive definite-leak
+growth, never the total.
 The evidence-backed local startup baseline is 2 CFString objects / 112 bytes in
 `AudioCapture::list_input_devices -> cpal::Device::name -> CoreAudio`; it stays
 owned by non-blocking `wrenflow-bda`. Raw stacks are never uploaded. The
 RSS/fd/thread growth guards complement this scan.
 
-Create that retained stack-logged process without contaminating the ordinary
-idle/resource result:
-
-```bash
-mise exec -- python3 scripts/perf/gpui-performance.py launch \
-  --app "$WRENFLOW_PERF_APP" --mode warm --iterations 1 --leave-running \
-  --malloc-stack-logging --output "$WRENFLOW_PERF_INTERACTIVE"
-```
+The standalone `performance-leaks` command remains diagnostic compatibility
+for already-running ordinary candidates, but it is not the `.9.5` physical
+contract and cannot substitute real events or a different PID for the retained
+direct-cycle comparison.
 
 Each trace review must assign observed stacks to one of these owners in its
 notes:

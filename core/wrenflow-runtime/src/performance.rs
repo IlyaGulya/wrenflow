@@ -6,6 +6,7 @@
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -33,6 +34,7 @@ use crate::RuntimeError;
 pub const PERFORMANCE_CONTRACT: &str = "gpui-performance-v1";
 pub const PERFORMANCE_ARGUMENT: &str = "--performance-self-test";
 pub const PERFORMANCE_INTERACTION: &str = "synthetic-in-process-v1";
+pub const PERFORMANCE_RETAINED_UI: &str = "physical-instruments-v1";
 pub const PERFORMANCE_FIXTURE_SHA256: &str =
     "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e";
 pub const PERFORMANCE_FIXTURE_BYTES: usize = 352_078;
@@ -41,6 +43,7 @@ pub const PERFORMANCE_MODEL_REVISION: &str = "8f23f0c03c8761650bdb5b40aaf3e40d2c
 
 const CONTRACT_ENV: &str = "WRENFLOW_PERFORMANCE_SELF_TEST";
 const INTERACTION_ENV: &str = "WRENFLOW_PERFORMANCE_INTERACTION";
+const RETAINED_UI_ENV: &str = "WRENFLOW_PERFORMANCE_RETAINED_UI";
 const FIXTURE_ENV: &str = "WRENFLOW_PERFORMANCE_FIXTURE";
 const DATA_ROOT_ENV: &str = "WRENFLOW_PERFORMANCE_DATA_ROOT";
 const REJECTED_REPORT_ENV: &str = "WRENFLOW_PERFORMANCE_REPORT";
@@ -49,6 +52,14 @@ const START_SIGNAL_NAME: &str = "performance-start-v1";
 const OBSERVER_ACK_NAME: &str = "performance-observer-ack-v1";
 const INTERACTION_READY_NAME: &str = "performance-interaction-ready-v1";
 const INTERACTION_REPORT_NAME: &str = "performance-interaction-v1.json";
+const RETAINED_WORKLOAD_NAME: &str = "performance-retained-workload-v1.json";
+const RETAINED_WORKLOAD_CONTRACT: &str = "gpui-performance-retained-workload-v1";
+const RETAINED_WORKLOAD_READY_NAME: &str = "performance-retained-workload-ready-v1";
+const RETAINED_WORKLOAD_ACK_NAME: &str = "performance-retained-workload-ack-v1";
+const RETAINED_UI_NAME: &str = "performance-retained-ui-v1.json";
+const RETAINED_UI_CONTRACT: &str = "gpui-performance-retained-ui-v1";
+const RETAINED_UI_READY_NAME: &str = "performance-retained-ui-ready-v1";
+const RETAINED_EXIT_ACK_NAME: &str = "performance-retained-exit-ack-v1";
 const CYCLE_COUNT: usize = 20;
 const HISTORY_COUNT: usize = 50;
 // The signed observer may hold the exact two-gate process at its start signal
@@ -59,9 +70,12 @@ const START_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 const START_SIGNAL_RECHECK: Duration = Duration::from_secs(2);
 const MODEL_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(90 * 60);
+const RETAINED_TOTAL_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 const CYCLE_SETTLE: Duration = Duration::from_secs(1);
 const INTERACTION_TIMEOUT: Duration = Duration::from_secs(3 * 60);
 const OBSERVER_ACK_TIMEOUT: Duration = Duration::from_secs(60);
+const RETAINED_WORKLOAD_ACK_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const RETAINED_EXIT_ACK_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
 const INTERACTION_REPORT_MAX_BYTES: u64 = 64 * 1024;
 const INTERACTION_PULSE_COUNT: usize = 20;
 const INTERACTION_KEY_CODE: u16 = 96;
@@ -108,6 +122,17 @@ pub struct PerformanceSelfTestRequest {
     observer_ack_path: PathBuf,
     fixture: FixtureMetadata,
     interaction_paths: Option<PerformanceInteractionPaths>,
+    retained_paths: Option<PerformanceRetainedPaths>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PerformanceRetainedPaths {
+    workload_path: PathBuf,
+    workload_ready_path: PathBuf,
+    workload_ack_path: PathBuf,
+    ui_path: PathBuf,
+    ui_ready_path: PathBuf,
+    exit_ack_path: PathBuf,
 }
 
 /// Opaque canonical paths made available only from a successfully prepared
@@ -138,12 +163,20 @@ impl PerformanceSelfTestRequest {
     pub fn interaction_driver_paths(&self) -> Option<PerformanceInteractionPaths> {
         self.interaction_paths.clone()
     }
+
+    /// Report whether the independently gated physical observer barrier is
+    /// active. This exposes no fixture or disposable-root path to the UI.
+    #[must_use]
+    pub const fn retains_physical_ui(&self) -> bool {
+        self.retained_paths.is_some()
+    }
 }
 
 #[derive(Clone, Debug, Default)]
 struct ProcessInputs {
     contract: Option<OsString>,
     interaction: Option<OsString>,
+    retained_ui: Option<OsString>,
     fixture: Option<OsString>,
     data_root: Option<OsString>,
     rejected_report: Option<OsString>,
@@ -159,6 +192,7 @@ impl ProcessInputs {
                         key,
                         CONTRACT_ENV
                             | INTERACTION_ENV
+                            | RETAINED_UI_ENV
                             | FIXTURE_ENV
                             | DATA_ROOT_ENV
                             | REJECTED_REPORT_ENV
@@ -168,6 +202,7 @@ impl ProcessInputs {
         Self {
             contract: std::env::var_os(CONTRACT_ENV),
             interaction: std::env::var_os(INTERACTION_ENV),
+            retained_ui: std::env::var_os(RETAINED_UI_ENV),
             fixture: std::env::var_os(FIXTURE_ENV),
             data_root: std::env::var_os(DATA_ROOT_ENV),
             rejected_report: std::env::var_os(REJECTED_REPORT_ENV),
@@ -178,6 +213,7 @@ impl ProcessInputs {
     fn any_present(&self) -> bool {
         self.contract.is_some()
             || self.interaction.is_some()
+            || self.retained_ui.is_some()
             || self.fixture.is_some()
             || self.data_root.is_some()
             || self.rejected_report.is_some()
@@ -200,6 +236,11 @@ pub fn prepare_performance_self_test(
         .as_ref()
         .and_then(|value| value.to_str())
         .is_some_and(|value| value == PERFORMANCE_INTERACTION);
+    let retained_selected = inputs
+        .retained_ui
+        .as_ref()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value == PERFORMANCE_RETAINED_UI);
 
     let fixture = inputs
         .fixture
@@ -224,6 +265,14 @@ pub fn prepare_performance_self_test(
         ready_signal_path: data_root.join(INTERACTION_READY_NAME),
         report_path: data_root.join(INTERACTION_REPORT_NAME),
     });
+    let retained_paths = retained_selected.then(|| PerformanceRetainedPaths {
+        workload_path: data_root.join(RETAINED_WORKLOAD_NAME),
+        workload_ready_path: data_root.join(RETAINED_WORKLOAD_READY_NAME),
+        workload_ack_path: data_root.join(RETAINED_WORKLOAD_ACK_NAME),
+        ui_path: data_root.join(RETAINED_UI_NAME),
+        ui_ready_path: data_root.join(RETAINED_UI_READY_NAME),
+        exit_ack_path: data_root.join(RETAINED_EXIT_ACK_NAME),
+    });
     Ok(Some(PerformanceSelfTestRequest {
         report_path: data_root.join(REPORT_NAME),
         start_signal_path: data_root.join(START_SIGNAL_NAME),
@@ -231,6 +280,7 @@ pub fn prepare_performance_self_test(
         data_root,
         fixture,
         interaction_paths,
+        retained_paths,
     }))
 }
 
@@ -252,9 +302,20 @@ fn validate_gate(arguments: &[String], inputs: &ProcessInputs) -> Result<(), Per
         .interaction
         .as_ref()
         .is_none_or(|value| value.to_str() == Some(PERFORMANCE_INTERACTION));
+    let valid_retained = inputs
+        .retained_ui
+        .as_ref()
+        .is_none_or(|value| value.to_str() == Some(PERFORMANCE_RETAINED_UI));
+    // The interaction driver deliberately exercises the real clipboard/Cmd+V
+    // disposition. A retained physical observer must never inherit that path:
+    // it owns no paste target and may run on an interactive user's desktop.
+    let retained_excludes_interaction =
+        inputs.retained_ui.is_none() || inputs.interaction.is_none();
     if !exact_arguments
         || !exact_contract
         || !valid_interaction
+        || !valid_retained
+        || !retained_excludes_interaction
         || inputs.fixture.is_none()
         || inputs.data_root.is_none()
         || inputs.rejected_report.is_some()
@@ -404,8 +465,13 @@ async fn execute(
     emit_marker(DiagnosticCode::PerformanceSelfTestStarted);
     emit_marker(DiagnosticCode::PerformanceSelfTestFixtureVerified);
     let started_at = unix_ms();
+    let total_timeout = if request.retained_paths.is_some() {
+        RETAINED_TOTAL_TIMEOUT
+    } else {
+        TOTAL_TIMEOUT
+    };
     let result = tokio::time::timeout(
-        TOTAL_TIMEOUT,
+        total_timeout,
         execute_bounded(&request, models, history, store, started_at),
     )
     .await;
@@ -440,6 +506,9 @@ async fn execute_bounded(
     let models = models.ok_or(PerformanceFailureCode::RuntimeUnavailable)?;
     let history = history.ok_or(PerformanceFailureCode::RuntimeUnavailable)?;
     require_missing_observer_ack(&request.observer_ack_path)?;
+    if let Some(paths) = &request.retained_paths {
+        require_missing_retained_paths(paths)?;
+    }
     let ready_at = unix_ms_after(process_started_at);
     emit_marker(DiagnosticCode::PerformanceSelfTestReady);
     wait_for_start_signal(&request.start_signal_path).await?;
@@ -501,11 +570,47 @@ async fn execute_bounded(
 
     wait_for_observer_ack(&request.observer_ack_path).await?;
 
+    let workload_completed_at = unix_ms_after(warmup_completed_at);
+    if let Some(paths) = &request.retained_paths {
+        let checkpoint = RetainedCheckpoint::workload(
+            process_started_at,
+            ready_at,
+            started_at,
+            history_ready_at,
+            &model_timings,
+            warmup_completed_at,
+            workload_completed_at,
+            cycle_ms.clone(),
+        );
+        write_retained_checkpoint(&paths.workload_path, &checkpoint)?;
+        publish_empty_signal(&paths.workload_ready_path)?;
+        emit_marker(DiagnosticCode::PerformanceRetainedWorkloadReady);
+        wait_for_exact_ack(&paths.workload_ack_path, RETAINED_WORKLOAD_ACK_TIMEOUT).await?;
+    }
+
     if let Some(paths) = &request.interaction_paths {
         wait_for_paste_disposition(&store).await?;
         require_missing_interaction_report(&paths.report_path)?;
         publish_interaction_ready(&paths.ready_signal_path)?;
         wait_for_interaction_report(&paths.report_path).await?;
+    }
+
+    if let Some(paths) = &request.retained_paths {
+        let checkpoint = RetainedCheckpoint::ui(
+            process_started_at,
+            ready_at,
+            started_at,
+            history_ready_at,
+            &model_timings,
+            warmup_completed_at,
+            workload_completed_at,
+            cycle_ms.clone(),
+        );
+        write_retained_checkpoint(&paths.ui_path, &checkpoint)?;
+        publish_empty_signal(&paths.ui_ready_path)?;
+        emit_marker(DiagnosticCode::PerformanceRetainedUiReady);
+        wait_for_exact_ack(&paths.exit_ack_path, RETAINED_EXIT_ACK_TIMEOUT).await?;
+        verify_history(&paths_for_request(request).history)?;
     }
 
     let completed_at = unix_ms_after(warmup_completed_at);
@@ -521,6 +626,10 @@ async fn execute_bounded(
         completed_at_unix_ms: completed_at,
     };
     Ok(PerformanceReport::passed(timeline, model_timings, cycle_ms))
+}
+
+fn paths_for_request(request: &PerformanceSelfTestRequest) -> CurrentDataPaths {
+    CurrentDataPaths::under(&request.data_root)
 }
 
 async fn wait_for_paste_disposition(store: &RuntimeStore) -> Result<(), PerformanceFailureCode> {
@@ -748,6 +857,69 @@ async fn wait_for_observer_ack_with_timeout(
     }
 }
 
+fn require_missing_retained_paths(
+    paths: &PerformanceRetainedPaths,
+) -> Result<(), PerformanceFailureCode> {
+    for path in [
+        &paths.workload_path,
+        &paths.workload_ready_path,
+        &paths.workload_ack_path,
+        &paths.ui_path,
+        &paths.ui_ready_path,
+        &paths.exit_ack_path,
+    ] {
+        match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            _ => return Err(PerformanceFailureCode::UnsafeRetainedPath),
+        }
+    }
+    Ok(())
+}
+
+async fn wait_for_exact_ack(path: &Path, timeout: Duration) -> Result<(), PerformanceFailureCode> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match fs::symlink_metadata(path) {
+            Ok(metadata)
+                if metadata.file_type().is_file()
+                    && !metadata.file_type().is_symlink()
+                    && metadata.len() == 0
+                    && metadata.permissions().mode() & 0o777 == 0o600 =>
+            {
+                return Ok(());
+            }
+            Ok(_) => return Err(PerformanceFailureCode::UnsafeRetainedAck),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(PerformanceFailureCode::UnsafeRetainedAck),
+        }
+        if Instant::now() >= deadline {
+            return Err(PerformanceFailureCode::RetainedAckTimeout);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn publish_empty_signal(path: &Path) -> Result<(), PerformanceFailureCode> {
+    let parent = path
+        .parent()
+        .ok_or(PerformanceFailureCode::RetainedPublish)?;
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        _ => return Err(PerformanceFailureCode::RetainedPublish),
+    }
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|_| PerformanceFailureCode::RetainedPublish)?;
+    file.sync_all()
+        .map_err(|_| PerformanceFailureCode::RetainedPublish)?;
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| PerformanceFailureCode::RetainedPublish)
+}
+
 struct ModelTimings {
     activation_started_at_unix_ms: u64,
     loading_started_at_unix_ms: u64,
@@ -874,6 +1046,10 @@ enum PerformanceFailureCode {
     UnsafeInteractionReport,
     InvalidInteractionReport,
     InteractionTimeout,
+    UnsafeRetainedPath,
+    UnsafeRetainedAck,
+    RetainedPublish,
+    RetainedAckTimeout,
     TimedOut,
 }
 
@@ -899,6 +1075,10 @@ impl PerformanceFailureCode {
             Self::UnsafeInteractionReport => "unsafe_interaction_report",
             Self::InvalidInteractionReport => "invalid_interaction_report",
             Self::InteractionTimeout => "interaction_timeout",
+            Self::UnsafeRetainedPath => "unsafe_retained_path",
+            Self::UnsafeRetainedAck => "unsafe_retained_ack",
+            Self::RetainedPublish => "retained_publish_failed",
+            Self::RetainedAckTimeout => "retained_ack_timeout",
             Self::TimedOut => "timed_out",
         }
     }
@@ -975,6 +1155,25 @@ struct TimingReport {
     cycles_ms: Vec<f64>,
 }
 
+#[derive(Serialize)]
+struct RetainedCheckpoint {
+    schema_version: u16,
+    contract: &'static str,
+    phase: &'static str,
+    fixture: FixtureReport,
+    process: ProcessReport,
+    session_id: String,
+    model: ModelReport,
+    requested: CountReport,
+    completed: CountReport,
+    history: HistoryReport,
+    timings: TimingReport,
+    observer_acknowledged: bool,
+    interaction_completed: bool,
+    retained_exit_acknowledged: bool,
+    passed: bool,
+}
+
 #[derive(Clone, Copy)]
 struct SelfTestTimeline {
     process_started_at_unix_ms: u64,
@@ -1037,6 +1236,123 @@ impl PerformanceReport {
             quit_requested: true,
             passed: true,
             failure_code: None,
+        }
+    }
+}
+
+impl RetainedCheckpoint {
+    #[allow(clippy::too_many_arguments)]
+    fn workload(
+        process_started_at: u64,
+        ready_at: u64,
+        started_at: u64,
+        history_ready_at: u64,
+        model: &ModelTimings,
+        warmup_completed_at: u64,
+        completed_at: u64,
+        cycles_ms: Vec<f64>,
+    ) -> Self {
+        Self::new(
+            RETAINED_WORKLOAD_CONTRACT,
+            "workload_observed",
+            process_started_at,
+            ready_at,
+            started_at,
+            history_ready_at,
+            model,
+            warmup_completed_at,
+            completed_at,
+            cycles_ms,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn ui(
+        process_started_at: u64,
+        ready_at: u64,
+        started_at: u64,
+        history_ready_at: u64,
+        model: &ModelTimings,
+        warmup_completed_at: u64,
+        completed_at: u64,
+        cycles_ms: Vec<f64>,
+    ) -> Self {
+        Self::new(
+            RETAINED_UI_CONTRACT,
+            "ui_retained",
+            process_started_at,
+            ready_at,
+            started_at,
+            history_ready_at,
+            model,
+            warmup_completed_at,
+            completed_at,
+            cycles_ms,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        contract: &'static str,
+        phase: &'static str,
+        process_started_at: u64,
+        ready_at: u64,
+        started_at: u64,
+        history_ready_at: u64,
+        model: &ModelTimings,
+        warmup_completed_at: u64,
+        completed_at: u64,
+        cycles_ms: Vec<f64>,
+        interaction_completed: bool,
+    ) -> Self {
+        Self {
+            schema_version: 1,
+            contract,
+            phase,
+            fixture: fixture_report(),
+            process: ProcessReport {
+                pid: std::process::id(),
+            },
+            session_id: current_session_id().unwrap_or_else(|| "session-unavailable".to_string()),
+            model: ModelReport {
+                id: DEFAULT_SELECTED_LOCAL_MODEL_ID,
+                revision: PERFORMANCE_MODEL_REVISION,
+                engine_instances: 1,
+                warmed: true,
+                downloaded: true,
+            },
+            requested: CountReport {
+                cycles: CYCLE_COUNT,
+                history_rows: HISTORY_COUNT,
+            },
+            completed: CountReport {
+                cycles: CYCLE_COUNT,
+                history_rows: HISTORY_COUNT,
+            },
+            history: HistoryReport {
+                schema_version: 1,
+                integrity_ok: true,
+            },
+            timings: TimingReport {
+                ready_at_unix_ms: ready_at,
+                started_at_unix_ms: started_at,
+                history_ready_at_unix_ms: history_ready_at,
+                activation_started_at_unix_ms: model.activation_started_at_unix_ms,
+                loading_started_at_unix_ms: model.loading_started_at_unix_ms,
+                model_ready_at_unix_ms: model.model_ready_at_unix_ms,
+                warmup_completed_at_unix_ms: warmup_completed_at,
+                completed_at_unix_ms: completed_at,
+                model_download_ms: model.download_ms,
+                model_cold_load_ms: model.cold_load_ms,
+                total_ms: completed_at.saturating_sub(process_started_at) as f64,
+                cycles_ms,
+            },
+            observer_acknowledged: true,
+            interaction_completed,
+            retained_exit_acknowledged: false,
+            passed: true,
         }
     }
 }
@@ -1127,6 +1443,45 @@ fn write_report(path: &Path, report: &PerformanceReport) -> Result<(), RuntimeEr
         .and_then(|directory| directory.sync_all())
         .map_err(|_| performance_error("report_sync"))?;
     Ok(())
+}
+
+fn write_retained_checkpoint(
+    path: &Path,
+    checkpoint: &RetainedCheckpoint,
+) -> Result<(), PerformanceFailureCode> {
+    let data = serde_json::to_vec_pretty(checkpoint)
+        .map_err(|_| PerformanceFailureCode::RetainedPublish)?;
+    let parent = path
+        .parent()
+        .ok_or(PerformanceFailureCode::RetainedPublish)?;
+    let temporary = parent.join(format!(
+        ".{}.tmp-{}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("retained"),
+        std::process::id()
+    ));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+            .map_err(|_| PerformanceFailureCode::RetainedPublish)?;
+        file.write_all(&data)
+            .and_then(|()| file.write_all(b"\n"))
+            .and_then(|()| file.sync_all())
+            .map_err(|_| PerformanceFailureCode::RetainedPublish)?;
+        fs::hard_link(&temporary, path).map_err(|_| PerformanceFailureCode::RetainedPublish)?;
+        let _ = fs::remove_file(&temporary);
+        File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| PerformanceFailureCode::RetainedPublish)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
 }
 
 fn emit_marker(code: DiagnosticCode) {
@@ -1225,6 +1580,7 @@ mod tests {
         ProcessInputs {
             contract: contract.map(OsString::from),
             interaction: None,
+            retained_ui: None,
             fixture: fixture.then(|| OsString::from("/fixture.wav")),
             data_root: root.then(|| OsString::from("/data")),
             rejected_report: None,
@@ -1302,6 +1658,21 @@ mod tests {
             Err(PerformanceGateError::GateMismatch)
         );
 
+        let mut retained = inputs(Some(PERFORMANCE_CONTRACT), true, true);
+        retained.retained_ui = Some(OsString::from(PERFORMANCE_RETAINED_UI));
+        assert_eq!(validate_gate(&exact, &retained), Ok(()));
+        retained.interaction = Some(OsString::from(PERFORMANCE_INTERACTION));
+        assert_eq!(
+            validate_gate(&exact, &retained),
+            Err(PerformanceGateError::GateMismatch)
+        );
+        retained.interaction = None;
+        retained.retained_ui = Some(OsString::from("wrong"));
+        assert_eq!(
+            validate_gate(&exact, &retained),
+            Err(PerformanceGateError::GateMismatch)
+        );
+
         let mut selector_alone = ProcessInputs::default();
         selector_alone.interaction = Some(OsString::from(PERFORMANCE_INTERACTION));
         assert_eq!(
@@ -1334,6 +1705,14 @@ mod tests {
         assert!(has_performance_surface(&normal, &interaction));
         assert_eq!(
             validate_gate(&normal, &interaction),
+            Err(PerformanceGateError::GateMismatch)
+        );
+
+        let mut retained = ProcessInputs::default();
+        retained.retained_ui = Some(OsString::from(PERFORMANCE_RETAINED_UI));
+        assert!(has_performance_surface(&normal, &retained));
+        assert_eq!(
+            validate_gate(&normal, &retained),
             Err(PerformanceGateError::GateMismatch)
         );
     }
@@ -1465,6 +1844,7 @@ mod tests {
                 samples: Arc::new(Vec::new()),
             },
             interaction_paths: None,
+            retained_paths: None,
         };
         let report = failure_report(&request, 10, PerformanceFailureCode::TimedOut);
         let transition_timestamps = [
@@ -1581,6 +1961,7 @@ mod tests {
                 ready_signal_path: root.join(INTERACTION_READY_NAME),
                 report_path: root.join(INTERACTION_REPORT_NAME),
             }),
+            retained_paths: None,
         };
         let paths = request
             .interaction_driver_paths()
@@ -1618,5 +1999,101 @@ mod tests {
             require_missing_interaction_report(&report),
             Err(PerformanceFailureCode::UnsafeInteractionReport)
         );
+    }
+
+    #[tokio::test]
+    async fn retained_barriers_are_missing_first_zero_byte_and_bounded() {
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("temp root: {error}"));
+        let paths = PerformanceRetainedPaths {
+            workload_path: root.path().join(RETAINED_WORKLOAD_NAME),
+            workload_ready_path: root.path().join(RETAINED_WORKLOAD_READY_NAME),
+            workload_ack_path: root.path().join(RETAINED_WORKLOAD_ACK_NAME),
+            ui_path: root.path().join(RETAINED_UI_NAME),
+            ui_ready_path: root.path().join(RETAINED_UI_READY_NAME),
+            exit_ack_path: root.path().join(RETAINED_EXIT_ACK_NAME),
+        };
+        assert_eq!(require_missing_retained_paths(&paths), Ok(()));
+        assert_eq!(publish_empty_signal(&paths.workload_ready_path), Ok(()));
+        let metadata = fs::symlink_metadata(&paths.workload_ready_path)
+            .unwrap_or_else(|error| panic!("retained ready: {error}"));
+        assert!(metadata.file_type().is_file());
+        assert_eq!(metadata.len(), 0);
+        assert_eq!(
+            wait_for_exact_ack(&paths.workload_ack_path, Duration::from_millis(5)).await,
+            Err(PerformanceFailureCode::RetainedAckTimeout)
+        );
+        fs::write(&paths.workload_ack_path, b"payload")
+            .unwrap_or_else(|error| panic!("bad retained ack: {error}"));
+        assert_eq!(
+            wait_for_exact_ack(&paths.workload_ack_path, Duration::from_millis(5)).await,
+            Err(PerformanceFailureCode::UnsafeRetainedAck)
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            fs::remove_file(&paths.workload_ack_path)
+                .unwrap_or_else(|error| panic!("remove bad retained ack: {error}"));
+            let target = root.path().join("ack-target");
+            fs::write(&target, b"").unwrap_or_else(|error| panic!("write ack target: {error}"));
+            symlink(&target, &paths.workload_ack_path)
+                .unwrap_or_else(|error| panic!("symlink retained ack: {error}"));
+            assert_eq!(
+                wait_for_exact_ack(&paths.workload_ack_path, Duration::from_millis(5)).await,
+                Err(PerformanceFailureCode::UnsafeRetainedAck)
+            );
+            fs::remove_file(&paths.workload_ack_path)
+                .unwrap_or_else(|error| panic!("remove ack symlink: {error}"));
+            let file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&paths.workload_ack_path)
+                .unwrap_or_else(|error| panic!("create retained ack: {error}"));
+            file.sync_all()
+                .unwrap_or_else(|error| panic!("sync retained ack: {error}"));
+            fs::set_permissions(&paths.workload_ack_path, fs::Permissions::from_mode(0o644))
+                .unwrap_or_else(|error| panic!("set unsafe ack mode: {error}"));
+            assert_eq!(
+                wait_for_exact_ack(&paths.workload_ack_path, Duration::from_millis(5)).await,
+                Err(PerformanceFailureCode::UnsafeRetainedAck)
+            );
+            fs::set_permissions(&paths.workload_ack_path, fs::Permissions::from_mode(0o600))
+                .unwrap_or_else(|error| panic!("set exact ack mode: {error}"));
+            assert_eq!(
+                wait_for_exact_ack(&paths.workload_ack_path, Duration::from_millis(5)).await,
+                Ok(())
+            );
+        }
+    }
+
+    #[test]
+    fn retained_checkpoint_is_closed_content_free_and_not_a_quit_claim() {
+        let checkpoint = RetainedCheckpoint::workload(
+            1,
+            2,
+            3,
+            4,
+            &ModelTimings {
+                activation_started_at_unix_ms: 5,
+                loading_started_at_unix_ms: 6,
+                model_ready_at_unix_ms: 7,
+                download_ms: 1.0,
+                cold_load_ms: 1.0,
+            },
+            8,
+            9,
+            vec![1.0; CYCLE_COUNT],
+        );
+        let encoded = serde_json::to_string(&checkpoint).unwrap_or_default();
+        assert!(encoded.contains(RETAINED_WORKLOAD_CONTRACT));
+        assert!(encoded.contains("\"cycles\":20"));
+        assert!(encoded.contains("\"history_rows\":50"));
+        assert!(encoded.contains("\"retained_exit_acknowledged\":false"));
+        assert!(!encoded.contains("quit_requested"));
+        assert!(!encoded.contains("transcript"));
+        assert!(!encoded.contains("audio_file"));
+        assert!(!encoded.contains("path"));
     }
 }

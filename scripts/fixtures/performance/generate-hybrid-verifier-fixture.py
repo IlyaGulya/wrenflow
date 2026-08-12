@@ -12,6 +12,191 @@ def evidence_hash(result):
     return hashlib.sha256(encoded).hexdigest()
 
 
+def payload_hash(value):
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def retained_phases_and_metric():
+    pid = 4242
+    session = "s-0123456789abcdef"
+    fixture = {
+        "id": "whispercpp-jfk-pcm16-v1",
+        "sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+        "bytes": 352078,
+        "channels": 1,
+        "sample_rate_hz": 16000,
+        "bits_per_sample": 16,
+        "duration_ms": 11000,
+    }
+    model = {
+        "id": "parakeet-tdt-0.6b-v3-onnx",
+        "revision": "8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce",
+        "engine_instances": 1,
+        "warmed": True,
+        "downloaded": True,
+    }
+    workload = {"cycles": 20, "history_rows": 50}
+    history = {"schema_version": 1, "integrity_ok": True}
+    timings = {
+        "ready_at_unix_ms": 1000,
+        "started_at_unix_ms": 2000,
+        "history_ready_at_unix_ms": 2100,
+        "activation_started_at_unix_ms": 2200,
+        "loading_started_at_unix_ms": 2300,
+        "model_ready_at_unix_ms": 2400,
+        "warmup_completed_at_unix_ms": 2500,
+        "completed_at_unix_ms": 25000,
+        "model_download_ms": 100.0,
+        "model_cold_load_ms": 100.0,
+        "total_ms": 24000.0,
+        "cycles_ms": [400.0] * 20,
+    }
+    common = {
+        "schema_version": 1,
+        "fixture": fixture,
+        "process": {"pid": pid},
+        "session_id": session,
+        "model": model,
+        "requested": workload,
+        "completed": workload,
+        "history": history,
+        "timings": timings,
+        "observer_acknowledged": True,
+        "interaction_completed": False,
+        "retained_exit_acknowledged": False,
+        "passed": True,
+    }
+    workload_checkpoint = {
+        **common,
+        "contract": "gpui-performance-retained-workload-v1",
+        "phase": "workload_observed",
+    }
+    ui_checkpoint = {
+        **common,
+        "contract": "gpui-performance-retained-ui-v1",
+        "phase": "ui_retained",
+    }
+    final_report = {
+        "schema_version": 1,
+        "contract": "gpui-performance-self-test-v1",
+        "fixture": fixture,
+        "process": {"pid": pid},
+        "session_id": session,
+        "model": model,
+        "requested": workload,
+        "completed": workload,
+        "history": history,
+        "timings": {**timings, "completed_at_unix_ms": 28000, "total_ms": 27000.0},
+        "quit_requested": True,
+        "passed": True,
+        "failure_code": None,
+    }
+    diagnostics = []
+    for index in range(20):
+        correlation = f"direct-{index:02d}"
+        started = 3000 + index * 1000
+        diagnostics.extend([
+            {
+                "timestamp_unix_ms": started,
+                "session_id": session,
+                "correlation_id": correlation,
+                "code": "transcription_started",
+            },
+            {
+                "timestamp_unix_ms": started + 400,
+                "session_id": session,
+                "correlation_id": correlation,
+                "code": "transcription_completed",
+            },
+        ])
+    def leak_summary(count, leaked_bytes, captured):
+        canonical = (
+            "leaks-stacklogged-summary-v1\n"
+            f"count={count}\nbytes={leaked_bytes}\n"
+        )
+        return {
+            "count": count,
+            "bytes": leaked_bytes,
+            "captured_at_unix_ms": captured,
+            "canonical_summary_sha256": hashlib.sha256(canonical.encode()).hexdigest(),
+            "private_raw_output_sha256": hashlib.sha256(
+                f"private-fixture-{captured}".encode()
+            ).hexdigest(),
+        }
+    baseline = leak_summary(2, 64, 1900)
+    comparison = leak_summary(2, 64, 26000)
+    evidence = [
+        {
+            "kind": "macos_leaks_live_attach",
+            "name": "leaks-stacklogged-summary-v1",
+            "sha256": baseline["private_raw_output_sha256"],
+        },
+        {
+            "kind": "macos_leaks_live_attach",
+            "name": "leaks-stacklogged-summary-v1",
+            "sha256": comparison["private_raw_output_sha256"],
+        },
+    ]
+    phases = {
+        "retained_ui": {
+            "contract": "same-signed-pid-physical-observer-v1",
+            "pid": pid,
+            "session_id": session,
+            "workload_checkpoint": workload_checkpoint,
+            "workload_checkpoint_sha256": payload_hash(workload_checkpoint),
+            "ui_checkpoint": ui_checkpoint,
+            "ui_checkpoint_sha256": payload_hash(ui_checkpoint),
+            "window": {
+                "contract": "same-pid-typed-settings-v1",
+                "typed_show_requested_at_unix_ms": 27000,
+                "retained_window_shown_at_unix_ms": 27100,
+                "launch_services_observed_at_unix_ms": 27200,
+                "terminal_application_type": "Foreground",
+                "pid": pid,
+                "session_id": session,
+                "launch_services_state": {
+                    "returncode": 0,
+                    "stdout_shape": "exact_fields",
+                    "stderr_category": "empty",
+                    "bundle_id_matches": True,
+                    "bundle_path_matches": True,
+                    "pid_matches": True,
+                    "application_type": "Foreground",
+                },
+            },
+            "exit_ack_name": "performance-retained-exit-ack-v1",
+            "exit_acknowledged": True,
+            "final_report_observed": True,
+            "final_report": final_report,
+            "final_report_sha256": payload_hash(final_report),
+        },
+        "leaks_stacklogged": {
+            "phase": "leaks_stacklogged",
+            "contract": "same-pid-direct-twenty-v1",
+            "pid": pid,
+            "session_id": session,
+            "stack_logging_confirmed": True,
+            "baseline": baseline,
+            "comparison": comparison,
+            "closed_cycle_count": 20,
+            "first_correlation_id": "direct-00",
+            "last_correlation_id": "direct-19",
+            "diagnostics": diagnostics,
+            "count_delta": 0,
+            "bytes_delta": 0,
+        },
+        "signed_self_test": {
+            "pid": pid,
+            "retained_ui_contract": "same-signed-pid-physical-observer-v1",
+            "interaction_classification": "none",
+            "auto_exit_observed": True,
+        },
+    }
+    metric = {"value": 0.0, "sample_count": 20, "evidence": evidence}
+    return phases, metric, evidence
+
+
 def idle_phase_and_metrics():
     baseline_elapsed = 0.5
     baseline_wall_ms = 1_000_000
@@ -193,6 +378,7 @@ def make_result(role, budgets):
                 "evidence": evidence,
             }
     phases = {}
+    traces = []
     if role == "constrained_noninteractive":
         idle_phase, idle_metrics = idle_phase_and_metrics()
         phases["idle"] = idle_phase
@@ -200,23 +386,43 @@ def make_result(role, budgets):
         launch_phases, launch_metrics = launch_phases_and_metrics()
         phases.update(launch_phases)
         metrics.update(launch_metrics)
+    elif role == "physical_interactive":
+        retained_phases, retained_metric, retained_traces = retained_phases_and_metric()
+        phases.update(retained_phases)
+        metrics["leaks.definite.growth_count"] = retained_metric
+        traces.extend(retained_traces)
     eligibility = {
         "github_m1_7gb_constrained_preflight": role == "constrained_noninteractive",
         "physical_supported_interactive": role == "physical_interactive",
         "physical_base_m1_8gib_macos14": False,
     }
+    constrained = role == "constrained_noninteractive"
     result = {
         "schema_version": 1,
         "budget_version": budgets["budget_version"],
         "source": {"commit": "a" * 40, "dirty": False},
         "host": {
-            "os_version": "14.8.7",
+            "os_version": "14.8.7" if constrained else "26.5.1",
+            "os_build": "23J520" if constrained else "25F80",
             "architecture": "arm64",
-            "chip": "Apple M1",
-            "machine_model": "VirtualMac2,1",
-            "memory_bytes": 7_516_192_768,
-            "logical_cpu_count": 3,
-            "xcode_version": "Xcode 16.2",
+            "chip": "Apple M1" if constrained else "Apple M1 Max",
+            "machine_model": "VirtualMac2,1" if constrained else "Mac13,1",
+            "memory_bytes": 7_516_192_768 if constrained else 68_719_476_736,
+            "logical_cpu_count": 3 if constrained else 10,
+            "xcode_version": "Xcode 16.2" if constrained else "Xcode 26.6",
+            "xcode_build": "Build version 16C5032a" if constrained else "Build version 17F113",
+            "xctrace_version": "xctrace version 16.0 (17F113)",
+            "xctrace_templates": [
+                "Activity Monitor",
+                "Allocations",
+                "Animation Hitches",
+                "Audio System Trace",
+                "Leaks",
+                "System Trace",
+                "Time Profiler",
+            ],
+            "missing_required_templates": [],
+            "missing_supporting_templates": ["Power Profiler"],
             "github": {
                 "actions": role == "constrained_noninteractive",
                 "runner_os": "macOS" if role == "constrained_noninteractive" else None,
@@ -224,7 +430,6 @@ def make_result(role, budgets):
                 "runner_environment": "github-hosted" if role == "constrained_noninteractive" else None,
             },
             "evidence_eligibility": eligibility,
-            "missing_required_templates": [],
             "power": {
                 "source": "ac",
                 "low_power_mode": False,
@@ -242,6 +447,7 @@ def make_result(role, budgets):
         },
         "candidate_id": "synthetic-verifier-fixture",
         "metrics": metrics,
+        "traces": traces,
         "phases": ({
             **phases,
             "post_event_tap_synthetic": {
