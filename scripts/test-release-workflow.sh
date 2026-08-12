@@ -113,6 +113,38 @@ require_frozen_stable_baseline_contract() {
     ! grep -Fqx -- '      actions: write' "$release_file"
 }
 
+require_frozen_source_history_contract() {
+    local file="$1"
+    local verify_block compatibility_block build_block verify_pr_block
+    verify_block="$(awk '
+        $0 == "  verify_frozen_performance_baseline:" { capture = 1 }
+        capture && $0 == "  publish:" { exit }
+        capture { print }
+    ' "$file")"
+    compatibility_block="$(awk '
+        $0 == "  compatibility-minimum:" { capture = 1 }
+        capture && $0 == "  build_release:" { exit }
+        capture { print }
+    ' "$file")"
+    build_block="$(awk '
+        $0 == "  build_release:" { capture = 1 }
+        capture && $0 == "  performance_cold:" { exit }
+        capture { print }
+    ' "$file")"
+    verify_pr_block="$(awk '
+        $0 == "  verify-pr:" { capture = 1 }
+        capture && $0 == "  compatibility-minimum:" { exit }
+        capture { print }
+    ' "$file")"
+    [[ -n "$verify_block" && -n "$compatibility_block" && -n "$build_block" && -n "$verify_pr_block" ]] || return 1
+    [[ "$(grep -Fxc -- '          fetch-depth: 0' <<< "$verify_block")" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc -- '          fetch-depth: 0' <<< "$compatibility_block")" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc -- '          fetch-depth: 0' <<< "$build_block")" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc -- '        run: mise run test' <<< "$compatibility_block")" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc -- '          mise run test' <<< "$build_block")" -eq 1 ]] || return 1
+    ! grep -Fqx -- '          fetch-depth: 0' <<< "$verify_pr_block"
+}
+
 require_pattern "workflow_call:" "$BUILD_WORKFLOW"
 require_pattern "workflow_dispatch:" "$BUILD_WORKFLOW"
 require_pattern "release_tag:" "$BUILD_WORKFLOW"
@@ -180,6 +212,7 @@ require_pattern '[tasks.verify-frozen-performance-baseline]' "$REPO_DIR/mise.tom
 require_pattern '[tasks.test-frozen-performance-baseline]' "$REPO_DIR/mise.toml"
 require_pattern 'scripts/verify-frozen-performance-baseline.py' "$REPO_DIR/mise.toml"
 require_frozen_stable_baseline_contract "$BUILD_WORKFLOW"
+require_frozen_source_history_contract "$BUILD_WORKFLOW"
 require_pattern "scripts/perf/gpui-performance.py merge-cold" "$BUILD_WORKFLOW"
 require_pattern '[[ ${#COLD_SHARDS[@]} -eq 20 ]]' "$BUILD_WORKFLOW"
 require_pattern 'MERGE_ARGS+=(--shard "$shard")' "$BUILD_WORKFLOW"
@@ -522,6 +555,51 @@ sed 's/^      actions: read$/      actions: write/' \
     > "$REPO_SCOPE_FIXTURE/release-frozen-actions-mutated.yml"
 expect_frozen_contract_rejected writable-artifact-permission \
     "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/release-frozen-actions-mutated.yml"
+
+expect_frozen_history_rejected() {
+    local label="$1"
+    local workflow="$2"
+    if require_frozen_source_history_contract "$workflow"; then
+        echo "Frozen source-history workflow audit accepted $label" >&2
+        exit 1
+    fi
+}
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-frozen-shallow-compatibility.yml"
+mise exec -- python3 - "$REPO_SCOPE_FIXTURE/build-frozen-shallow-compatibility.yml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text()
+start = source.index("  compatibility-minimum:\n")
+end = source.index("  build_release:\n", start)
+block = source[start:end]
+needle = "          fetch-depth: 0\n"
+if block.count(needle) != 1:
+    raise SystemExit("compatibility full-history fixture drifted")
+path.write_text(source[:start] + block.replace(needle, "", 1) + source[end:])
+PY
+expect_frozen_history_rejected shallow-compatibility-history \
+    "$REPO_SCOPE_FIXTURE/build-frozen-shallow-compatibility.yml"
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-frozen-unnecessary-pr-history.yml"
+mise exec -- python3 - "$REPO_SCOPE_FIXTURE/build-frozen-unnecessary-pr-history.yml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text()
+start = source.index("  verify-pr:\n")
+end = source.index("  compatibility-minimum:\n", start)
+block = source[start:end]
+needle = "          persist-credentials: false\n"
+if block.count(needle) != 1:
+    raise SystemExit("verify-pr checkout fixture drifted")
+path.write_text(source[:start] + block.replace(needle, "          fetch-depth: 0\n" + needle, 1) + source[end:])
+PY
+expect_frozen_history_rejected unnecessary-pr-history \
+    "$REPO_SCOPE_FIXTURE/build-frozen-unnecessary-pr-history.yml"
 
 validate_empty_tagless_draft_fixture() {
     local release_json="$1"
