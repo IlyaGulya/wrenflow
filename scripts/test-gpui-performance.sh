@@ -1143,6 +1143,63 @@ assert math.isclose(
     abs_tol=0.000002,
 )
 
+# Run 31629775493 persisted baseline 0.080934 but derived coverage from a raw
+# half-microsecond boundary, storing 2020.692846 while strict recomputation
+# yielded 2020.692845. Canonicalize the baseline before every derived field.
+ci_raw_baseline = 0.0809335
+ci_persisted_baseline = round(ci_raw_baseline, 6)
+ci_last_elapsed = 2020.773779
+assert round(ci_last_elapsed - ci_raw_baseline, 6) == 2020.692846
+assert round(ci_last_elapsed - ci_persisted_baseline, 6) == 2020.692845
+ci_interval = (ci_last_elapsed - ci_persisted_baseline) / 1800
+ci_samples = []
+ci_previous_elapsed = ci_persisted_baseline
+ci_wall_ms = BASELINE_WALL_MS
+ci_counter = BASELINE_WAKEUPS
+for index in range(1800):
+    ci_elapsed = round(
+        ci_persisted_baseline + ci_interval * (index + 1),
+        6,
+    )
+    ci_observed_interval = round(ci_elapsed - ci_previous_elapsed, 6)
+    ci_wall_ms += round(ci_observed_interval * 1000)
+    ci_counter += 1
+    ci_samples.append({
+        "timestamp_unix_ms": ci_wall_ms,
+        "elapsed_seconds": ci_elapsed,
+        "observed_interval_seconds": ci_observed_interval,
+        "cpu_percent": 0.0,
+        "rss_mib": 100.0,
+        "threads": 4,
+        "idle_wakeups_counter": ci_counter,
+        "idle_wakeups_per_s": round(1.0 / ci_observed_interval, 6),
+        "energy_impact": 0.0,
+        "file_descriptors": 8,
+        "file_descriptors_measured": index % 5 == 0,
+        "observer_delivery_delay_seconds": 0.001,
+    })
+    ci_previous_elapsed = ci_elapsed
+ci_stored_summary = module["sampling_summary"](
+    ci_samples,
+    contract=module["IDLE_SAMPLING_CONTRACT"],
+    baseline_elapsed_seconds=ci_raw_baseline,
+    baseline_at_unix_ms=BASELINE_WALL_MS,
+    baseline_idle_wakeups=BASELINE_WAKEUPS,
+    requested_duration_seconds=1800.0,
+    requested_interval_seconds=1.0,
+)
+ci_recomputed_summary = module["sampling_summary"](
+    ci_samples,
+    contract=module["IDLE_SAMPLING_CONTRACT"],
+    baseline_elapsed_seconds=ci_stored_summary["baseline_elapsed_seconds"],
+    baseline_at_unix_ms=BASELINE_WALL_MS,
+    baseline_idle_wakeups=BASELINE_WAKEUPS,
+    requested_duration_seconds=1800.0,
+    requested_interval_seconds=1.0,
+)
+assert ci_stored_summary == ci_recomputed_summary
+assert ci_stored_summary["wall_coverage_seconds"] == 2020.692845
+
 samples = make_samples([1.11] * 1800, counter_delta=5)
 summary = summarize(samples)
 assert summary["observed_sample_count"] == 1800

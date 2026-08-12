@@ -1244,6 +1244,11 @@ def sampling_summary(
     )
     if not all(isinstance(value, (int, float)) and math.isfinite(value) for value in numeric_inputs):
         raise EvidenceError("sampling contract contains a non-finite numeric input")
+    # Persist and validate the same elapsed baseline. The sampler observes this
+    # value at higher precision, while sealed evidence intentionally stores six
+    # decimal places; using the raw value for derived fields can move a rounded
+    # coverage value by one microsecond when the verifier recomputes it.
+    baseline_elapsed_seconds = round(float(baseline_elapsed_seconds), 6)
     if baseline_elapsed_seconds < 0 or requested_duration_seconds <= 0 or requested_interval_seconds <= 0:
         raise EvidenceError("sampling contract contains a non-positive duration or interval")
     if not isinstance(baseline_at_unix_ms, int) or baseline_at_unix_ms <= 0:
