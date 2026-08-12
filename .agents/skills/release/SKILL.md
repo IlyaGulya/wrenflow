@@ -23,7 +23,9 @@ This project uses [release-please](https://github.com/googleapis/release-please)
 5. When `release_created` is true, Release Please explicitly calls the reusable
    **Build** workflow. That workflow tests, lints, signs, notarizes, verifies and
    uploads the exact DMG to the empty draft, retaining the Actions payload for
-   21 days. It does not publish stable.
+   21 days. For the first stable draft it also revalidates the pinned beta.64
+   frozen 24/24 artifact and approved non-runtime source diff instead of rerunning
+   the 30-minute sampler. It does not publish stable.
 6. After the draft bytes pass the owner acceptance gates and recorded
    go/no-go, manually dispatch **Promote Verified Stable Draft** with the exact
    tag, approved DMG SHA-256 and confirmation. It re-downloads/verifies the
@@ -101,7 +103,8 @@ After merge:
    `build-staged-stable-release` reusable-workflow job started
 3. Wait for that job to complete — it runs tests/lints, creates a Developer ID
    signed DMG, requires explicit `Accepted` notarization, staples and validates
-   it, and passes Gatekeeper verification before upload
+   it, passes Gatekeeper verification, and fail-closed revalidates the pinned
+   beta.64 24/24 baseline before upload
 4. Verify the DMG is attached while `isDraft` remains true. Download the exact
    payload and complete `.9.8`–`.9.11`; do not rebuild it.
 

@@ -404,7 +404,7 @@ jobs:
 
   performance_cold:
     needs: build_release
-    if: needs.build_release.outputs.skip != 'true'
+    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag == ''
     runs-on: macos-14
     timeout-minutes: 20
     permissions:
@@ -542,7 +542,7 @@ jobs:
 
   performance_constrained:
     needs: [build_release, performance_cold]
-    if: needs.build_release.outputs.skip != 'true'
+    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag == ''
     runs-on: macos-14
     timeout-minutes: 90
     permissions:
@@ -709,9 +709,58 @@ jobs:
           if-no-files-found: error
           retention-days: 21
 
+  verify_frozen_performance_baseline:
+    needs: build_release
+    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    env:
+      FROZEN_ARTIFACT_ID: "9146492644"
+      RELEASE_SOURCE_COMMIT: ${{ needs.build_release.outputs.source_commit }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+
+      - name: Download and verify the immutable beta.64 performance baseline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FROZEN_ROOT=$(mktemp -d "$RUNNER_TEMP/wrenflow-frozen-performance.XXXXXX")
+          METADATA="$FROZEN_ROOT/artifact-metadata.json"
+          ARCHIVE="$FROZEN_ROOT/artifact.zip"
+          REPORT="$FROZEN_ROOT/current-release-verification.json"
+          mise exec -- gh api \
+            "repos/$GITHUB_REPOSITORY/actions/artifacts/$FROZEN_ARTIFACT_ID" \
+            > "$METADATA"
+          mise exec -- gh api \
+            "repos/$GITHUB_REPOSITORY/actions/artifacts/$FROZEN_ARTIFACT_ID/zip" \
+            > "$ARCHIVE"
+          mise run verify-frozen-performance-baseline -- \
+            --metadata "$METADATA" \
+            --archive "$ARCHIVE" \
+            --release-source "$RELEASE_SOURCE_COMMIT" \
+            --report "$REPORT"
+          mise exec -- jq -e '
+            .profile == "release" and .passed == true and
+            .evaluated_metrics == 24 and .evaluated_measurements == 24 and
+            .failures == []
+          ' "$REPORT" >/dev/null
+
   publish:
-    needs: [build_release, performance_constrained]
-    if: needs.build_release.outputs.skip != 'true' && needs.performance_constrained.result == 'success'
+    needs: [build_release, compatibility-minimum, performance_constrained, verify_frozen_performance_baseline]
+    if: >-
+      ${{ always() && needs.build_release.outputs.skip != 'true' &&
+          needs.compatibility-minimum.result == 'success' &&
+          ((inputs.release_tag == '' && needs.performance_constrained.result == 'success') ||
+           (inputs.release_tag != '' && needs.verify_frozen_performance_baseline.result == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

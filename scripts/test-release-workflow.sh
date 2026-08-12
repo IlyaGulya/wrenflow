@@ -56,6 +56,51 @@ $line"
     fi
 }
 
+require_frozen_stable_baseline_contract() {
+    local file="$1"
+    local frozen_block publish_block
+    frozen_block="$(awk '
+        $0 == "  verify_frozen_performance_baseline:" { capture = 1 }
+        capture && $0 == "  publish:" { exit }
+        capture { print }
+    ' "$file")"
+    publish_block="$(awk '
+        $0 == "  publish:" { capture = 1 }
+        capture && $0 == "  verify_staged_or_published:" { exit }
+        capture { print }
+    ' "$file")"
+    [[ -n "$frozen_block" && -n "$publish_block" ]] || return 1
+    local required
+    for required in \
+        '    needs: build_release' \
+        "    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag != ''" \
+        '      actions: read' \
+        '          ref: ${{ github.sha }}' \
+        '          fetch-depth: 0' \
+        '      FROZEN_ARTIFACT_ID: "9146492644"' \
+        '      RELEASE_SOURCE_COMMIT: ${{ needs.build_release.outputs.source_commit }}' \
+        '            "repos/$GITHUB_REPOSITORY/actions/artifacts/$FROZEN_ARTIFACT_ID" \' \
+        '            "repos/$GITHUB_REPOSITORY/actions/artifacts/$FROZEN_ARTIFACT_ID/zip" \' \
+        '          mise run verify-frozen-performance-baseline -- \' \
+        '            --release-source "$RELEASE_SOURCE_COMMIT" \' \
+        '            .evaluated_metrics == 24 and .evaluated_measurements == 24 and'; do
+        grep -Fqx -- "$required" <<< "$frozen_block" || return 1
+    done
+    if grep -Fq -- 'continue-on-error:' <<< "$frozen_block"; then
+        return 1
+    fi
+    for required in \
+        '    needs: [build_release, compatibility-minimum, performance_constrained, verify_frozen_performance_baseline]' \
+        "      \${{ always() && needs.build_release.outputs.skip != 'true' &&" \
+        "          needs.compatibility-minimum.result == 'success' &&" \
+        "          ((inputs.release_tag == '' && needs.performance_constrained.result == 'success') ||" \
+        "           (inputs.release_tag != '' && needs.verify_frozen_performance_baseline.result == 'success')) }}"; do
+        grep -Fqx -- "$required" <<< "$publish_block" || return 1
+    done
+    grep -Fqx -- "    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag == ''" "$file" || return 1
+    [[ "$(grep -Fxc -- "    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag == ''" "$file")" -eq 2 ]] || return 1
+}
+
 require_pattern "workflow_call:" "$BUILD_WORKFLOW"
 require_pattern "workflow_dispatch:" "$BUILD_WORKFLOW"
 require_pattern "release_tag:" "$BUILD_WORKFLOW"
@@ -113,6 +158,11 @@ require_pattern 'name: constrained-cold-${{ needs.build_release.outputs.source_c
 require_pattern 'pattern: constrained-cold-${{ needs.build_release.outputs.source_commit }}-*' "$BUILD_WORKFLOW"
 require_pattern "performance_constrained:" "$BUILD_WORKFLOW"
 require_pattern "needs: [build_release, performance_cold]" "$BUILD_WORKFLOW"
+require_pattern "verify_frozen_performance_baseline:" "$BUILD_WORKFLOW"
+require_pattern '[tasks.verify-frozen-performance-baseline]' "$REPO_DIR/mise.toml"
+require_pattern '[tasks.test-frozen-performance-baseline]' "$REPO_DIR/mise.toml"
+require_pattern 'scripts/verify-frozen-performance-baseline.py' "$REPO_DIR/mise.toml"
+require_frozen_stable_baseline_contract "$BUILD_WORKFLOW"
 require_pattern "scripts/perf/gpui-performance.py merge-cold" "$BUILD_WORKFLOW"
 require_pattern '[[ ${#COLD_SHARDS[@]} -eq 20 ]]' "$BUILD_WORKFLOW"
 require_pattern 'MERGE_ARGS+=(--shard "$shard")' "$BUILD_WORKFLOW"
@@ -142,8 +192,6 @@ require_pattern "--profile constrained" "$BUILD_WORKFLOW"
 require_pattern 'path: ${{ env.PERFORMANCE_RESULT }}' "$BUILD_WORKFLOW"
 require_pattern '${{ env.PERFORMANCE_REPORT }}' "$BUILD_WORKFLOW"
 require_pattern "Upload sanitized constrained evidence" "$BUILD_WORKFLOW"
-require_pattern "needs: [build_release, performance_constrained]" "$BUILD_WORKFLOW"
-require_pattern "if: needs.build_release.outputs.skip != 'true' && needs.performance_constrained.result == 'success'" "$BUILD_WORKFLOW"
 require_pattern "publish:" "$BUILD_WORKFLOW"
 require_pattern "verify_staged_or_published:" "$BUILD_WORKFLOW"
 require_pattern "contents: read" "$BUILD_WORKFLOW"
@@ -264,7 +312,7 @@ done
 
 EVIDENCE_UPLOAD_BLOCK="$(awk '
     $0 == "      - name: Upload sanitized constrained evidence" { capture = 1 }
-    capture && $0 == "  publish:" { exit }
+    capture && $0 == "  verify_frozen_performance_baseline:" { exit }
     capture { print }
 ' "$BUILD_WORKFLOW")"
 if [[ -z "$EVIDENCE_UPLOAD_BLOCK" ]]; then
@@ -390,6 +438,42 @@ require_repo_scoped_gh_release_commands "$PROMOTION_WORKFLOW"
 REPO_SCOPE_FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/wrenflow-release-repo-scope.XXXXXX")"
 cleanup_repo_scope_fixture() { rm -rf -- "$REPO_SCOPE_FIXTURE"; }
 trap cleanup_repo_scope_fixture EXIT
+
+expect_frozen_contract_rejected() {
+    local label="$1"
+    local workflow="$2"
+    if require_frozen_stable_baseline_contract "$workflow"; then
+        echo "Frozen stable baseline workflow audit accepted $label" >&2
+        exit 1
+    fi
+}
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-frozen-artifact.yml"
+sed 's/FROZEN_ARTIFACT_ID: "9146492644"/FROZEN_ARTIFACT_ID: "9146492645"/' \
+    "$REPO_SCOPE_FIXTURE/build-frozen-artifact.yml" \
+    > "$REPO_SCOPE_FIXTURE/build-frozen-artifact-mutated.yml"
+expect_frozen_contract_rejected wrong-frozen-artifact \
+    "$REPO_SCOPE_FIXTURE/build-frozen-artifact-mutated.yml"
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-frozen-actions.yml"
+sed '/^      actions: read$/d' "$REPO_SCOPE_FIXTURE/build-frozen-actions.yml" \
+    > "$REPO_SCOPE_FIXTURE/build-frozen-actions-mutated.yml"
+expect_frozen_contract_rejected missing-actions-read \
+    "$REPO_SCOPE_FIXTURE/build-frozen-actions-mutated.yml"
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-frozen-publish.yml"
+sed "s/needs.verify_frozen_performance_baseline.result == 'success'/needs.build_release.result == 'success'/" \
+    "$REPO_SCOPE_FIXTURE/build-frozen-publish.yml" \
+    > "$REPO_SCOPE_FIXTURE/build-frozen-publish-mutated.yml"
+expect_frozen_contract_rejected publish-without-frozen-proof \
+    "$REPO_SCOPE_FIXTURE/build-frozen-publish-mutated.yml"
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-frozen-checkout.yml"
+sed 's/ref: ${{ github.sha }}/ref: ${{ inputs.release_source_commit }}/' \
+    "$REPO_SCOPE_FIXTURE/build-frozen-checkout.yml" \
+    > "$REPO_SCOPE_FIXTURE/build-frozen-checkout-mutated.yml"
+expect_frozen_contract_rejected verifier-from-old-source \
+    "$REPO_SCOPE_FIXTURE/build-frozen-checkout-mutated.yml"
 
 validate_empty_tagless_draft_fixture() {
     local release_json="$1"

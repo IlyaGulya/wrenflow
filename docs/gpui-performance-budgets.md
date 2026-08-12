@@ -498,4 +498,12 @@ evaluates every matching measurement, so a faster host cannot hide a failure.
 A GitHub probe without the full workload, Tart result, physical trace, unsigned
 app, dirty commit or unsealed JSON may be retained for diagnosis but cannot be
 reported as this release pass. `.9.11` reuses the frozen beta.64 24/24 baseline;
-it does not invent a separate physical-performance blocker.
+it does not invent a separate physical-performance blocker. Stable staging
+fetches only retained artifact `9146492644` from Build `31603344709`, verifies
+the exact archive/result/report digests in
+`support/performance/frozen-stable-baseline-v1.json`, recomputes the result with
+the current release verifier, and requires the exact approved non-runtime
+source diff to `7e0e698191d003fe507b0729265cafceaf640c1e`. Missing or expired
+evidence fails; current-run active cadence noise cannot replace or invalidate
+the already accepted frozen product-byte baseline. Ordinary beta builds still
+run the live 20-cold and 30-minute constrained gates.

@@ -147,6 +147,14 @@ run = "mise exec -- python3 scripts/perf/gpui-performance.py merge-cold"
 description = "Verify GPUI candidate evidence against versioned numeric budgets"
 run = "mise exec -- python3 scripts/perf/gpui-performance.py verify --budgets support/performance/budgets-v1.json"
 
+[tasks.verify-frozen-performance-baseline]
+description = "Verify the immutable beta.64 24-of-24 baseline for the first stable draft"
+run = "mise exec -- python3 scripts/verify-frozen-performance-baseline.py"
+
+[tasks.test-frozen-performance-baseline]
+description = "Test frozen stable performance artifact, source and budget rejection paths"
+run = "scripts/test-frozen-performance-baseline.sh"
+
 [tasks.performance-trace]
 description = "Attach an approved Instruments template to one exact signed GPUI candidate"
 run = "scripts/perf/capture-instruments.sh"
@@ -227,7 +235,7 @@ scripts/test-release-workflow.sh
 
 [tasks.test]
 description = "Run core/runtime and production app tests"
-depends = ["test-rust", "test-app", "test-lifecycle-contract", "test-macos-support", "test-supply-chain", "test-endurance-preflight", "test-human-acceptance", "test-release-runbook", "test-performance-harness"]
+depends = ["test-rust", "test-app", "test-lifecycle-contract", "test-macos-support", "test-supply-chain", "test-endurance-preflight", "test-human-acceptance", "test-release-runbook", "test-performance-harness", "test-frozen-performance-baseline"]
 run = "true"
 
 [tasks.test-rust]

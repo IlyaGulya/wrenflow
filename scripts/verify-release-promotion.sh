@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 POLICY="$REPO_DIR/support/release-runbook-policy.json"
+FROZEN_PERFORMANCE_POLICY="$REPO_DIR/support/performance/frozen-stable-baseline-v1.json"
 RUNBOOK="$REPO_DIR/docs/production-release-runbook.md"
 PAYLOAD_FILES=(
     Wrenflow.dmg
@@ -67,6 +68,24 @@ verify_source_contract() {
       (.post_publish.required_checks | length) == 5
     ' "$POLICY" >/dev/null
 
+    jq -e '
+      .schema_version == 1 and
+      .contract == "wrenflow.frozen-stable-performance.v1" and
+      .artifact.repository == "IlyaGulya/wrenflow" and
+      .artifact.run_id == 31603344709 and
+      .artifact.artifact_id == 9146492644 and
+      .artifact.archive_sha256 == "fc0ec7df15c1e91480ebd198986700ecd093e4a6b21de632df89c3f106ffb7de" and
+      .artifact.result_sha256 == "ade2e5b50cdabd525eee87fc9f78f213cdf62205c70ce7b2742e05910f668553" and
+      .artifact.report_sha256 == "d8d75160831c55fd9d13ef2ceb49a1ed9617264ed5bd174ec0ca4874b7593126" and
+      .baseline.source_commit == "d3e01e0ec085121f3bd3e78038836a16608b98a0" and
+      .baseline.dmg_sha256 == "d7a04beb4513026dda7f72847ab2c53a5c1a82861b49192c7c6ae6937b35e1a5" and
+      .baseline.executable_sha256 == "3a2d786a31ac6491a88d3a3f9fa8b9d66f4991f5f5d32e507c0db3caf6f573af" and
+      .baseline.evaluated_metrics == 24 and
+      .baseline.evaluated_measurements == 24 and
+      .stable_release.source_commit == "7e0e698191d003fe507b0729265cafceaf640c1e" and
+      (.stable_release.allowed_diff | length) == 41
+    ' "$FROZEN_PERFORMANCE_POLICY" >/dev/null
+
     local required_text
     for required_text in \
         "No default telemetry" \
@@ -86,6 +105,12 @@ verify_source_contract() {
     rg -F 'Re-download and verify immutable staged or published candidate' \
         "$REPO_DIR/.github/workflows/build.yml" >/dev/null
     rg -F 'Require exact empty tagless private stable draft' \
+        "$REPO_DIR/.github/workflows/build.yml" >/dev/null
+    rg -F 'verify_frozen_performance_baseline:' \
+        "$REPO_DIR/.github/workflows/build.yml" >/dev/null
+    rg -F 'FROZEN_ARTIFACT_ID: "9146492644"' \
+        "$REPO_DIR/.github/workflows/build.yml" >/dev/null
+    rg -F 'needs.verify_frozen_performance_baseline.result == '\''success'\''' \
         "$REPO_DIR/.github/workflows/build.yml" >/dev/null
     rg -F 'googleapis/release-please-action@' \
         "$REPO_DIR/.github/workflows/release-please.yml" >/dev/null

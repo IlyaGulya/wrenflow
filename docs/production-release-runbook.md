@@ -49,8 +49,23 @@ new evidence; waivers do not make changed bytes eligible.
 Release-please creates the stable release metadata as a private, tagless draft
 whose `target_commitish` is the exact release source commit. Its reusable Build
 must match that commit, require the draft to be empty and tagless, and attach
-the nine authenticated assets without publishing it. If that initial reusable
-call is interrupted before staging, recover the same untouched draft explicitly:
+the nine authenticated assets without publishing it. For this first stable
+draft only, the stable workflow does not rerun the 30-minute sampler. It uses
+`actions:read` to fetch exact artifact `9146492644` from Build `31603344709`,
+requires archive SHA-256
+`fc0ec7df15c1e91480ebd198986700ecd093e4a6b21de632df89c3f106ffb7de`,
+checks the retained result/report hashes and beta.64 DMG/executable identity,
+and recomputes 24/24 with the current trusted release verifier. It also proves
+with Git history that stable source `7e0e698191d003fe507b0729265cafceaf640c1e`
+differs from frozen product source
+`d3e01e0ec085121f3bd3e78038836a16608b98a0` only by the closed
+acceptance/release scope and version-only manifest/lock updates. Any missing or
+expired artifact, changed source, dependency, build/runtime file, numeric
+threshold, or minimum sample count fails closed. Normal beta pushes retain the
+live 20-cold plus constrained performance workflow.
+
+If that initial reusable call is interrupted before staging, recover the same
+untouched draft explicitly:
 
 ```bash
 mise exec -- gh workflow run build.yml \
