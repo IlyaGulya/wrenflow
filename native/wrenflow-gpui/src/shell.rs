@@ -472,6 +472,7 @@ unsafe extern "C" {
         force: i32,
         detect_loss_transition: i32,
     ) -> i32;
+    fn wrenflow_shell_test_initial_permission_query_lifecycle() -> i32;
     fn wrenflow_shell_terminate();
 }
 
@@ -479,8 +480,9 @@ unsafe extern "C" {
 mod tests {
     use super::{
         decode_event, wrenflow_shell_permission_confirmation_transition,
-        AccessibilityActionRequest, AccessibilityPreferencesObservation, LaunchAtLoginObservation,
-        PermissionObservation, PermissionValue, ShellEvent,
+        wrenflow_shell_test_initial_permission_query_lifecycle, AccessibilityActionRequest,
+        AccessibilityPreferencesObservation, LaunchAtLoginObservation, PermissionObservation,
+        PermissionValue, ShellEvent,
     };
     use std::ffi::CString;
 
@@ -498,9 +500,9 @@ mod tests {
             panic!("post-menu bootstrap has a bounded source region");
         };
 
-        assert!(install.contains(
-            "refreshPermissions(force: true, detectLossTransition: true, monitor: false)"
-        ));
+        assert!(install.contains("initialPermissionQuery.start("));
+        assert!(install.contains("query: { Self.permissionsPayload() }"));
+        assert!(!install.contains("refreshPermissions("));
         for deferred in [
             "NSWorkspace.willSleepNotification",
             "NSApplication.didBecomeActiveNotification",
@@ -514,6 +516,16 @@ mod tests {
         assert!(post_menu.contains("guard !postMenuBootstrapInstalled else { return true }"));
         assert!(post_menu.contains("refreshPermissions(force: false, detectLossTransition: true)"));
         assert!(swift.contains("@_cdecl(\"wrenflow_shell_install_post_menu_bootstrap\")"));
+    }
+
+    #[test]
+    fn initial_permission_query_is_nonblocking_exactly_once_and_generation_scoped() {
+        // SAFETY: the Swift seam owns its isolated queues and returns a closed
+        // numeric result after exercising the production query coordinator.
+        assert_eq!(
+            unsafe { wrenflow_shell_test_initial_permission_query_lifecycle() },
+            0
+        );
     }
 
     #[test]

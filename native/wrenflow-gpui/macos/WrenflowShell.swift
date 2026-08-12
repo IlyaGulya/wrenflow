@@ -63,13 +63,167 @@ private struct WrenflowTrayPresentation: Decodable {
     }
 }
 
-private struct WrenflowPermissionsPayload: Encodable, Equatable {
+private struct WrenflowPermissionsPayload: Encodable, Equatable, Sendable {
     let microphone: String
     let accessibility: String
 
     var allGranted: Bool {
         microphone == "granted" && accessibility == "granted"
     }
+}
+
+/// Runs the initial, non-prompting TCC snapshot away from AppKit while keeping
+/// delivery generation-scoped and exactly once. Shutdown/reinstall advances
+/// the generation, so a late system query can neither publish into a new shell
+/// session nor retain startup readiness.
+private final class WrenflowInitialPermissionQuery: @unchecked Sendable {
+    typealias Query = @Sendable () -> WrenflowPermissionsPayload
+    typealias Delivery = @Sendable (WrenflowPermissionsPayload) -> Void
+
+    private let lock = NSLock()
+    private var generation: UInt64 = 0
+
+    func start(
+        queryQueue: DispatchQueue = .global(qos: .userInitiated),
+        deliveryQueue: DispatchQueue = .main,
+        query: @escaping Query,
+        deliver: @escaping Delivery
+    ) {
+        let token = lock.withLock {
+            generation &+= 1
+            return generation
+        }
+        queryQueue.async { [weak self] in
+            let payload = query()
+            deliveryQueue.async { [weak self] in
+                guard let self, self.consume(token: token) else { return }
+                deliver(payload)
+            }
+        }
+    }
+
+    func cancel() {
+        lock.withLock { generation &+= 1 }
+    }
+
+    private func consume(token: UInt64) -> Bool {
+        lock.withLock {
+            guard token == generation else { return false }
+            generation &+= 1
+            return true
+        }
+    }
+}
+
+private final class WrenflowPermissionQueryTestState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var rootConstructed = false
+    private var routeLoading = true
+    private var deliveries: [WrenflowPermissionsPayload] = []
+
+    func markMenuAndRootReady() {
+        lock.withLock { rootConstructed = true }
+    }
+
+    func deliver(_ payload: WrenflowPermissionsPayload) {
+        lock.withLock {
+            deliveries.append(payload)
+            routeLoading = false
+        }
+    }
+
+    func snapshot() -> (rootConstructed: Bool, routeLoading: Bool, deliveries: Int, denied: Bool) {
+        lock.withLock {
+            (
+                rootConstructed,
+                routeLoading,
+                deliveries.count,
+                deliveries.last?.allGranted == false
+            )
+        }
+    }
+}
+
+/// Executable fixed-width seam for the async initial-permission lifecycle. It
+/// injects a blocking query, proves startup work can proceed while the route is
+/// Loading, then verifies exactly-once delivery and generation cancellation.
+@_cdecl("wrenflow_shell_test_initial_permission_query_lifecycle")
+public func wrenflowShellTestInitialPermissionQueryLifecycle() -> Int32 {
+    let denied = WrenflowPermissionsPayload(microphone: "denied", accessibility: "denied")
+    let granted = WrenflowPermissionsPayload(microphone: "granted", accessibility: "granted")
+    let queryQueue = DispatchQueue(label: "me.gulya.wrenflow.test.permission-query")
+    let deliveryQueue = DispatchQueue(label: "me.gulya.wrenflow.test.permission-delivery")
+    let queryGate = DispatchSemaphore(value: 0)
+    let state = WrenflowPermissionQueryTestState()
+    let query = WrenflowInitialPermissionQuery()
+
+    let started = ProcessInfo.processInfo.systemUptime
+    query.start(
+        queryQueue: queryQueue,
+        deliveryQueue: deliveryQueue,
+        query: {
+            _ = queryGate.wait(timeout: .now() + 2)
+            return denied
+        },
+        deliver: { state.deliver($0) }
+    )
+    guard ProcessInfo.processInfo.systemUptime - started < 0.1 else { return 1 }
+    state.markMenuAndRootReady()
+    let pending = state.snapshot()
+    guard pending.rootConstructed, pending.routeLoading, pending.deliveries == 0 else { return 2 }
+    queryGate.signal()
+    queryQueue.sync {}
+    deliveryQueue.sync {}
+    let delivered = state.snapshot()
+    guard delivered.rootConstructed,
+          !delivered.routeLoading,
+          delivered.deliveries == 1,
+          delivered.denied else { return 3 }
+    deliveryQueue.sync {}
+    guard state.snapshot().deliveries == 1 else { return 4 }
+
+    let cancelledGate = DispatchSemaphore(value: 0)
+    let cancelledQueue = DispatchQueue(label: "me.gulya.wrenflow.test.permission-cancel")
+    query.start(
+        queryQueue: cancelledQueue,
+        deliveryQueue: deliveryQueue,
+        query: {
+            _ = cancelledGate.wait(timeout: .now() + 2)
+            return granted
+        },
+        deliver: { state.deliver($0) }
+    )
+    query.cancel()
+    cancelledGate.signal()
+    cancelledQueue.sync {}
+    deliveryQueue.sync {}
+    guard state.snapshot().deliveries == 1 else { return 5 }
+
+    let staleGate = DispatchSemaphore(value: 0)
+    let staleQueue = DispatchQueue(label: "me.gulya.wrenflow.test.permission-stale")
+    query.start(
+        queryQueue: staleQueue,
+        deliveryQueue: deliveryQueue,
+        query: {
+            _ = staleGate.wait(timeout: .now() + 2)
+            return denied
+        },
+        deliver: { state.deliver($0) }
+    )
+    query.start(
+        queryQueue: queryQueue,
+        deliveryQueue: deliveryQueue,
+        query: { granted },
+        deliver: { state.deliver($0) }
+    )
+    queryQueue.sync {}
+    deliveryQueue.sync {}
+    guard state.snapshot().deliveries == 2 else { return 6 }
+    staleGate.signal()
+    staleQueue.sync {}
+    deliveryQueue.sync {}
+    guard state.snapshot().deliveries == 2 else { return 7 }
+    return 0
 }
 
 private func permissionConfirmationTransition(
@@ -463,6 +617,7 @@ private final class WrenflowShell: NSObject, NSMenuDelegate {
     private var windowTitle = "Wrenflow"
     private var version = ""
     private var statusItem: NSStatusItem?
+    private let initialPermissionQuery = WrenflowInitialPermissionQuery()
     private var permissionTimer: Timer?
     private var permissionConfirmationsRemaining = 0
     private var lastPermissions: WrenflowPermissionsPayload?
@@ -518,11 +673,17 @@ private final class WrenflowShell: NSObject, NSMenuDelegate {
             shutdown(removeReopenObservation: false)
             return -3
         }
-        // The runtime cannot resolve its truthful initial route until this
-        // exact permission snapshot reaches the typed event boundary. Keep
-        // the query synchronous, but leave every non-route observer and probe
-        // behind the explicit post-menu bootstrap signal from Rust.
-        refreshPermissions(force: true, detectLossTransition: true, monitor: false)
+        // TCC reads are non-prompting but can block for more than a second on
+        // a fresh runner. Query off AppKit so the tray and hidden Loading root
+        // can become ready in parallel. Delivery returns to main and the
+        // existing typed shell/runtime FIFO; the authoritative route therefore
+        // remains Loading until this exact snapshot arrives.
+        initialPermissionQuery.start(
+            query: { Self.permissionsPayload() },
+            deliver: { payload in
+                WrenflowShell.shared.receiveInitialPermissions(payload)
+            }
+        )
         if pendingReopen {
             pendingReopen = false
             emit(.openSettings)
@@ -580,6 +741,7 @@ private final class WrenflowShell: NSObject, NSMenuDelegate {
 
     func shutdown(removeReopenObservation: Bool = true) {
         dispatchPrecondition(condition: .onQueue(.main))
+        initialPermissionQuery.cancel()
         performanceInteraction?.cancel()
         performanceInteraction = nil
         permissionTimer?.invalidate()
@@ -1056,7 +1218,7 @@ private final class WrenflowShell: NSObject, NSMenuDelegate {
         emit(.hotkeyReleased, payload: String(duration * 1_000))
     }
 
-    private func permissionsPayload() -> WrenflowPermissionsPayload {
+    private static func permissionsPayload() -> WrenflowPermissionsPayload {
         let microphone: String
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: microphone = "granted"
@@ -1079,7 +1241,32 @@ private final class WrenflowShell: NSObject, NSMenuDelegate {
         if monitor && hotkey.isRunning == false {
             _ = hotkey.start()
         }
-        let payload = permissionsPayload()
+        let payload = Self.permissionsPayload()
+        observePermissions(
+            payload,
+            force: force,
+            detectLossTransition: detectLossTransition,
+            monitor: monitor
+        )
+    }
+
+    private func receiveInitialPermissions(_ payload: WrenflowPermissionsPayload) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard callback != nil, statusItem != nil else { return }
+        observePermissions(
+            payload,
+            force: true,
+            detectLossTransition: true,
+            monitor: false
+        )
+    }
+
+    private func observePermissions(
+        _ payload: WrenflowPermissionsPayload,
+        force: Bool,
+        detectLossTransition: Bool,
+        monitor: Bool
+    ) {
         let previous = lastPermissions
         // Runtime recovery deliberately requires three consecutive loss
         // observations. The first changed payload plus exactly two fresh,

@@ -2038,6 +2038,44 @@ mod tests {
     }
 
     #[test]
+    fn blocked_initial_permission_query_keeps_loading_root_nonterminal_until_result() {
+        // The hidden root and tray may be ready while the non-prompting TCC
+        // query is blocked, but Loading is never a terminal launch route.
+        let mut reporter = InitialWindowPolicyReporter::default();
+        assert_eq!(reporter.ready(NavigationTarget::Loading, true, false), None);
+        // Once the typed denied observation resolves the authoritative route,
+        // the already-constructed root can be shown and reported truthfully.
+        assert_eq!(
+            reporter.ready(NavigationTarget::PermissionRecovery, true, true),
+            Some(DiagnosticCode::WindowPolicyForegroundReady)
+        );
+
+        let swift = include_str!("../macos/WrenflowShell.swift");
+        let Some((_, coordinator)) = swift.split_once("final class WrenflowInitialPermissionQuery")
+        else {
+            panic!("initial permission query coordinator exists");
+        };
+        let Some((coordinator, _)) =
+            coordinator.split_once("private func permissionConfirmationTransition")
+        else {
+            panic!("permission query coordinator has a bounded source region");
+        };
+        assert!(coordinator.contains("queryQueue.async"));
+        assert!(coordinator.contains("deliveryQueue.async"));
+        assert!(coordinator.contains("consume(token: token)"));
+
+        let Some((_, install)) = swift.split_once("func install(") else {
+            panic!("Swift shell install exists");
+        };
+        let Some((install, shutdown)) = install.split_once("func shutdown(") else {
+            panic!("Swift install is bounded by shutdown");
+        };
+        assert!(install.contains("initialPermissionQuery.start("));
+        assert!(!install.contains("let payload = Self.permissionsPayload()"));
+        assert!(shutdown.contains("initialPermissionQuery.cancel()"));
+    }
+
+    #[test]
     fn windowless_idle_is_event_driven_and_permission_loss_is_confirmed() {
         let main = include_str!("main.rs");
         let shell = include_str!("shell.rs");
