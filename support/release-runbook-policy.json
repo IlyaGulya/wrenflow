@@ -52,6 +52,7 @@
   "promotion": {
     "policy": "exact_private_draft_bytes_only",
     "stable_architecture": "release_please_draft_then_manual_exact_byte_promotion",
+    "private_draft_identity": "exact_positive_github_release_id",
     "staged_payload_retention_days": 21,
     "promotion_evidence_retention_days": 30,
     "required_tracker_gates": [

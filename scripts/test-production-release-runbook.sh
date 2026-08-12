@@ -63,11 +63,12 @@ make_payload "$SUCCESSOR" "0.4.0" "$SOURCE_B" "revalidated-successor"
 
 jq -S -n --arg source "$SOURCE_A" '
   {
+    id:369445618,
     tagName:"v0.4.0",
     targetCommitish:$source,
     isDraft:true,
     isPrerelease:false,
-    assets: [
+    assets: ([
       "RustThirdPartyLicenses.txt",
       "SHA256SUMS",
       "Wrenflow.cdx.json",
@@ -77,31 +78,40 @@ jq -S -n --arg source "$SOURCE_A" '
       "pins.json",
       "provenance.json",
       "release-evidence.json"
-    ] | map({name:.})
+    ] | to_entries | map({
+      id:(.key + 100), name:.value, size:1, digest:null, state:"uploaded",
+      contentType:"application/octet-stream",
+      createdAt:"2026-08-13T00:00:00Z", updatedAt:"2026-08-13T00:00:01Z",
+      url:("https://api.github.com/repos/IlyaGulya/wrenflow/releases/assets/" + ((.key + 100) | tostring))
+    }))
   }
 ' >"$FIXTURE/release.json"
 CANDIDATE_SHA="$(jq -r '.artifact.sha256' "$CANDIDATE/release-evidence.json")"
 "$REPO_DIR/scripts/verify-release-promotion.sh" staged \
     "$FIXTURE/release.json" "$CANDIDATE" v0.4.0 "$CANDIDATE_SHA" "$SOURCE_A" \
+    369445618 \
     >"$FIXTURE/staged.out"
 rg -F "Staged stable payload metadata passed" "$FIXTURE/staged.out" >/dev/null
 
 jq '.isDraft = false' "$FIXTURE/release.json" >"$FIXTURE/release-public.json"
 "$REPO_DIR/scripts/verify-release-promotion.sh" published \
     "$FIXTURE/release-public.json" "$IDENTICAL" v0.4.0 "$CANDIDATE_SHA" "$SOURCE_A" \
+    369445618 \
     >"$FIXTURE/published.out"
 rg -F "Published stable payload metadata passed" "$FIXTURE/published.out" >/dev/null
 
-for mutation in public prerelease extra_asset wrong_source; do
+for mutation in public prerelease extra_asset extra_asset_field wrong_source; do
     case "$mutation" in
         public) jq '.isDraft = false' "$FIXTURE/release.json" ;;
         prerelease) jq '.isPrerelease = true' "$FIXTURE/release.json" ;;
         extra_asset) jq '.assets += [{"name":"unexpected.bin"}]' "$FIXTURE/release.json" ;;
+        extra_asset_field) jq '.assets[0].unexpected = "private"' "$FIXTURE/release.json" ;;
         wrong_source) jq '.targetCommitish = ("f" * 40)' "$FIXTURE/release.json" ;;
     esac >"$FIXTURE/release-$mutation.json"
     if "$REPO_DIR/scripts/verify-release-promotion.sh" staged \
         "$FIXTURE/release-$mutation.json" "$CANDIDATE" v0.4.0 \
         "$CANDIDATE_SHA" "$SOURCE_A" \
+        369445618 \
         >"$FIXTURE/$mutation.out" 2>"$FIXTURE/$mutation.err"; then
         echo "Staged verifier accepted release mutation: $mutation" >&2
         exit 1
@@ -111,13 +121,29 @@ done
 if "$REPO_DIR/scripts/verify-release-promotion.sh" staged \
     "$FIXTURE/release.json" "$CANDIDATE" v0.4.0 \
     "$(printf 'f%.0s' {1..64})" "$SOURCE_A" \
+    369445618 \
     >"$FIXTURE/wrong-sha.out" 2>"$FIXTURE/wrong-sha.err"; then
     echo "Staged verifier accepted the wrong approved digest" >&2
     exit 1
 fi
 if "$REPO_DIR/scripts/verify-release-promotion.sh" staged \
     "$FIXTURE/release.json" "$CANDIDATE" v0.4.0 \
+    "$CANDIDATE_SHA" "$SOURCE_A" 369445619 \
+    >"$FIXTURE/wrong-release-id.out" 2>"$FIXTURE/wrong-release-id.err"; then
+    echo "Staged verifier accepted a different GitHub Release ID" >&2
+    exit 1
+fi
+if "$REPO_DIR/scripts/verify-release-promotion.sh" staged \
+    "$FIXTURE/release.json" "$CANDIDATE" v0.4.0 \
+    "$CANDIDATE_SHA" "$SOURCE_A" 0369445618 \
+    >"$FIXTURE/noncanonical-release-id.out" 2>"$FIXTURE/noncanonical-release-id.err"; then
+    echo "Staged verifier accepted a noncanonical GitHub Release ID" >&2
+    exit 1
+fi
+if "$REPO_DIR/scripts/verify-release-promotion.sh" staged \
+    "$FIXTURE/release.json" "$CANDIDATE" v0.4.0 \
     "$CANDIDATE_SHA" "$SOURCE_B" \
+    369445618 \
     >"$FIXTURE/wrong-source.out" 2>"$FIXTURE/wrong-source.err"; then
     echo "Staged verifier accepted source/tag evidence drift" >&2
     exit 1
@@ -125,6 +151,7 @@ fi
 if "$REPO_DIR/scripts/verify-release-promotion.sh" staged \
     "$FIXTURE/release.json" "$CANDIDATE" v0.4.0-beta.1 \
     "$CANDIDATE_SHA" "$SOURCE_A" \
+    369445618 \
     >"$FIXTURE/prerelease-tag.out" 2>"$FIXTURE/prerelease-tag.err"; then
     echo "Staged stable verifier accepted a prerelease tag" >&2
     exit 1
@@ -174,6 +201,7 @@ jq '.assets += [{"name":"unexpected.bin"}]' "$FIXTURE/release-public.json" \
 if "$REPO_DIR/scripts/verify-release-promotion.sh" published \
     "$FIXTURE/release-public-extra.json" "$IDENTICAL" v0.4.0 \
     "$CANDIDATE_SHA" "$SOURCE_A" \
+    369445618 \
     >"$FIXTURE/public-extra.out" 2>"$FIXTURE/public-extra.err"; then
     echo "Published verifier accepted an extra public release asset" >&2
     exit 1

@@ -20,12 +20,33 @@ jobs:
       tag_name: ${{ steps.release.outputs.tag_name }}
       version: ${{ steps.release.outputs.version }}
       source_commit: ${{ steps.release.outputs.sha }}
+      release_id: ${{ steps.release-id.outputs.release_id }}
     steps:
       - uses: googleapis/release-please-action@16a9c90856f42705d54a6fda1823352bdc62cf38 # v4.4.0
         id: release
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: steps.release.outputs.release_created == 'true'
+        with:
+          ref: ${{ github.sha }}
+          path: .release-workflow
+          sparse-checkout: scripts/private-release-api.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+        if: steps.release.outputs.release_created == 'true'
+      - name: Derive immutable private draft ID from official release-please output
+        id: release-id
+        if: steps.release.outputs.release_created == 'true'
+        env:
+          RELEASE_UPLOAD_URL: ${{ steps.release.outputs.upload_url }}
+        run: |
+          RELEASE_ID=$(mise exec -- python3 .release-workflow/scripts/private-release-api.py derive-id \
+            --repo "$GITHUB_REPOSITORY" \
+            --upload-url "$RELEASE_UPLOAD_URL")
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
 
   build-staged-stable-release:
     needs: release-please
@@ -36,6 +57,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       release_tag: ${{ needs.release-please.outputs.tag_name }}
+      release_id: ${{ needs.release-please.outputs.release_id }}
       release_source_commit: ${{ needs.release-please.outputs.source_commit }}
       verifier_source_commit: e233cc6db6b37307e9774db228ab11ecc4d0673c
     secrets:

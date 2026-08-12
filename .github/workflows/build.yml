@@ -15,6 +15,10 @@ on:
         description: Exact 40-character source commit recorded by the private draft
         required: true
         type: string
+      release_id:
+        description: Exact positive numeric GitHub Release ID of the private draft
+        required: true
+        type: string
       verifier_source_commit:
         description: Exact reviewed commit containing the frozen baseline verifier
         required: true
@@ -31,6 +35,10 @@ on:
         type: string
       release_source_commit:
         description: Exact source commit emitted by release-please
+        required: true
+        type: string
+      release_id:
+        description: Exact positive numeric GitHub Release ID emitted by release-please
         required: true
         type: string
       verifier_source_commit:
@@ -134,6 +142,7 @@ jobs:
       HAS_SIGNING_CERT: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 != '' && secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD != '' && secrets.KEYCHAIN_PASSWORD != '' }}
       HAS_NOTARIZE: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
       RELEASE_TAG: ${{ inputs.release_tag }}
+      RELEASE_ID: ${{ inputs.release_id }}
       RELEASE_SOURCE_COMMIT: ${{ inputs.release_source_commit }}
       IS_RELEASE: ${{ inputs.release_tag != '' }}
       IS_BETA: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.release_tag == '' }}
@@ -142,6 +151,15 @@ jobs:
         with:
           ref: ${{ inputs.release_source_commit || github.sha }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: inputs.release_tag != ''
+        with:
+          ref: ${{ github.sha }}
+          path: .release-workflow
+          sparse-checkout: scripts/private-release-api.py
+          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - name: Check if release-please commit
@@ -185,16 +203,19 @@ jobs:
             echo "Checked-out source does not match the release-please source commit" >&2
             exit 1
           fi
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json tagName,isDraft,isPrerelease,targetCommitish,assets \
-            > stable-release-source.json
+          mise exec -- python3 .release-workflow/scripts/private-release-api.py inspect \
+            --repo "$GITHUB_REPOSITORY" \
+            --release-id "$RELEASE_ID" \
+            --tag "$RELEASE_TAG" \
+            --source "$RELEASE_SOURCE_COMMIT" \
+            --state empty \
+            --output stable-release-source.json
           gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" \
             > stable-tag-refs.json
-          jq -e --arg tag "$RELEASE_TAG" --arg source "$RELEASE_SOURCE_COMMIT" '
-            (keys | sort) == (["assets", "isDraft", "isPrerelease", "tagName", "targetCommitish"] | sort) and
-            .tagName == $tag and .targetCommitish == $source and
-            .isDraft == true and .isPrerelease == false and
-            (.assets | type == "array" and length == 0)
+          jq -e --argjson id "$RELEASE_ID" --arg tag "$RELEASE_TAG" --arg source "$RELEASE_SOURCE_COMMIT" '
+            (keys | sort) == (["assets", "id", "isDraft", "isPrerelease", "tagName", "targetCommitish"] | sort) and
+            .id == $id and .tagName == $tag and .targetCommitish == $source and
+            .isDraft == true and .isPrerelease == false and .assets == []
           ' stable-release-source.json >/dev/null
           jq -e --arg ref "refs/tags/$RELEASE_TAG" '
             type == "array" and ([.[] | select(.ref == $ref)] | length) == 0
@@ -792,6 +813,7 @@ jobs:
       contents: write
     env:
       RELEASE_TAG: ${{ inputs.release_tag }}
+      RELEASE_ID: ${{ inputs.release_id }}
       IS_RELEASE: ${{ inputs.release_tag != '' }}
       PUBLISH_TAG: ${{ needs.build_release.outputs.publish_tag }}
       SOURCE_COMMIT: ${{ needs.build_release.outputs.source_commit }}
@@ -802,6 +824,18 @@ jobs:
           ref: ${{ needs.build_release.outputs.source_commit }}
           fetch-depth: 0
           persist-credentials: false
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: env.IS_RELEASE == 'true'
+        with:
+          ref: ${{ github.sha }}
+          path: .release-workflow
+          sparse-checkout: scripts/private-release-api.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+        if: env.IS_RELEASE == 'true'
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -817,15 +851,18 @@ jobs:
               echo "Stable release tag is not canonical SemVer: $RELEASE_TAG" >&2
               exit 1
             fi
-            gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-              --json tagName,isDraft,isPrerelease,targetCommitish,assets \
-              > stable-release-before.json
+            mise exec -- python3 .release-workflow/scripts/private-release-api.py inspect \
+              --repo "$GITHUB_REPOSITORY" \
+              --release-id "$RELEASE_ID" \
+              --tag "$RELEASE_TAG" \
+              --source "$SOURCE_COMMIT" \
+              --state empty \
+              --output stable-release-before.json
             gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" \
               > stable-tag-refs-before.json
-            if ! jq -e --arg tag "$RELEASE_TAG" --arg source "$SOURCE_COMMIT" '
-              .tagName == $tag and .targetCommitish == $source and
-              .isDraft == true and .isPrerelease == false and
-              (.assets | length) == 0
+            if ! jq -e --argjson id "$RELEASE_ID" --arg tag "$RELEASE_TAG" --arg source "$SOURCE_COMMIT" '
+              .id == $id and .tagName == $tag and .targetCommitish == $source and
+              .isDraft == true and .isPrerelease == false and .assets == []
             ' stable-release-before.json >/dev/null; then
               echo "Stable release must be an empty release-please draft; refusing mutation" >&2
               exit 1
@@ -847,15 +884,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "$RELEASE_TAG" release-payload/* \
-            --repo "$GITHUB_REPOSITORY"
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json tagName,isDraft,isPrerelease,targetCommitish,assets \
-            > stable-release-after.json
+          mise exec -- python3 .release-workflow/scripts/private-release-api.py upload \
+            --repo "$GITHUB_REPOSITORY" \
+            --release-id "$RELEASE_ID" \
+            --tag "$RELEASE_TAG" \
+            --source "$SOURCE_COMMIT" \
+            --payload "$PWD/release-payload" \
+            --output stable-release-after.json
           gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" \
             > stable-tag-refs-after.json
-          jq -e --arg tag "$RELEASE_TAG" --arg source "$SOURCE_COMMIT" '
-            .tagName == $tag and .targetCommitish == $source and
+          jq -e --argjson id "$RELEASE_ID" --arg tag "$RELEASE_TAG" --arg source "$SOURCE_COMMIT" '
+            .id == $id and .tagName == $tag and .targetCommitish == $source and
             .isDraft == true and .isPrerelease == false and
             ([.assets[].name] | sort) == ([
               "RustThirdPartyLicenses.txt",
@@ -893,12 +932,22 @@ jobs:
     permissions:
       contents: read
     env:
+      RELEASE_ID: ${{ inputs.release_id }}
+      IS_RELEASE: ${{ inputs.release_tag != '' }}
       PUBLISH_TAG: ${{ needs.build_release.outputs.publish_tag }}
       SOURCE_COMMIT: ${{ needs.build_release.outputs.source_commit }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.build_release.outputs.source_commit }}
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: env.IS_RELEASE == 'true'
+        with:
+          ref: ${{ github.sha }}
+          path: .release-workflow
+          sparse-checkout: scripts/private-release-api.py
+          sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Select Xcode 26.3
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
@@ -908,7 +957,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p downloaded
-          gh release download "$PUBLISH_TAG" --repo "$GITHUB_REPOSITORY" --dir downloaded
+          if [ "$IS_RELEASE" = "true" ]; then
+            mise exec -- python3 .release-workflow/scripts/private-release-api.py download \
+              --repo "$GITHUB_REPOSITORY" \
+              --release-id "$RELEASE_ID" \
+              --tag "$PUBLISH_TAG" \
+              --source "$SOURCE_COMMIT" \
+              --state staged \
+              --directory "$PWD/downloaded"
+          else
+            gh release download "$PUBLISH_TAG" --repo "$GITHUB_REPOSITORY" --dir downloaded
+          fi
           (cd downloaded && shasum -a 256 -c SHA256SUMS)
           SOURCE=$(jq -r '.source.commit' downloaded/release-evidence.json)
           EVIDENCE_SHA=$(jq -r '.artifact.sha256' downloaded/release-evidence.json)

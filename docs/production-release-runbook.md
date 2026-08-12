@@ -48,7 +48,9 @@ new evidence; waivers do not make changed bytes eligible.
 
 Release-please creates the stable release metadata as a private, tagless draft
 whose `target_commitish` is the exact release source commit. Its reusable Build
-must match that commit, require the draft to be empty and tagless, and attach
+derives the immutable positive numeric release ID from release-please's official
+`upload_url`. It must match that ID and commit, require the draft to be empty
+and tagless through `GET /releases/{release_id}`, and attach
 the nine authenticated assets without publishing it. For this first stable
 draft only, the stable workflow does not rerun the 30-minute sampler. It uses
 `actions:read` to fetch exact artifact `9146492644` from Build `31603344709`,
@@ -74,26 +76,29 @@ untouched draft explicitly:
 mise exec -- gh workflow run build.yml \
   --repo IlyaGulya/wrenflow \
   -f release_tag=v0.4.0 \
+  -f release_id='<positive numeric private draft ID>' \
   -f release_source_commit='<40-character draft target commit>' \
   -f verifier_source_commit=e233cc6db6b37307e9774db228ab11ecc4d0673c \
   -f confirmation=STAGE_EXISTING_PRIVATE_DRAFT
 ```
 
-The owner later invokes **Promote Verified Stable Draft** with the canonical
-stable tag, exact approved lowercase DMG SHA-256, and
+The owner later invokes **Promote Verified Stable Draft** with the immutable
+private draft release ID, canonical stable tag, exact approved lowercase DMG SHA-256, and
 `PROMOTE_VERIFIED_STABLE`.
 
 The workflow:
 
-1. derives and checks out the exact source commit from the tagless private
-   draft;
+1. reads only the exact `/releases/{release_id}` object, derives and checks out
+   its exact source commit from the tagless private draft;
 2. requires that draft to be private, non-prerelease, tagless, and contain
    exactly nine assets;
-3. downloads and authenticates every asset, provenance subject, source commit,
+3. downloads every private asset by its immutable asset ID and authenticates
+   every byte, provenance subject, source commit,
    Developer ID identity, Accepted notarization, and Gatekeeper result;
 4. fingerprints the draft twice to reject concurrent mutation;
-5. publishes that draft without rebuilding or uploading, creating the stable
-   tag at the approved source in that publication operation;
+5. publishes that exact release object with `PATCH /releases/{release_id}`
+   without rebuilding or uploading, creating the stable tag at the approved
+   source in that publication operation;
 6. verifies the new public tag, then redownloads every public asset and proves
    identical hashes and signature.
 

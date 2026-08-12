@@ -7,6 +7,7 @@ RELEASE_WORKFLOW="$REPO_DIR/.github/workflows/release-please.yml"
 PROMOTION_WORKFLOW="$REPO_DIR/.github/workflows/promote-stable.yml"
 LINT_WORKFLOW="$REPO_DIR/.github/workflows/lint-workflows.yml"
 RELEASE_CONFIG="$REPO_DIR/release-please-config.json"
+PRIVATE_RELEASE_HELPER="$REPO_DIR/scripts/private-release-api.py"
 
 require_pattern() {
     local pattern="$1"
@@ -148,7 +149,12 @@ require_frozen_source_history_contract() {
 require_pattern "workflow_call:" "$BUILD_WORKFLOW"
 require_pattern "workflow_dispatch:" "$BUILD_WORKFLOW"
 require_pattern "release_tag:" "$BUILD_WORKFLOW"
+require_pattern "release_id:" "$BUILD_WORKFLOW"
 require_pattern "release_source_commit:" "$BUILD_WORKFLOW"
+if [[ "$(grep -Fxc -- '      release_id:' "$BUILD_WORKFLOW")" -ne 2 ]]; then
+    echo "Build workflow must require the immutable release id for recovery and reusable calls" >&2
+    exit 1
+fi
 require_pattern "verifier_source_commit:" "$BUILD_WORKFLOW"
 if [[ "$(grep -Fxc -- '      verifier_source_commit:' "$BUILD_WORKFLOW")" -ne 2 ]]; then
     echo "Build workflow must require the verifier source for recovery and reusable stable calls" >&2
@@ -159,13 +165,16 @@ require_pattern "IS_RELEASE: \${{ inputs.release_tag != '' }}" "$BUILD_WORKFLOW"
 require_pattern 'RELEASE_SOURCE_COMMIT: ${{ inputs.release_source_commit }}' "$BUILD_WORKFLOW"
 require_pattern 'ref: ${{ inputs.release_source_commit || github.sha }}' "$BUILD_WORKFLOW"
 require_pattern "Require exact empty tagless private stable draft" "$BUILD_WORKFLOW"
-require_pattern '--json tagName,isDraft,isPrerelease,targetCommitish,assets' "$BUILD_WORKFLOW"
+require_pattern 'private-release-api.py inspect' "$BUILD_WORKFLOW"
+require_pattern '--release-id "$RELEASE_ID"' "$BUILD_WORKFLOW"
 require_pattern 'git/matching-refs/tags/$RELEASE_TAG' "$BUILD_WORKFLOW"
 require_pattern '.targetCommitish == $source' "$BUILD_WORKFLOW"
 require_pattern '([.[] | select(.ref == $ref)] | length) == 0' "$BUILD_WORKFLOW"
 require_pattern "Explicit private draft recovery confirmation is missing" "$BUILD_WORKFLOW"
 reject_pattern 'TAG_COMMIT=$(git rev-list -n 1 "$TAG")' "$BUILD_WORKFLOW"
 reject_pattern 'TAG_COMMIT=$(git rev-list -n 1 "$RELEASE_TAG")' "$BUILD_WORKFLOW"
+reject_pattern 'gh release view "$RELEASE_TAG"' "$BUILD_WORKFLOW"
+reject_pattern 'gh release upload "$RELEASE_TAG"' "$BUILD_WORKFLOW"
 require_pattern "mise run test" "$BUILD_WORKFLOW"
 require_pattern "mise run lint" "$BUILD_WORKFLOW"
 require_pattern "verify-pr:" "$BUILD_WORKFLOW"
@@ -264,7 +273,7 @@ require_pattern "scripts/verify-release-artifact.sh build/gpui/Wrenflow.app buil
 require_pattern "cd build/release-payload && shasum -a 256 -c SHA256SUMS" "$BUILD_WORKFLOW"
 require_pattern "Refuse to overwrite staged or published candidate bytes" "$BUILD_WORKFLOW"
 require_pattern "Stable release must be an empty release-please draft" "$BUILD_WORKFLOW"
-require_pattern 'gh release upload "$RELEASE_TAG" release-payload/*' "$BUILD_WORKFLOW"
+require_pattern 'private-release-api.py upload' "$BUILD_WORKFLOW"
 require_pattern 'elif gh release view "$PUBLISH_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then' "$BUILD_WORKFLOW"
 require_pattern 'gh release create "$PUBLISH_TAG" release-payload/*' "$BUILD_WORKFLOW"
 require_pattern '            --repo "$GITHUB_REPOSITORY" \' "$BUILD_WORKFLOW"
@@ -447,12 +456,15 @@ require_pattern "if: needs.release-please.outputs.release_created == 'true'" "$R
 require_pattern "      actions: read" "$RELEASE_WORKFLOW"
 require_pattern "uses: ./.github/workflows/build.yml" "$RELEASE_WORKFLOW"
 require_pattern "release_tag: \${{ needs.release-please.outputs.tag_name }}" "$RELEASE_WORKFLOW"
+require_pattern "release_id: \${{ needs.release-please.outputs.release_id }}" "$RELEASE_WORKFLOW"
+require_pattern 'steps.release.outputs.upload_url' "$RELEASE_WORKFLOW"
 require_pattern "source_commit: \${{ steps.release.outputs.sha }}" "$RELEASE_WORKFLOW"
 require_pattern "release_source_commit: \${{ needs.release-please.outputs.source_commit }}" "$RELEASE_WORKFLOW"
 require_pattern "verifier_source_commit: e233cc6db6b37307e9774db228ab11ecc4d0673c" "$RELEASE_WORKFLOW"
 
 require_pattern "workflow_dispatch:" "$PROMOTION_WORKFLOW"
 require_pattern "release_tag:" "$PROMOTION_WORKFLOW"
+require_pattern "release_id:" "$PROMOTION_WORKFLOW"
 require_pattern "expected_dmg_sha256:" "$PROMOTION_WORKFLOW"
 require_pattern "PROMOTE_VERIFIED_STABLE" "$PROMOTION_WORKFLOW"
 reject_pattern "stable-production" "$PROMOTION_WORKFLOW"
@@ -464,14 +476,13 @@ require_pattern '.isDraft == true and .isPrerelease == false' "$PROMOTION_WORKFL
 require_pattern '.targetCommitish == $source' "$PROMOTION_WORKFLOW"
 require_pattern 'git/matching-refs/tags/$RELEASE_TAG' "$PROMOTION_WORKFLOW"
 require_pattern '([.[] | select(.ref == $ref)] | length) == 0' "$PROMOTION_WORKFLOW"
-require_pattern 'gh release download "$RELEASE_TAG"' "$PROMOTION_WORKFLOW"
+require_pattern 'private-release-api.py download' "$PROMOTION_WORKFLOW"
 require_pattern 'shasum -a 256 -c SHA256SUMS' "$PROMOTION_WORKFLOW"
 require_pattern 'scripts/verify-release-promotion.sh staged' "$PROMOTION_WORKFLOW"
 require_pattern 'scripts/verify-release-artifact.sh' "$PROMOTION_WORKFLOW"
 require_pattern 'release-fingerprint-before.json' "$PROMOTION_WORKFLOW"
 require_pattern 'cmp release-fingerprint-before.json release-fingerprint-second.json' "$PROMOTION_WORKFLOW"
-require_pattern 'gh release edit "$RELEASE_TAG"' "$PROMOTION_WORKFLOW"
-require_pattern '--draft=false --prerelease=false --latest --target "$SOURCE_COMMIT"' "$PROMOTION_WORKFLOW"
+require_pattern 'private-release-api.py publish' "$PROMOTION_WORKFLOW"
 require_pattern "Published stable tag does not resolve to the approved source commit" "$PROMOTION_WORKFLOW"
 require_pattern '([.[] | select(.ref == $tag)] |' "$PROMOTION_WORKFLOW"
 require_pattern 'length == 1 and .[0].object.type == "commit" and' "$PROMOTION_WORKFLOW"
@@ -482,7 +493,16 @@ require_pattern "Public stable DMG differs from the approved staged bytes" "$PRO
 require_pattern "retention-days: 30" "$PROMOTION_WORKFLOW"
 reject_pattern "mise run build" "$PROMOTION_WORKFLOW"
 reject_pattern "gh release upload" "$PROMOTION_WORKFLOW"
+reject_pattern 'gh release view "$RELEASE_TAG"' "$PROMOTION_WORKFLOW"
+reject_pattern 'gh release download "$RELEASE_TAG"' "$PROMOTION_WORKFLOW"
+reject_pattern 'gh release edit "$RELEASE_TAG"' "$PROMOTION_WORKFLOW"
 reject_pattern "--clobber" "$PROMOTION_WORKFLOW"
+require_pattern 'f"repos/{args.repo}/releases/{args.release_id_int}"' "$PRIVATE_RELEASE_HELPER"
+require_pattern 'f"repos/{args.repo}/releases/assets/{asset['"'"'id'"'"']}"' "$PRIVATE_RELEASE_HELPER"
+reject_pattern '"release", "view"' "$PRIVATE_RELEASE_HELPER"
+reject_pattern '"release", "upload"' "$PRIVATE_RELEASE_HELPER"
+reject_pattern '"release", "download"' "$PRIVATE_RELEASE_HELPER"
+reject_pattern '"release", "edit"' "$PRIVATE_RELEASE_HELPER"
 require_repo_scoped_gh_release_commands "$BUILD_WORKFLOW"
 require_repo_scoped_gh_release_commands "$PROMOTION_WORKFLOW"
 
@@ -607,12 +627,14 @@ validate_empty_tagless_draft_fixture() {
     local tag="$3"
     local source="$4"
     local confirmation="$5"
+    local release_id="${6-369445618}"
     [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
     [[ "$source" =~ ^[0-9a-f]{40}$ ]] || return 1
     [[ "$confirmation" == "STAGE_EXISTING_PRIVATE_DRAFT" ]] || return 1
-    mise exec -- jq -e --arg tag "$tag" --arg source "$source" '
-      (keys | sort) == (["assets", "isDraft", "isPrerelease", "tagName", "targetCommitish"] | sort) and
-      .tagName == $tag and .targetCommitish == $source and
+    [[ "$release_id" =~ ^[1-9][0-9]*$ ]] || return 1
+    mise exec -- jq -e --argjson id "$release_id" --arg tag "$tag" --arg source "$source" '
+      (keys | sort) == (["assets", "id", "isDraft", "isPrerelease", "tagName", "targetCommitish"] | sort) and
+      .id == $id and .tagName == $tag and .targetCommitish == $source and
       .isDraft == true and .isPrerelease == false and
       (.assets | type == "array" and length == 0)
     ' "$release_json" >/dev/null || return 1
@@ -628,8 +650,9 @@ expect_draft_fixture_rejected() {
     local tag="${4-v0.4.0}"
     local source="${5-1111111111111111111111111111111111111111}"
     local confirmation="${6-STAGE_EXISTING_PRIVATE_DRAFT}"
+    local release_id="${7-369445618}"
     if validate_empty_tagless_draft_fixture \
-        "$release_json" "$refs_json" "$tag" "$source" "$confirmation"; then
+        "$release_json" "$refs_json" "$tag" "$source" "$confirmation" "$release_id"; then
         echo "Tagless private draft fixture unexpectedly accepted $label" >&2
         exit 1
     fi
@@ -637,6 +660,7 @@ expect_draft_fixture_rejected() {
 
 TAGLESS_SOURCE="1111111111111111111111111111111111111111"
 mise exec -- jq -S -n --arg source "$TAGLESS_SOURCE" '{
+  id: 369445618,
   assets: [],
   isDraft: true,
   isPrerelease: false,
@@ -684,6 +708,13 @@ expect_draft_fixture_rejected invalid-confirmation \
 expect_draft_fixture_rejected missing-source \
     "$REPO_SCOPE_FIXTURE/tagless-release.json" "$REPO_SCOPE_FIXTURE/tagless-refs.json" \
     v0.4.0 "" STAGE_EXISTING_PRIVATE_DRAFT
+expect_draft_fixture_rejected noncanonical-release-id \
+    "$REPO_SCOPE_FIXTURE/tagless-release.json" "$REPO_SCOPE_FIXTURE/tagless-refs.json" \
+    v0.4.0 "$TAGLESS_SOURCE" STAGE_EXISTING_PRIVATE_DRAFT 0369445618
+mise exec -- jq '.id = 369445619' "$REPO_SCOPE_FIXTURE/tagless-release.json" \
+    > "$REPO_SCOPE_FIXTURE/wrong-release-id.json"
+expect_draft_fixture_rejected wrong-release-id \
+    "$REPO_SCOPE_FIXTURE/wrong-release-id.json" "$REPO_SCOPE_FIXTURE/tagless-refs.json"
 
 validate_published_tag_refs_fixture() {
     local refs_json="$1"
@@ -740,6 +771,7 @@ audit_tagless_source_contract() {
     local promotion="$3"
     require_pattern "STAGE_EXISTING_PRIVATE_DRAFT" "$build"
     require_pattern 'RELEASE_SOURCE_COMMIT: ${{ inputs.release_source_commit }}' "$build"
+    require_pattern 'RELEASE_ID: ${{ inputs.release_id }}' "$build"
     require_pattern "Require exact empty tagless private stable draft" "$build"
     require_pattern 'git/matching-refs/tags/$RELEASE_TAG' "$build"
     require_pattern '([.[] | select(.ref == $ref)] | length) == 0' "$build"
@@ -750,9 +782,13 @@ audit_tagless_source_contract() {
     reject_pattern 'TAG_COMMIT=$(git rev-list -n 1 "$TAG")' "$build"
     reject_pattern 'TAG_COMMIT=$(git rev-list -n 1 "$RELEASE_TAG")' "$build"
     require_pattern 'source_commit: ${{ steps.release.outputs.sha }}' "$release"
+    require_pattern 'release_id: ${{ steps.release-id.outputs.release_id }}' "$release"
+    require_pattern 'release_id: ${{ needs.release-please.outputs.release_id }}' "$release"
+    require_pattern 'RELEASE_UPLOAD_URL: ${{ steps.release.outputs.upload_url }}' "$release"
     require_pattern 'release_source_commit: ${{ needs.release-please.outputs.source_commit }}' "$release"
+    require_pattern 'RELEASE_ID: ${{ inputs.release_id }}' "$promotion"
     require_pattern 'ref: ${{ steps.inputs.outputs.source_commit }}' "$promotion"
-    require_pattern '--draft=false --prerelease=false --latest --target "$SOURCE_COMMIT"' "$promotion"
+    require_pattern 'private-release-api.py publish' "$promotion"
     require_pattern "Published stable tag does not resolve to the approved source commit" "$promotion"
     reject_pattern 'ref: ${{ inputs.release_tag }}' "$promotion"
     reject_pattern '--verify-tag' "$promotion"
@@ -821,6 +857,22 @@ expect_tagless_source_rejected missing-release-source \
     "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/release-missing-source.yml" \
     "$PROMOTION_WORKFLOW"
 
+cp "$RELEASE_WORKFLOW" "$REPO_SCOPE_FIXTURE/release-missing-id.yml"
+mise exec -- python3 - "$REPO_SCOPE_FIXTURE/release-missing-id.yml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text()
+needle = '      release_id: ${{ steps.release-id.outputs.release_id }}\n'
+if source.count(needle) != 1:
+    raise SystemExit("release id output fixture drifted")
+path.write_text(source.replace(needle, "", 1))
+PY
+expect_tagless_source_rejected missing-release-id \
+    "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/release-missing-id.yml" \
+    "$PROMOTION_WORKFLOW"
+
 cp "$PROMOTION_WORKFLOW" "$REPO_SCOPE_FIXTURE/promote-tag-checkout.yml"
 mise exec -- python3 - "$REPO_SCOPE_FIXTURE/promote-tag-checkout.yml" <<'PY'
 from pathlib import Path
@@ -837,21 +889,21 @@ expect_tagless_source_rejected promotion-tag-checkout \
     "$BUILD_WORKFLOW" "$RELEASE_WORKFLOW" \
     "$REPO_SCOPE_FIXTURE/promote-tag-checkout.yml"
 
-cp "$PROMOTION_WORKFLOW" "$REPO_SCOPE_FIXTURE/promote-verify-tag.yml"
-mise exec -- python3 - "$REPO_SCOPE_FIXTURE/promote-verify-tag.yml" <<'PY'
+cp "$PROMOTION_WORKFLOW" "$REPO_SCOPE_FIXTURE/promote-tag-publish.yml"
+mise exec -- python3 - "$REPO_SCOPE_FIXTURE/promote-tag-publish.yml" <<'PY'
 from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
 source = path.read_text()
-needle = '--draft=false --prerelease=false --latest --target "$SOURCE_COMMIT"'
+needle = 'mise exec -- python3 .release-workflow/scripts/private-release-api.py publish'
 if source.count(needle) != 1:
     raise SystemExit("promotion publication fixture drifted")
-path.write_text(source.replace(needle, '--draft=false --prerelease=false --latest --verify-tag', 1))
+path.write_text(source.replace(needle, 'gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"', 1))
 PY
 expect_tagless_source_rejected promotion-preexisting-tag-assumption \
     "$BUILD_WORKFLOW" "$RELEASE_WORKFLOW" \
-    "$REPO_SCOPE_FIXTURE/promote-verify-tag.yml"
+    "$REPO_SCOPE_FIXTURE/promote-tag-publish.yml"
 
 expect_repo_scope_rejected() {
     local label="$1"
@@ -907,12 +959,12 @@ import sys
 
 path = Path(sys.argv[1])
 source = path.read_text()
-needle = 'gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"'
-replacement = 'gh release edit "$RELEASE_TAG"'
+needle = 'gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName'
+replacement = 'gh release view --json tagName --jq .tagName'
 if source.count(needle) != 1:
-    raise SystemExit("stable promotion repository scope fixture drifted")
+    raise SystemExit("stable latest-view repository scope fixture drifted")
 path.write_text(source.replace(needle, replacement, 1))
 PY
-expect_repo_scope_rejected unscoped-stable-edit "$REPO_SCOPE_FIXTURE/promote-stable.yml"
+expect_repo_scope_rejected unscoped-stable-latest-view "$REPO_SCOPE_FIXTURE/promote-stable.yml"
 
 echo "Release workflow trigger and fail-closed artifact invariants are wired"

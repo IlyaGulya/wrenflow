@@ -19,7 +19,8 @@ This project uses [release-please](https://github.com/googleapis/release-please)
 4. On merge, release-please automatically:
    - Updates `CHANGELOG.md`, the root `Cargo.toml`, and the isolated GPUI `Cargo.toml` with the new version
    - Creates a private, tagless GitHub Release draft whose target is the exact
-     release commit
+     release commit; the workflow derives its immutable numeric release ID from
+     release-please's official `upload_url`
 5. When `release_created` is true, Release Please explicitly calls the reusable
    **Build** workflow. That workflow tests, lints, signs, notarizes, verifies and
    uploads the exact DMG to the empty draft, retaining the Actions payload for
@@ -30,7 +31,8 @@ This project uses [release-please](https://github.com/googleapis/release-please)
    go/no-go, manually dispatch **Promote Verified Stable Draft** with the exact
    tag, approved DMG SHA-256 and confirmation. It re-downloads/verifies the
    staged payload, publishes the draft and creates the stable tag at the
-   draft's verified source commit; it never rebuilds or replaces assets.
+   draft's verified source commit; all private reads/uploads/downloads and the
+   publication PATCH use that exact release ID, and it never rebuilds or replaces assets.
 
 ## Key Files
 
@@ -98,7 +100,7 @@ Or merge via GitHub UI. Both squash-merge and merge commits work.
 
 After merge:
 1. Check that the tagless private draft was created with the expected source:
-   `gh release view <tag> --json isDraft,tagName,targetCommitish`
+   `gh api repos/IlyaGulya/wrenflow/releases/<release_id>`
 2. Inspect the same Release Please workflow run and confirm its
    `build-staged-stable-release` reusable-workflow job started
 3. Wait for that job to complete — it runs tests/lints, creates a Developer ID
@@ -114,6 +116,7 @@ same empty draft without recreating it:
 ```bash
 mise exec -- gh workflow run build.yml \
   -f release_tag=<tag> \
+  -f release_id=<positive-numeric-private-draft-id> \
   -f release_source_commit=<targetCommitish> \
   -f verifier_source_commit=e233cc6db6b37307e9774db228ab11ecc4d0673c \
   -f confirmation=STAGE_EXISTING_PRIVATE_DRAFT
@@ -128,6 +131,7 @@ already-created stable tag, or verifier bytes other than reviewed commit
 ```bash
 mise exec -- gh workflow run promote-stable.yml \
   -f release_tag=<tag> \
+  -f release_id=<positive-numeric-private-draft-id> \
   -f expected_dmg_sha256=<64-lowercase-hex> \
   -f confirmation=PROMOTE_VERIFIED_STABLE
 ```

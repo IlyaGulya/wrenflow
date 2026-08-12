@@ -7,6 +7,10 @@ on:
         description: Exact release-please stable tag, for example v0.4.0
         required: true
         type: string
+      release_id:
+        description: Exact positive numeric GitHub Release ID of the private draft
+        required: true
+        type: string
       expected_dmg_sha256:
         description: Approved lowercase SHA-256 of the staged Wrenflow.dmg
         required: true
@@ -32,9 +36,22 @@ jobs:
       contents: write
     env:
       RELEASE_TAG: ${{ inputs.release_tag }}
+      RELEASE_ID: ${{ inputs.release_id }}
       EXPECTED_DMG_SHA256: ${{ inputs.expected_dmg_sha256 }}
       PROMOTION_CONFIRMATION: ${{ inputs.confirmation }}
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: .release-workflow
+          sparse-checkout: |
+            scripts/private-release-api.py
+            scripts/verify-release-promotion.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+
       - name: Validate manual promotion inputs and derive private draft source
         id: inputs
         env:
@@ -52,18 +69,25 @@ jobs:
             echo "Explicit stable promotion confirmation is missing" >&2
             exit 1
           fi
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json tagName,isDraft,isPrerelease,targetCommitish,assets \
-            > release-source.json
+          SOURCE_COMMIT=$(mise exec -- python3 .release-workflow/scripts/private-release-api.py derive-source \
+            --repo "$GITHUB_REPOSITORY" \
+            --release-id "$RELEASE_ID" \
+            --tag "$RELEASE_TAG")
+          mise exec -- python3 .release-workflow/scripts/private-release-api.py inspect \
+            --repo "$GITHUB_REPOSITORY" \
+            --release-id "$RELEASE_ID" \
+            --tag "$RELEASE_TAG" \
+            --source "$SOURCE_COMMIT" \
+            --state staged \
+            --output release-source.json
           gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" \
             > release-tag-refs.json
-          SOURCE_COMMIT=$(jq -r .targetCommitish release-source.json)
           if ! [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
             echo "Private stable draft did not record one exact source commit" >&2
             exit 1
           fi
-          jq -e --arg tag "$RELEASE_TAG" --arg source "$SOURCE_COMMIT" '
-            .tagName == $tag and .targetCommitish == $source and
+          jq -e --argjson id "$RELEASE_ID" --arg tag "$RELEASE_TAG" --arg source "$SOURCE_COMMIT" '
+            .id == $id and .tagName == $tag and .targetCommitish == $source and
             .isDraft == true and .isPrerelease == false and
             ([.assets[].name] | sort) == ([
               "RustThirdPartyLicenses.txt",
@@ -88,20 +112,32 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: .release-workflow
+          sparse-checkout: |
+            scripts/private-release-api.py
+            scripts/verify-release-promotion.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
 
       - name: Require the exact untouched release-please draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SOURCE_COMMIT: ${{ steps.inputs.outputs.source_commit }}
         run: |
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json tagName,isDraft,isPrerelease,targetCommitish,assets \
-            > release-before.json
+          mise exec -- python3 .release-workflow/scripts/private-release-api.py inspect \
+            --repo "$GITHUB_REPOSITORY" \
+            --release-id "$RELEASE_ID" \
+            --tag "$RELEASE_TAG" \
+            --source "$SOURCE_COMMIT" \
+            --state staged \
+            --output release-before.json
           gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" \
             > release-tag-refs-before.json
-          jq -e --arg tag "$RELEASE_TAG" --arg source "$SOURCE_COMMIT" '
-            .tagName == $tag and .targetCommitish == $source and
+          jq -e --argjson id "$RELEASE_ID" --arg tag "$RELEASE_TAG" --arg source "$SOURCE_COMMIT" '
+            .id == $id and .tagName == $tag and .targetCommitish == $source and
             .isDraft == true and .isPrerelease == false and
             ([.assets[].name] | sort) == ([
               "RustThirdPartyLicenses.txt",
@@ -119,15 +155,7 @@ jobs:
             type == "array" and ([.[] | select(.ref == $ref)] | length) == 0
           ' \
             release-tag-refs-before.json >/dev/null
-          jq -S '{
-            tagName,
-            isDraft,
-            isPrerelease,
-            targetCommitish,
-            assets: ([.assets[] | {
-              id,name,size,digest,state,contentType,createdAt,updatedAt
-            }] | sort_by(.name))
-          }' release-before.json > release-fingerprint-before.json
+          jq -S . release-before.json > release-fingerprint-before.json
 
       - name: Download and authenticate every staged byte
         env:
@@ -135,16 +163,22 @@ jobs:
           SOURCE_COMMIT: ${{ steps.inputs.outputs.source_commit }}
         run: |
           mkdir staged
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir staged
+          mise exec -- python3 .release-workflow/scripts/private-release-api.py download \
+            --repo "$GITHUB_REPOSITORY" \
+            --release-id "$RELEASE_ID" \
+            --tag "$RELEASE_TAG" \
+            --source "$SOURCE_COMMIT" \
+            --state staged \
+            --directory "$PWD/staged"
           (cd staged && shasum -a 256 -c SHA256SUMS)
           ACTUAL_DMG_SHA256=$(shasum -a 256 staged/Wrenflow.dmg | awk '{print $1}')
           if [ "$ACTUAL_DMG_SHA256" != "$EXPECTED_DMG_SHA256" ]; then
             echo "Staged DMG does not match the manually approved SHA-256" >&2
             exit 1
           fi
-          mise exec -- scripts/verify-release-promotion.sh staged \
+          mise exec -- .release-workflow/scripts/verify-release-promotion.sh staged \
             release-before.json "$PWD/staged" "$RELEASE_TAG" \
-            "$EXPECTED_DMG_SHA256" "$SOURCE_COMMIT"
+            "$EXPECTED_DMG_SHA256" "$SOURCE_COMMIT" "$RELEASE_ID"
 
       - name: Select Xcode 26.3
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
@@ -166,22 +200,23 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SOURCE_COMMIT: ${{ steps.inputs.outputs.source_commit }}
         run: |
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json tagName,isDraft,isPrerelease,targetCommitish,assets \
-            > release-second-check.json
-          jq -S '{
-            tagName,
-            isDraft,
-            isPrerelease,
-            targetCommitish,
-            assets: ([.assets[] | {
-              id,name,size,digest,state,contentType,createdAt,updatedAt
-            }] | sort_by(.name))
-          }' release-second-check.json > release-fingerprint-second.json
+          mise exec -- python3 .release-workflow/scripts/private-release-api.py inspect \
+            --repo "$GITHUB_REPOSITORY" \
+            --release-id "$RELEASE_ID" \
+            --tag "$RELEASE_TAG" \
+            --source "$SOURCE_COMMIT" \
+            --state staged \
+            --output release-second-check.json
+          jq -S . release-second-check.json > release-fingerprint-second.json
           cmp release-fingerprint-before.json release-fingerprint-second.json
           mkdir staged-second-download
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --dir staged-second-download
+          mise exec -- python3 .release-workflow/scripts/private-release-api.py download \
+            --repo "$GITHUB_REPOSITORY" \
+            --release-id "$RELEASE_ID" \
+            --tag "$RELEASE_TAG" \
+            --source "$SOURCE_COMMIT" \
+            --state staged \
+            --directory "$PWD/staged-second-download"
           (cd staged-second-download && shasum -a 256 -c SHA256SUMS)
           for asset in staged/*; do
             name=$(basename "$asset")
@@ -200,8 +235,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SOURCE_COMMIT: ${{ steps.inputs.outputs.source_commit }}
         run: |
-          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --draft=false --prerelease=false --latest --target "$SOURCE_COMMIT"
+          mise exec -- python3 .release-workflow/scripts/private-release-api.py publish \
+            --repo "$GITHUB_REPOSITORY" \
+            --release-id "$RELEASE_ID" \
+            --tag "$RELEASE_TAG" \
+            --source "$SOURCE_COMMIT" \
+            --output release-public.json
           git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
           if [ "$(git rev-list -n 1 "$RELEASE_TAG")" != "$SOURCE_COMMIT" ]; then
             echo "Published stable tag does not resolve to the approved source commit" >&2
@@ -215,11 +254,8 @@ jobs:
               length == 1 and .[0].object.type == "commit" and
               .[0].object.sha == $source)
           ' release-tag-refs-public.json >/dev/null
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json tagName,isDraft,isPrerelease,targetCommitish,url,assets \
-            > release-public.json
-          jq -e --arg tag "$RELEASE_TAG" --arg source "$SOURCE_COMMIT" '
-            .tagName == $tag and .targetCommitish == $source and
+          jq -e --argjson id "$RELEASE_ID" --arg tag "$RELEASE_TAG" --arg source "$SOURCE_COMMIT" '
+            .id == $id and .tagName == $tag and .targetCommitish == $source and
             .isDraft == false and .isPrerelease == false and
             ([.assets[].name] | sort) == ([
               "RustThirdPartyLicenses.txt",
@@ -238,17 +274,19 @@ jobs:
             echo "Published stable release did not become latest" >&2
             exit 1
           fi
-          RELEASE_URL=$(jq -r .url release-public.json)
+          RELEASE_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
           echo "release_url=$RELEASE_URL" >> "$GITHUB_OUTPUT"
           jq -S -n \
             --arg tag "$RELEASE_TAG" \
             --arg sha "$EXPECTED_DMG_SHA256" \
             --arg source "$SOURCE_COMMIT" \
+            --argjson release_id "$RELEASE_ID" \
             --arg workflow "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             '{
               schema_version: 1,
               decision: "published_exact_staged_bytes",
               release_tag: $tag,
+              release_id: $release_id,
               dmg_sha256: $sha,
               source_commit: $source,
               promotion_workflow: $workflow
@@ -260,12 +298,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir public-download
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --dir public-download
-          mise exec -- scripts/verify-release-promotion.sh published \
+          mise exec -- python3 .release-workflow/scripts/private-release-api.py download \
+            --repo "$GITHUB_REPOSITORY" \
+            --release-id "$RELEASE_ID" \
+            --tag "$RELEASE_TAG" \
+            --source "${{ steps.inputs.outputs.source_commit }}" \
+            --state public \
+            --directory "$PWD/public-download"
+          mise exec -- .release-workflow/scripts/verify-release-promotion.sh published \
             release-public.json "$PWD/public-download" "$RELEASE_TAG" \
-            "$EXPECTED_DMG_SHA256" "${{ steps.inputs.outputs.source_commit }}"
-          mise exec -- scripts/verify-release-promotion.sh promotion \
+            "$EXPECTED_DMG_SHA256" "${{ steps.inputs.outputs.source_commit }}" \
+            "$RELEASE_ID"
+          mise exec -- .release-workflow/scripts/verify-release-promotion.sh promotion \
             "$PWD/staged" "$PWD/public-download"
           ACTUAL_DMG_SHA256=$(shasum -a 256 public-download/Wrenflow.dmg | awk '{print $1}')
           if [ "$ACTUAL_DMG_SHA256" != "$EXPECTED_DMG_SHA256" ]; then

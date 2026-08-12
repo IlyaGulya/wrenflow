@@ -18,7 +18,7 @@ PAYLOAD_FILES=(
 )
 
 usage() {
-    echo "Usage: $0 source | staged|published <release.json> <payload> <tag> <dmg-sha256> <source-commit> | promotion <approved-draft-payload> <public-payload>" >&2
+    echo "Usage: $0 source | staged|published <release.json> <payload> <tag> <dmg-sha256> <source-commit> <release-id> | promotion <approved-draft-payload> <public-payload>" >&2
 }
 
 verify_source_contract() {
@@ -58,6 +58,7 @@ verify_source_contract() {
       .go_no_go.support_bundle_secret_findings_max == 0 and
       .promotion.policy == "exact_private_draft_bytes_only" and
       .promotion.stable_architecture == "release_please_draft_then_manual_exact_byte_promotion" and
+      .promotion.private_draft_identity == "exact_positive_github_release_id" and
       .promotion.staged_payload_retention_days == 21 and
       .promotion.promotion_evidence_retention_days == 30 and
       .promotion.required_tracker_gates == ["wrenflow-duh.9.8", "wrenflow-duh.9.9", "wrenflow-duh.9.10", "wrenflow-duh.9.11"] and
@@ -120,13 +121,15 @@ verify_source_contract() {
         "$REPO_DIR/.github/workflows/release-please.yml" >/dev/null
     rg -F 'release_tag: ${{ needs.release-please.outputs.tag_name }}' \
         "$REPO_DIR/.github/workflows/release-please.yml" >/dev/null
+    rg -F 'release_id: ${{ needs.release-please.outputs.release_id }}' \
+        "$REPO_DIR/.github/workflows/release-please.yml" >/dev/null
     rg -F 'release_source_commit: ${{ needs.release-please.outputs.source_commit }}' \
         "$REPO_DIR/.github/workflows/release-please.yml" >/dev/null
     rg -F 'verifier_source_commit: e233cc6db6b37307e9774db228ab11ecc4d0673c' \
         "$REPO_DIR/.github/workflows/release-please.yml" >/dev/null
-    rg -F 'targetCommitish' \
+    rg -F 'private-release-api.py derive-source' \
         "$REPO_DIR/.github/workflows/promote-stable.yml" >/dev/null
-    rg -F -- '--draft=false --prerelease=false --latest --target "$SOURCE_COMMIT"' \
+    rg -F 'private-release-api.py publish' \
         "$REPO_DIR/.github/workflows/promote-stable.yml" >/dev/null
     rg -F 'scripts/verify-release-promotion.sh published' \
         "$REPO_DIR/.github/workflows/promote-stable.yml" >/dev/null
@@ -183,7 +186,7 @@ verify_release() {
     local release_state="$1"
     shift
     local release_json="$1"
-    local payload tag expected_sha source_commit expected_draft result_label
+    local payload tag expected_sha source_commit release_id expected_draft result_label
     if [[ ! -f "$release_json" || -L "$release_json" ]]; then
         echo "Staged release metadata must be a regular JSON file" >&2
         exit 64
@@ -192,6 +195,7 @@ verify_release() {
     tag="$3"
     expected_sha="$4"
     source_commit="$5"
+    release_id="$6"
     if [[ "$release_state" == "staged" ]]; then
         expected_draft=true
         result_label="Staged"
@@ -201,13 +205,27 @@ verify_release() {
     fi
     if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ || \
           ! "$expected_sha" =~ ^[0-9a-f]{64}$ || \
-          ! "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
-        echo "Staged tag, digest or source commit failed its closed schema" >&2
+          ! "$source_commit" =~ ^[0-9a-f]{40}$ || \
+          ! "$release_id" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Staged tag, digest, source commit or release id failed its closed schema" >&2
         exit 64
     fi
-    jq -e --arg tag "$tag" --arg source "$source_commit" --argjson draft "$expected_draft" '
-      .tagName == $tag and .targetCommitish == $source and
+    jq -e --argjson id "$release_id" --arg tag "$tag" --arg source "$source_commit" --argjson draft "$expected_draft" '
+      (keys | sort) == (["assets", "id", "isDraft", "isPrerelease", "tagName", "targetCommitish"] | sort) and
+      .id == $id and .tagName == $tag and .targetCommitish == $source and
       .isDraft == $draft and .isPrerelease == false and
+      (.assets | type == "array" and length == 9) and
+      all(.assets[];
+        (keys | sort) == (["contentType", "createdAt", "digest", "id", "name", "size", "state", "updatedAt", "url"] | sort) and
+        (.id | type == "number" and . > 0 and floor == .) and
+        (.size | type == "number" and . > 0 and floor == .) and
+        .state == "uploaded" and
+        (.contentType | type == "string" and length > 0) and
+        (.createdAt | type == "string" and length > 0) and
+        (.updatedAt | type == "string" and length > 0) and
+        (.url == ("https://api.github.com/repos/IlyaGulya/wrenflow/releases/assets/" + (.id | tostring))) and
+        (.digest == null or (.digest | test("^sha256:[0-9a-f]{64}$")))) and
+      ([.assets[].id] | unique | length) == 9 and
       ([.assets[].name] | sort) == ([
         "RustThirdPartyLicenses.txt",
         "SHA256SUMS",
@@ -293,12 +311,12 @@ case "${1:-}" in
         echo "Production release runbook source contract passed"
         ;;
     staged)
-        [[ $# -eq 6 ]] || { usage; exit 64; }
-        verify_release staged "$2" "$3" "$4" "$5" "$6"
+        [[ $# -eq 7 ]] || { usage; exit 64; }
+        verify_release staged "$2" "$3" "$4" "$5" "$6" "$7"
         ;;
     published)
-        [[ $# -eq 6 ]] || { usage; exit 64; }
-        verify_release published "$2" "$3" "$4" "$5" "$6"
+        [[ $# -eq 7 ]] || { usage; exit 64; }
+        verify_release published "$2" "$3" "$4" "$5" "$6" "$7"
         ;;
     promotion)
         [[ $# -eq 3 ]] || { usage; exit 64; }

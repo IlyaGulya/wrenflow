@@ -175,6 +175,10 @@ run = "scripts/verify-release-promotion.sh source"
 description = "Test exact-private-draft first-release promotion decisions"
 run = "scripts/test-production-release-runbook.sh"
 
+[tasks.test-private-release-api]
+description = "Test immutable tagless GitHub Release ID operations"
+run = "mise exec -- python3 scripts/test-private-release-api.py"
+
 [tasks.hardening-bundle]
 description = "Verify the signed production app bundle and print its identity"
 run = "scripts/macos-hardening-matrix.sh check-bundle"
@@ -235,7 +239,7 @@ scripts/test-release-workflow.sh
 
 [tasks.test]
 description = "Run core/runtime and production app tests"
-depends = ["test-rust", "test-app", "test-lifecycle-contract", "test-macos-support", "test-supply-chain", "test-endurance-preflight", "test-human-acceptance", "test-release-runbook", "test-performance-harness", "test-frozen-performance-baseline"]
+depends = ["test-rust", "test-app", "test-lifecycle-contract", "test-macos-support", "test-supply-chain", "test-endurance-preflight", "test-human-acceptance", "test-release-runbook", "test-private-release-api", "test-performance-harness", "test-frozen-performance-baseline"]
 run = "true"
 
 [tasks.test-rust]
