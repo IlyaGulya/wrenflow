@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VERIFY="$REPO_DIR/scripts/verify-macos-support.sh"
+VERIFY_SHADERS="$REPO_DIR/scripts/verify-gpui-shader-contract.sh"
 FIXTURE_SOURCE="$REPO_DIR/scripts/fixtures/support-probe.c"
 # shellcheck disable=SC1091
 source "$REPO_DIR/support/macos.env"
@@ -11,6 +12,23 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 "$VERIFY" source
+mise exec -- "$VERIFY" metal
+mise exec -- "$VERIFY_SHADERS"
+mise exec -- "$VERIFY_SHADERS" --tree-file \
+    "$REPO_DIR/scripts/fixtures/gpui-feature-tree-embedded.txt"
+if mise exec -- "$VERIFY_SHADERS" --tree-file \
+    "$REPO_DIR/scripts/fixtures/gpui-feature-tree-runtime.txt" >/dev/null 2>&1; then
+    echo "Shader verifier accepted a graph with runtime source compilation" >&2
+    exit 1
+fi
+
+mkdir "$TMP_DIR/missing-metal"
+printf '%s\n' '#!/bin/sh' 'exit 127' >"$TMP_DIR/missing-metal/xcrun"
+chmod +x "$TMP_DIR/missing-metal/xcrun"
+if PATH="$TMP_DIR/missing-metal:$PATH" mise exec -- "$VERIFY" metal >/dev/null 2>&1; then
+    echo "Support verifier accepted a missing Metal toolchain" >&2
+    exit 1
+fi
 
 mise exec -- xcrun clang \
     -arch arm64 \
@@ -39,4 +57,4 @@ if "$VERIFY" macho "$TMP_DIR/incompatible-minos" >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "macOS support contract rejects Intel and incompatible deployment targets"
+echo "macOS support contract rejects missing Metal, Intel, and incompatible deployment targets"

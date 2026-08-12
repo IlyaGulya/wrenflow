@@ -29,12 +29,28 @@ if [[ -z "$VERSION" ]]; then
 fi
 
 export CARGO_HOME CARGO_TARGET_DIR
+"$REPO_DIR/scripts/verify-gpui-shader-contract.sh"
 cargo build \
     --manifest-path "$CRATE_DIR/Cargo.toml" \
     --target "$WRENFLOW_RUST_TARGET" \
     --release \
     --locked \
     --config 'source.crates-io.registry="sparse+https://index.crates.io/"'
+
+gpui_build_outputs=("$TARGET_DIR"/"$WRENFLOW_RUST_TARGET"/release/build/gpui-*/out)
+if (( ${#gpui_build_outputs[@]} != 1 )); then
+    echo "Expected exactly one GPUI production build output; got ${#gpui_build_outputs[@]}" >&2
+    exit 1
+fi
+GPUI_BUILD_OUTPUT="${gpui_build_outputs[0]}"
+if [[ ! -s "$GPUI_BUILD_OUTPUT/shaders.metallib" || ! -s "$GPUI_BUILD_OUTPUT/shaders.air" ]]; then
+    echo "GPUI did not produce the embedded Metal shader library" >&2
+    exit 1
+fi
+if [[ -e "$GPUI_BUILD_OUTPUT/stitched_shaders.metal" ]]; then
+    echo "GPUI produced runtime Metal source for the production build" >&2
+    exit 1
+fi
 
 if [[ "$FINAL_APP_DIR" != "$REPO_DIR/build/gpui/Wrenflow.app" ]]; then
     echo "Refusing to replace unexpected bundle path: $FINAL_APP_DIR" >&2

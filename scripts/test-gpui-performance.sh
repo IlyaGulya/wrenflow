@@ -170,6 +170,18 @@ assert "me.gulya.wrenflow" not in closed_message
 assert "\"count\":2" in closed_message
 assert module["launch_ready_at_ms"](1100, 1300) == 1300
 assert module["launch_ready_at_ms"](1400, 1300) == 1400
+assert module["GPUI_WINDOW_DIAGNOSTIC_STAGE_CODES"] == {
+    "gpui_window_open_started", "gpui_window_callback_entered", "app_screens_ready",
+    "gpui_root_ready", "gpui_window_created", "gpui_window_shown",
+}
+assert (
+    set(module["LAUNCH_DIAGNOSTIC_STAGE_CODES"])
+    - module["GPUI_WINDOW_DIAGNOSTIC_STAGE_CODES"]
+) == {
+    "runtime_bootstrap_started", "runtime_bootstrap_ready", "app_callback_entered",
+    "app_model_ready", "swift_shell_installed", "tray_projection_ready", "menu_bar_ready",
+    "window_policy_route_observed",
+}
 measure_source = inspect.getsource(module["measure_launch"])
 assert "observe_launch_sample" in measure_source
 assert "terminate_and_deregister_launch" in measure_source
@@ -387,6 +399,10 @@ def sample(index, latency=40, shutdown=True):
             "swift_shell_installed": started + 15,
             "tray_projection_ready": started + 16,
             "menu_bar_ready": started + 20,
+            "gpui_window_open_started": started + 20,
+            "gpui_window_callback_entered": started + 20,
+            "app_screens_ready": started + 21,
+            "gpui_root_ready": started + 21,
             "gpui_window_created": started + 21,
             "window_policy_route_observed": started + 22,
             "gpui_window_shown": started + 23,
@@ -906,6 +922,10 @@ for index in range(20):
                     "swift_shell_installed": 1001 + index,
                     "tray_projection_ready": 1001 + index,
                     "menu_bar_ready": 1000 + index + latency - 2,
+                    "gpui_window_open_started": 1000 + index + latency - 2,
+                    "gpui_window_callback_entered": 1000 + index + latency - 2,
+                    "app_screens_ready": 1000 + index + latency - 2,
+                    "gpui_root_ready": 1000 + index + latency - 2,
                     "gpui_window_created": 1000 + index + latency - 2,
                     "window_policy_route_observed": 1000 + index + latency - 1,
                     "gpui_window_shown": 1000 + index + latency - 1,

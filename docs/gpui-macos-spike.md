@@ -139,12 +139,11 @@ Swift/AppKit shell (tray, activation policy, permissions, overlay)
 Pin GPUI and gpui-component to exact versions. Upgrade them only in dedicated PRs
 with the settings interaction/accessibility harness running.
 
-The spike enables GPUI's `runtime_shaders` feature. Xcode 26 no longer ships the
-command-line Metal compiler by default, and a normal GPUI build otherwise fails
-with `xcodebuild -downloadComponent MetalToolchain`. Runtime compilation makes the
-developer spike reproducible without mutating the host Xcode installation. Release
-CI should install that component and use GPUI's precompiled metallib path to avoid
-the small first-window shader compilation cost.
+The historical spike enables GPUI's `runtime_shaders` feature so it remains a
+standalone developer experiment. The production app does not: its selected Xcode
+must expose the optional Metal Toolchain, and a fail-closed probe compiles and
+links a fixture before GPUI embeds its metallib. That keeps compiler work out of
+the first production window draw without changing the isolated spike contract.
 
 ### Current ONNX Runtime raises the real deployment floor
 

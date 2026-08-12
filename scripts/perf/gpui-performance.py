@@ -99,10 +99,22 @@ LAUNCH_DIAGNOSTIC_STAGE_CODES = (
     "swift_shell_installed",
     "tray_projection_ready",
     "menu_bar_ready",
+    "gpui_window_open_started",
+    "gpui_window_callback_entered",
+    "app_screens_ready",
+    "gpui_root_ready",
     "gpui_window_created",
     "window_policy_route_observed",
     "gpui_window_shown",
 )
+GPUI_WINDOW_DIAGNOSTIC_STAGE_CODES = {
+    "gpui_window_open_started",
+    "gpui_window_callback_entered",
+    "app_screens_ready",
+    "gpui_root_ready",
+    "gpui_window_created",
+    "gpui_window_shown",
+}
 PHASES = {
     "idle",
     "idle_10m",
@@ -3162,7 +3174,7 @@ def wait_for_route_aware_launch(
         if pid is not None and ready is not None and terminal is not None:
             required_stages = set(LAUNCH_DIAGNOSTIC_STAGE_CODES)
             if terminal.get("code") == "window_policy_accessory_ready":
-                required_stages -= {"gpui_window_created", "gpui_window_shown"}
+                required_stages -= GPUI_WINDOW_DIAGNOSTIC_STAGE_CODES
             if not required_stages.issubset(diagnostic_stages):
                 time.sleep(0.01)
                 continue

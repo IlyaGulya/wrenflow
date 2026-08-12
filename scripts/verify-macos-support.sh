@@ -89,6 +89,7 @@ verify_source_contract() {
     local workflow="$REPO_DIR/.github/workflows/build.yml"
     local build_script="$REPO_DIR/native/wrenflow-gpui/scripts/build-app.sh"
     local build_rs="$REPO_DIR/native/wrenflow-gpui/build.rs"
+    local app_manifest="$REPO_DIR/native/wrenflow-gpui/Cargo.toml"
     local plist_floor high_resolution plist_accessory
 
     plist_floor="$(plutil -extract LSMinimumSystemVersion raw -o - "$plist")"
@@ -111,6 +112,11 @@ verify_source_contract() {
     require_literal 'Ok("aarch64") => "arm64"' "$build_rs"
     require_literal "unwrap_or_else(|_| \"$WRENFLOW_MACOS_MIN\".into())" "$build_rs"
     reject_literal 'Ok("x86_64") => "x86_64"' "$build_rs"
+    require_literal 'features = ["font-kit"]' "$app_manifest"
+    reject_literal '"runtime_shaders"' "$app_manifest"
+    require_literal '"$REPO_DIR/scripts/verify-gpui-shader-contract.sh"' "$build_script"
+    require_literal 'shaders.metallib' "$build_script"
+    require_literal 'stitched_shaders.metal' "$build_script"
 
     require_literal "runs-on: $WRENFLOW_MIN_RUNNER" "$workflow"
     require_literal "Select Xcode $WRENFLOW_MIN_XCODE" "$workflow"
@@ -135,6 +141,38 @@ verify_source_contract() {
 
     printf 'support_source_contract=ok macos_min=%s arch=%s rust_target=%s\n' \
         "$WRENFLOW_MACOS_MIN" "$WRENFLOW_MACOS_ARCH" "$WRENFLOW_RUST_TARGET"
+}
+
+verify_metal_toolchain() {
+    local fixture="$REPO_DIR/scripts/fixtures/support-probe.metal"
+    local temp_dir air_file metallib_file
+    [[ -f "$fixture" ]] || fail "Metal support probe fixture is missing"
+    xcrun --sdk macosx -f metal >/dev/null 2>&1 ||
+        fail "selected Xcode does not provide the Metal compiler"
+    xcrun --sdk macosx -f metallib >/dev/null 2>&1 ||
+        fail "selected Xcode does not provide the metallib linker"
+    temp_dir="$(mktemp -d)"
+    air_file="$temp_dir/support-probe.air"
+    metallib_file="$temp_dir/support-probe.metallib"
+    if ! xcrun --sdk macosx metal \
+        -gline-tables-only \
+        -mmacosx-version-min=10.15.7 \
+        -MO \
+        -c "$fixture" \
+        -o "$air_file" >/dev/null 2>&1; then
+        rm -rf "$temp_dir"
+        fail "selected Xcode could not compile the Metal support probe"
+    fi
+    if ! xcrun --sdk macosx metallib "$air_file" -o "$metallib_file" >/dev/null 2>&1; then
+        rm -rf "$temp_dir"
+        fail "selected Xcode could not link the Metal support probe"
+    fi
+    [[ -s "$metallib_file" ]] || {
+        rm -rf "$temp_dir"
+        fail "selected Xcode produced an empty Metal library"
+    }
+    rm -rf "$temp_dir"
+    printf 'support_metal_toolchain=ok xcode=%s\n' "$(xcodebuild -version | awk 'NR == 1 {print $2}')"
 }
 
 verify_host() {
@@ -175,6 +213,7 @@ verify_ci_host() {
     actual_xcode="$(xcodebuild -version | awk 'NR == 1 {print $2}')"
     [[ "$actual_xcode" == "$expected_xcode" ]] ||
         fail "$tier CI must select Xcode $expected_xcode, got $actual_xcode"
+    verify_metal_toolchain
     printf 'support_ci_host=ok tier=%s os=%s xcode=%s arch=%s\n' \
         "$tier" "$(sw_vers -productVersion)" "$actual_xcode" "$(uname -m)"
 }
@@ -212,6 +251,10 @@ case "${1:-}" in
         verify_source_contract
         verify_ci_host "$2"
         ;;
+    metal)
+        [[ $# -eq 1 ]] || fail "usage: $0 metal"
+        verify_metal_toolchain
+        ;;
     macho)
         [[ $# -eq 2 ]] || fail "usage: $0 macho <path>"
         verify_macho "$2"
@@ -222,7 +265,7 @@ case "${1:-}" in
         verify_bundle "$2"
         ;;
     *)
-        echo "Usage: $0 <source|host|ci <minimum|current>|macho <path>|bundle <Wrenflow.app>>" >&2
+        echo "Usage: $0 <source|host|ci <minimum|current>|metal|macho <path>|bundle <Wrenflow.app>>" >&2
         exit 64
         ;;
 esac

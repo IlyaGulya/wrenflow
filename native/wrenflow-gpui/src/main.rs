@@ -455,6 +455,7 @@ fn ensure_app_window(
     let app_model_for_window = app_model.clone();
     let screens_slot = Rc::new(RefCell::new(None::<gpui::Entity<AppScreens>>));
     let screens_for_window = Rc::clone(&screens_slot);
+    emit_launch_stage(DiagnosticCode::GpuiWindowOpenStarted);
     let handle = cx
         .open_window(
             WindowOptions {
@@ -470,14 +471,18 @@ fn ensure_app_window(
                 ..Default::default()
             },
             move |window, cx| {
+                emit_launch_stage(DiagnosticCode::GpuiWindowCallbackEntered);
                 let screens =
                     cx.new(|cx| AppScreens::new(app_model_for_window.clone(), window, cx));
+                emit_launch_stage(DiagnosticCode::AppScreensReady);
                 screens_for_window.replace(Some(screens.clone()));
                 let shell_view = cx.new(|_| ShellView {
                     shell: MacShell,
                     screens,
                 });
-                cx.new(|cx| Root::new(shell_view, window, cx))
+                let root = cx.new(|cx| Root::new(shell_view, window, cx));
+                emit_launch_stage(DiagnosticCode::GpuiRootReady);
+                root
             },
         )
         .map_err(|error| error.to_string())?;
@@ -1956,6 +1961,30 @@ mod tests {
         for stage in stage_order {
             let Some(position) = source.find(stage) else {
                 panic!("closed startup stage is emitted: {stage}");
+            };
+            assert!(position >= previous);
+            previous = position;
+        }
+        let Some((_, window_open)) = source.split_once("fn ensure_app_window") else {
+            panic!("window startup helper exists");
+        };
+        let Some((window_open, _)) = window_open.split_once("fn mark_app_window_visible") else {
+            panic!("window startup helper has a bounded source region");
+        };
+        let window_stage_order = [
+            "GpuiWindowOpenStarted",
+            ".open_window(",
+            "GpuiWindowCallbackEntered",
+            "AppScreens::new",
+            "AppScreensReady",
+            "Root::new",
+            "GpuiRootReady",
+            "GpuiWindowCreated",
+        ];
+        let mut previous = 0;
+        for stage in window_stage_order {
+            let Some(position) = window_open.find(stage) else {
+                panic!("closed window startup stage is present: {stage}");
             };
             assert!(position >= previous);
             previous = position;

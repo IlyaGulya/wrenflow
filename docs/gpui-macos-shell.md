@@ -49,8 +49,10 @@ controls.
 The deployment target is macOS 14.0. This matches the bundled ONNX Runtime
 dylib's load-command minimum. The Swift shell is compiled into
 `libWrenflowShell.dylib` by `build.rs`, placed in `Contents/Frameworks`, and
-loaded through `@executable_path/../Frameworks`. Runtime Metal shaders remain
-enabled until an offline shader pack is owned by Wrenflow.
+loaded through `@executable_path/../Frameworks`. GPUI's Metal shaders are
+compiled into an embedded metallib at build time after a fail-closed selected-
+Xcode compiler/linker probe; the signed app never compiles Metal source during
+its first window creation.
 
 ## Build and launch
 

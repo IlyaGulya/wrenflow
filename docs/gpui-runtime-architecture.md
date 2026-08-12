@@ -461,13 +461,15 @@ infrastructure and standard controls. The companion `spikes/gpui-controls`
 target proved text input, select, switches, sidebar and virtualized lists at
 those versions. Do not import Zed's GPL `crates/ui` into this MIT project.
 
-Enable GPUI `runtime_shaders` for the initial target: the signed `.1` bundle
-launched successfully with it, while Xcode 26's optional command-line Metal
-compiler was not reproducibly present. A later dedicated dependency/build change
-may install the Metal Toolchain in CI and switch to an embedded metallib. Keep
-Wrenflow tokens and composed components in its own app crate so the third-party
-layer remains replaceable. `gpui-component`'s mouse-only `Switch` must be wrapped
-or replaced with keyboard, focus and accessibility behavior in `.5`.
+The production target uses GPUI's build-time embedded `shaders.metallib` path.
+The selected Xcode must provide both `metal` and `metallib`; a real probe shader
+is compiled and linked before the app build, failing closed if the pinned
+toolchain is incomplete. Runtime Metal source compilation is forbidden because
+it makes the first mandatory GPUI window draw absorb compiler and pipeline setup
+latency. Keep Wrenflow tokens and composed components in its own app crate so the
+third-party layer remains replaceable. `gpui-component`'s mouse-only `Switch`
+must be wrapped or replaced with keyboard, focus and accessibility behavior in
+`.5`.
 
 ## Strangler migration sequence
 

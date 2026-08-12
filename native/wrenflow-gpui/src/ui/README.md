@@ -51,7 +51,9 @@ mise run lint-app
 mise run hardening-accessibility
 ```
 
-On Xcode 26, GPUI shader compilation requires the optional Metal Toolchain:
+GPUI shaders are compiled into an embedded metallib. The build verifies the
+selected Xcode's optional Metal Toolchain through the mise-owned support gate.
+If a local Xcode 26 installation lacks it, install the component with:
 
 ```sh
 mise exec -- xcodebuild -downloadComponent MetalToolchain

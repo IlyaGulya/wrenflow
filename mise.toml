@@ -48,12 +48,20 @@ run = "scripts/generate-app-icon.sh"
 
 [tasks.build]
 description = "Build and sign the production GPUI macOS app bundle"
-depends = ["download-ort", "supply-chain-metadata", "verify-macos-support"]
+depends = ["download-ort", "supply-chain-metadata", "verify-macos-support", "verify-metal-toolchain"]
 run = "CARGO_HOME=\"$PWD/build/gpui-production-cargo-home\" CARGO_TARGET_DIR=\"$PWD/build/gpui-production-target\" native/wrenflow-gpui/scripts/build-app.sh"
 
 [tasks.verify-macos-support]
 description = "Reject drift in the production macOS, architecture and toolchain contract"
 run = "scripts/verify-macos-support.sh source"
+
+[tasks.verify-metal-toolchain]
+description = "Compile and link a probe with the selected Xcode Metal toolchain"
+run = "scripts/verify-macos-support.sh metal"
+
+[tasks.verify-gpui-shader-contract]
+description = "Reject runtime Metal source compilation in the effective production Cargo graph"
+run = "scripts/verify-gpui-shader-contract.sh"
 
 [tasks.test-macos-support]
 description = "Exercise arm64/minimum-version support acceptance and rejection paths"

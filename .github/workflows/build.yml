@@ -431,7 +431,7 @@ jobs:
             (.phases.launch_cold.samples[0] as $sample |
               ($sample | keys) == ["diagnostic_stages_at_unix_ms", "fresh_runner_id", "latency_ms", "launch_services_observed_at_unix_ms", "menu_bar_ready_at_unix_ms", "ready_at_unix_ms", "session_id", "stages_ms", "started_at_unix_ms", "startup_diagnostic_at_unix_ms", "terminal_application_type", "terminal_policy_ready_at_unix_ms"] and
               ($sample.diagnostic_stages_at_unix_ms as $diagnostic |
-                ($diagnostic | keys) == ["app_callback_entered", "app_model_ready", "gpui_window_created", "gpui_window_shown", "menu_bar_ready", "runtime_bootstrap_ready", "runtime_bootstrap_started", "swift_shell_installed", "tray_projection_ready", "window_policy_route_observed"] and
+                ($diagnostic | keys) == ["app_callback_entered", "app_model_ready", "app_screens_ready", "gpui_root_ready", "gpui_window_callback_entered", "gpui_window_created", "gpui_window_open_started", "gpui_window_shown", "menu_bar_ready", "runtime_bootstrap_ready", "runtime_bootstrap_started", "swift_shell_installed", "tray_projection_ready", "window_policy_route_observed"] and
                 $sample.startup_diagnostic_at_unix_ms <= $diagnostic.runtime_bootstrap_started and
                 $diagnostic.runtime_bootstrap_started <= $diagnostic.runtime_bootstrap_ready and
                 $diagnostic.runtime_bootstrap_ready <= $diagnostic.app_callback_entered and
@@ -439,7 +439,11 @@ jobs:
                 $diagnostic.app_model_ready <= $diagnostic.swift_shell_installed and
                 $diagnostic.swift_shell_installed <= $diagnostic.tray_projection_ready and
                 $diagnostic.tray_projection_ready <= $diagnostic.menu_bar_ready and
-                $diagnostic.menu_bar_ready <= $diagnostic.gpui_window_created and
+                $diagnostic.menu_bar_ready <= $diagnostic.gpui_window_open_started and
+                $diagnostic.gpui_window_open_started <= $diagnostic.gpui_window_callback_entered and
+                $diagnostic.gpui_window_callback_entered <= $diagnostic.app_screens_ready and
+                $diagnostic.app_screens_ready <= $diagnostic.gpui_root_ready and
+                $diagnostic.gpui_root_ready <= $diagnostic.gpui_window_created and
                 $diagnostic.gpui_window_created <= $diagnostic.window_policy_route_observed and
                 $diagnostic.window_policy_route_observed <= $diagnostic.gpui_window_shown and
                 $diagnostic.gpui_window_shown <= $sample.terminal_policy_ready_at_unix_ms) and
