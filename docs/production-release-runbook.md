@@ -62,7 +62,10 @@ differs from frozen product source
 acceptance/release scope and version-only manifest/lock updates. Any missing or
 expired artifact, changed source, dependency, build/runtime file, numeric
 threshold, or minimum sample count fails closed. Normal beta pushes retain the
-live 20-cold plus constrained performance workflow.
+live 20-cold plus constrained performance workflow. Both the automatic call
+and recovery pin the verifier checkout to reviewed commit
+`e233cc6db6b37307e9774db228ab11ecc4d0673c`; neither the old release source nor
+a later default-branch head may supply verifier bytes.
 
 If that initial reusable call is interrupted before staging, recover the same
 untouched draft explicitly:
@@ -72,6 +75,7 @@ mise exec -- gh workflow run build.yml \
   --repo IlyaGulya/wrenflow \
   -f release_tag=v0.4.0 \
   -f release_source_commit='<40-character draft target commit>' \
+  -f verifier_source_commit=e233cc6db6b37307e9774db228ab11ecc4d0673c \
   -f confirmation=STAGE_EXISTING_PRIVATE_DRAFT
 ```
 

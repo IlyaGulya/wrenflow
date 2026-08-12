@@ -15,6 +15,10 @@ on:
         description: Exact 40-character source commit recorded by the private draft
         required: true
         type: string
+      verifier_source_commit:
+        description: Exact reviewed commit containing the frozen baseline verifier
+        required: true
+        type: string
       confirmation:
         description: Type STAGE_EXISTING_PRIVATE_DRAFT to recover draft staging
         required: true
@@ -27,6 +31,10 @@ on:
         type: string
       release_source_commit:
         description: Exact source commit emitted by release-please
+        required: true
+        type: string
+      verifier_source_commit:
+        description: Exact reviewed commit containing the frozen baseline verifier
         required: true
         type: string
     secrets:
@@ -719,13 +727,29 @@ jobs:
       contents: read
     env:
       FROZEN_ARTIFACT_ID: "9146492644"
+      FROZEN_VERIFIER_SOURCE_COMMIT: "e233cc6db6b37307e9774db228ab11ecc4d0673c"
       RELEASE_SOURCE_COMMIT: ${{ needs.build_release.outputs.source_commit }}
+      REQUESTED_VERIFIER_SOURCE_COMMIT: ${{ inputs.verifier_source_commit }}
     steps:
+      - name: Require the reviewed frozen baseline verifier source
+        run: |
+          if [[ "$REQUESTED_VERIFIER_SOURCE_COMMIT" != "$FROZEN_VERIFIER_SOURCE_COMMIT" ]]; then
+            echo "Frozen baseline verifier source does not match the reviewed commit" >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.verifier_source_commit }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify the frozen baseline verifier checkout
+        run: |
+          if [[ "$(git rev-parse HEAD)" != "$FROZEN_VERIFIER_SOURCE_COMMIT" ]]; then
+            echo "Frozen baseline verifier checkout differs from the reviewed commit" >&2
+            exit 1
+          fi
 
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
 

@@ -110,6 +110,10 @@ verify_source_contract() {
         "$REPO_DIR/.github/workflows/build.yml" >/dev/null
     rg -F 'FROZEN_ARTIFACT_ID: "9146492644"' \
         "$REPO_DIR/.github/workflows/build.yml" >/dev/null
+    rg -F 'FROZEN_VERIFIER_SOURCE_COMMIT: "e233cc6db6b37307e9774db228ab11ecc4d0673c"' \
+        "$REPO_DIR/.github/workflows/build.yml" >/dev/null
+    rg -F 'ref: ${{ inputs.verifier_source_commit }}' \
+        "$REPO_DIR/.github/workflows/build.yml" >/dev/null
     rg -F 'needs.verify_frozen_performance_baseline.result == '\''success'\''' \
         "$REPO_DIR/.github/workflows/build.yml" >/dev/null
     rg -F 'googleapis/release-please-action@' \
@@ -117,6 +121,8 @@ verify_source_contract() {
     rg -F 'release_tag: ${{ needs.release-please.outputs.tag_name }}' \
         "$REPO_DIR/.github/workflows/release-please.yml" >/dev/null
     rg -F 'release_source_commit: ${{ needs.release-please.outputs.source_commit }}' \
+        "$REPO_DIR/.github/workflows/release-please.yml" >/dev/null
+    rg -F 'verifier_source_commit: e233cc6db6b37307e9774db228ab11ecc4d0673c' \
         "$REPO_DIR/.github/workflows/release-please.yml" >/dev/null
     rg -F 'targetCommitish' \
         "$REPO_DIR/.github/workflows/promote-stable.yml" >/dev/null

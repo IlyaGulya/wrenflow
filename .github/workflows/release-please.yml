@@ -36,6 +36,7 @@ jobs:
     with:
       release_tag: ${{ needs.release-please.outputs.tag_name }}
       release_source_commit: ${{ needs.release-please.outputs.source_commit }}
+      verifier_source_commit: e233cc6db6b37307e9774db228ab11ecc4d0673c
     secrets:
       DEVELOPER_ID_CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
       DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}

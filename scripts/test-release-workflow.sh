@@ -58,6 +58,7 @@ $line"
 
 require_frozen_stable_baseline_contract() {
     local file="$1"
+    local release_file="${2:-$RELEASE_WORKFLOW}"
     local frozen_block publish_block
     frozen_block="$(awk '
         $0 == "  verify_frozen_performance_baseline:" { capture = 1 }
@@ -75,8 +76,14 @@ require_frozen_stable_baseline_contract() {
         '    needs: build_release' \
         "    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag != ''" \
         '      actions: read' \
-        '          ref: ${{ github.sha }}' \
+        '      FROZEN_VERIFIER_SOURCE_COMMIT: "e233cc6db6b37307e9774db228ab11ecc4d0673c"' \
+        '      REQUESTED_VERIFIER_SOURCE_COMMIT: ${{ inputs.verifier_source_commit }}' \
+        '      - name: Require the reviewed frozen baseline verifier source' \
+        '          if [[ "$REQUESTED_VERIFIER_SOURCE_COMMIT" != "$FROZEN_VERIFIER_SOURCE_COMMIT" ]]; then' \
+        '          ref: ${{ inputs.verifier_source_commit }}' \
         '          fetch-depth: 0' \
+        '      - name: Verify the frozen baseline verifier checkout' \
+        '          if [[ "$(git rev-parse HEAD)" != "$FROZEN_VERIFIER_SOURCE_COMMIT" ]]; then' \
         '      FROZEN_ARTIFACT_ID: "9146492644"' \
         '      RELEASE_SOURCE_COMMIT: ${{ needs.build_release.outputs.source_commit }}' \
         '            "repos/$GITHUB_REPOSITORY/actions/artifacts/$FROZEN_ARTIFACT_ID" \' \
@@ -99,12 +106,19 @@ require_frozen_stable_baseline_contract() {
     done
     grep -Fqx -- "    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag == ''" "$file" || return 1
     [[ "$(grep -Fxc -- "    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag == ''" "$file")" -eq 2 ]] || return 1
+    grep -Fqx -- '      verifier_source_commit: e233cc6db6b37307e9774db228ab11ecc4d0673c' "$release_file" || return 1
+    [[ "$(grep -Fxc -- '      verifier_source_commit: e233cc6db6b37307e9774db228ab11ecc4d0673c' "$release_file")" -eq 1 ]] || return 1
 }
 
 require_pattern "workflow_call:" "$BUILD_WORKFLOW"
 require_pattern "workflow_dispatch:" "$BUILD_WORKFLOW"
 require_pattern "release_tag:" "$BUILD_WORKFLOW"
 require_pattern "release_source_commit:" "$BUILD_WORKFLOW"
+require_pattern "verifier_source_commit:" "$BUILD_WORKFLOW"
+if [[ "$(grep -Fxc -- '      verifier_source_commit:' "$BUILD_WORKFLOW")" -ne 2 ]]; then
+    echo "Build workflow must require the verifier source for recovery and reusable stable calls" >&2
+    exit 1
+fi
 require_pattern "STAGE_EXISTING_PRIVATE_DRAFT" "$BUILD_WORKFLOW"
 require_pattern "IS_RELEASE: \${{ inputs.release_tag != '' }}" "$BUILD_WORKFLOW"
 require_pattern 'RELEASE_SOURCE_COMMIT: ${{ inputs.release_source_commit }}' "$BUILD_WORKFLOW"
@@ -398,6 +412,7 @@ require_pattern "uses: ./.github/workflows/build.yml" "$RELEASE_WORKFLOW"
 require_pattern "release_tag: \${{ needs.release-please.outputs.tag_name }}" "$RELEASE_WORKFLOW"
 require_pattern "source_commit: \${{ steps.release.outputs.sha }}" "$RELEASE_WORKFLOW"
 require_pattern "release_source_commit: \${{ needs.release-please.outputs.source_commit }}" "$RELEASE_WORKFLOW"
+require_pattern "verifier_source_commit: e233cc6db6b37307e9774db228ab11ecc4d0673c" "$RELEASE_WORKFLOW"
 
 require_pattern "workflow_dispatch:" "$PROMOTION_WORKFLOW"
 require_pattern "release_tag:" "$PROMOTION_WORKFLOW"
@@ -442,7 +457,8 @@ trap cleanup_repo_scope_fixture EXIT
 expect_frozen_contract_rejected() {
     local label="$1"
     local workflow="$2"
-    if require_frozen_stable_baseline_contract "$workflow"; then
+    local release_workflow="${3:-$RELEASE_WORKFLOW}"
+    if require_frozen_stable_baseline_contract "$workflow" "$release_workflow"; then
         echo "Frozen stable baseline workflow audit accepted $label" >&2
         exit 1
     fi
@@ -469,11 +485,32 @@ expect_frozen_contract_rejected publish-without-frozen-proof \
     "$REPO_SCOPE_FIXTURE/build-frozen-publish-mutated.yml"
 
 cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-frozen-checkout.yml"
-sed 's/ref: ${{ github.sha }}/ref: ${{ inputs.release_source_commit }}/' \
+sed 's/ref: ${{ inputs.verifier_source_commit }}/ref: ${{ inputs.release_source_commit }}/' \
     "$REPO_SCOPE_FIXTURE/build-frozen-checkout.yml" \
     > "$REPO_SCOPE_FIXTURE/build-frozen-checkout-mutated.yml"
 expect_frozen_contract_rejected verifier-from-old-source \
     "$REPO_SCOPE_FIXTURE/build-frozen-checkout-mutated.yml"
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-frozen-caller.yml"
+sed 's/ref: ${{ inputs.verifier_source_commit }}/ref: ${{ github.sha }}/' \
+    "$REPO_SCOPE_FIXTURE/build-frozen-caller.yml" \
+    > "$REPO_SCOPE_FIXTURE/build-frozen-caller-mutated.yml"
+expect_frozen_contract_rejected verifier-from-dispatch-default-head \
+    "$REPO_SCOPE_FIXTURE/build-frozen-caller-mutated.yml"
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-frozen-pin.yml"
+sed 's/e233cc6db6b37307e9774db228ab11ecc4d0673c/e233cc6db6b37307e9774db228ab11ecc4d0673d/' \
+    "$REPO_SCOPE_FIXTURE/build-frozen-pin.yml" \
+    > "$REPO_SCOPE_FIXTURE/build-frozen-pin-mutated.yml"
+expect_frozen_contract_rejected changed-verifier-pin \
+    "$REPO_SCOPE_FIXTURE/build-frozen-pin-mutated.yml"
+
+cp "$RELEASE_WORKFLOW" "$REPO_SCOPE_FIXTURE/release-frozen-floating.yml"
+sed 's/verifier_source_commit: e233cc6db6b37307e9774db228ab11ecc4d0673c/verifier_source_commit: ${{ github.sha }}/' \
+    "$REPO_SCOPE_FIXTURE/release-frozen-floating.yml" \
+    > "$REPO_SCOPE_FIXTURE/release-frozen-floating-mutated.yml"
+expect_frozen_contract_rejected floating-automatic-verifier \
+    "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/release-frozen-floating-mutated.yml"
 
 validate_empty_tagless_draft_fixture() {
     local release_json="$1"

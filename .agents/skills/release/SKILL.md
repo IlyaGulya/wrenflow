@@ -115,11 +115,13 @@ same empty draft without recreating it:
 mise exec -- gh workflow run build.yml \
   -f release_tag=<tag> \
   -f release_source_commit=<targetCommitish> \
+  -f verifier_source_commit=e233cc6db6b37307e9774db228ab11ecc4d0673c \
   -f confirmation=STAGE_EXISTING_PRIVATE_DRAFT
 ```
 
-The recovery workflow rejects a nonempty draft, a mismatched source commit, or
-an already-created stable tag.
+The recovery workflow rejects a nonempty draft, a mismatched source commit, an
+already-created stable tag, or verifier bytes other than reviewed commit
+`e233cc6db6b37307e9774db228ab11ecc4d0673c`.
 
 ### Step 5: Promote the exact bytes after go/no-go
 
