@@ -85,12 +85,18 @@ verify_source_contract() {
         "$REPO_DIR/.github/workflows/build.yml" >/dev/null
     rg -F 'Re-download and verify immutable staged or published candidate' \
         "$REPO_DIR/.github/workflows/build.yml" >/dev/null
-    rg -F 'Release tag $TAG does not resolve to checked-out commit' \
+    rg -F 'Require exact empty tagless private stable draft' \
         "$REPO_DIR/.github/workflows/build.yml" >/dev/null
     rg -F 'googleapis/release-please-action@' \
         "$REPO_DIR/.github/workflows/release-please.yml" >/dev/null
     rg -F 'release_tag: ${{ needs.release-please.outputs.tag_name }}' \
         "$REPO_DIR/.github/workflows/release-please.yml" >/dev/null
+    rg -F 'release_source_commit: ${{ needs.release-please.outputs.source_commit }}' \
+        "$REPO_DIR/.github/workflows/release-please.yml" >/dev/null
+    rg -F 'targetCommitish' \
+        "$REPO_DIR/.github/workflows/promote-stable.yml" >/dev/null
+    rg -F -- '--draft=false --prerelease=false --latest --target "$SOURCE_COMMIT"' \
+        "$REPO_DIR/.github/workflows/promote-stable.yml" >/dev/null
     rg -F 'scripts/verify-release-promotion.sh published' \
         "$REPO_DIR/.github/workflows/promote-stable.yml" >/dev/null
     rg -F '"release-evidence.json"' \
@@ -168,8 +174,9 @@ verify_release() {
         echo "Staged tag, digest or source commit failed its closed schema" >&2
         exit 64
     fi
-    jq -e --arg tag "$tag" --argjson draft "$expected_draft" '
-      .tagName == $tag and .isDraft == $draft and .isPrerelease == false and
+    jq -e --arg tag "$tag" --arg source "$source_commit" --argjson draft "$expected_draft" '
+      .tagName == $tag and .targetCommitish == $source and
+      .isDraft == $draft and .isPrerelease == false and
       ([.assets[].name] | sort) == ([
         "RustThirdPartyLicenses.txt",
         "SHA256SUMS",

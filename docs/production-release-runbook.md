@@ -46,19 +46,37 @@ new evidence; waivers do not make changed bytes eligible.
 
 ## Exact-byte promotion
 
-The stable artifact is created by release-please as a private draft. The owner
-invokes **Promote Verified Stable Draft** with the canonical stable tag, exact
-approved lowercase DMG SHA-256, and `PROMOTE_VERIFIED_STABLE`.
+Release-please creates the stable release metadata as a private, tagless draft
+whose `target_commitish` is the exact release source commit. Its reusable Build
+must match that commit, require the draft to be empty and tagless, and attach
+the nine authenticated assets without publishing it. If that initial reusable
+call is interrupted before staging, recover the same untouched draft explicitly:
+
+```bash
+mise exec -- gh workflow run build.yml \
+  --repo IlyaGulya/wrenflow \
+  -f release_tag=v0.4.0 \
+  -f release_source_commit='<40-character draft target commit>' \
+  -f confirmation=STAGE_EXISTING_PRIVATE_DRAFT
+```
+
+The owner later invokes **Promote Verified Stable Draft** with the canonical
+stable tag, exact approved lowercase DMG SHA-256, and
+`PROMOTE_VERIFIED_STABLE`.
 
 The workflow:
 
-1. checks out the immutable stable tag;
-2. requires a private, non-prerelease draft with exactly nine assets;
+1. derives and checks out the exact source commit from the tagless private
+   draft;
+2. requires that draft to be private, non-prerelease, tagless, and contain
+   exactly nine assets;
 3. downloads and authenticates every asset, provenance subject, source commit,
    Developer ID identity, Accepted notarization, and Gatekeeper result;
 4. fingerprints the draft twice to reject concurrent mutation;
-5. publishes that draft without rebuilding or uploading;
-6. redownloads every public asset and verifies identical hashes and signature.
+5. publishes that draft without rebuilding or uploading, creating the stable
+   tag at the approved source in that publication operation;
+6. verifies the new public tag, then redownloads every public asset and proves
+   identical hashes and signature.
 
 Run the local exact-byte decision check when reviewing retained payloads:
 

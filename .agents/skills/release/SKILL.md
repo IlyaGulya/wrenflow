@@ -18,17 +18,17 @@ This project uses [release-please](https://github.com/googleapis/release-please)
 3. **When you're ready to stage the final candidate**: merge the Release PR
 4. On merge, release-please automatically:
    - Updates `CHANGELOG.md`, the root `Cargo.toml`, and the isolated GPUI `Cargo.toml` with the new version
-   - Creates a git tag (e.g., `v0.3.0`)
-   - Creates a draft GitHub Release
+   - Creates a private, tagless GitHub Release draft whose target is the exact
+     release commit
 5. When `release_created` is true, Release Please explicitly calls the reusable
    **Build** workflow. That workflow tests, lints, signs, notarizes, verifies and
    uploads the exact DMG to the empty draft, retaining the Actions payload for
    21 days. It does not publish stable.
-6. After the draft bytes pass the external production matrix and recorded
+6. After the draft bytes pass the owner acceptance gates and recorded
    go/no-go, manually dispatch **Promote Verified Stable Draft** with the exact
    tag, approved DMG SHA-256 and confirmation. It re-downloads/verifies the
-   staged payload and only changes draft/latest metadata; it never rebuilds or
-   replaces assets.
+   staged payload, publishes the draft and creates the stable tag at the
+   draft's verified source commit; it never rebuilds or replaces assets.
 
 ## Key Files
 
@@ -95,7 +95,8 @@ Or merge via GitHub UI. Both squash-merge and merge commits work.
 ### Step 4: Verify the staged candidate
 
 After merge:
-1. Check that the tag and draft were created: `gh release view <tag> --json isDraft,tagName`
+1. Check that the tagless private draft was created with the expected source:
+   `gh release view <tag> --json isDraft,tagName,targetCommitish`
 2. Inspect the same Release Please workflow run and confirm its
    `build-staged-stable-release` reusable-workflow job started
 3. Wait for that job to complete — it runs tests/lints, creates a Developer ID
@@ -104,10 +105,23 @@ After merge:
 4. Verify the DMG is attached while `isDraft` remains true. Download the exact
    payload and complete `.9.8`–`.9.11`; do not rebuild it.
 
+If the automatic reusable Build fails before attaching any assets, recover the
+same empty draft without recreating it:
+
+```bash
+mise exec -- gh workflow run build.yml \
+  -f release_tag=<tag> \
+  -f release_source_commit=<targetCommitish> \
+  -f confirmation=STAGE_EXISTING_PRIVATE_DRAFT
+```
+
+The recovery workflow rejects a nonempty draft, a mismatched source commit, or
+an already-created stable tag.
+
 ### Step 5: Promote the exact bytes after go/no-go
 
 ```bash
-gh workflow run promote-stable.yml \
+mise exec -- gh workflow run promote-stable.yml \
   -f release_tag=<tag> \
   -f expected_dmg_sha256=<64-lowercase-hex> \
   -f confirmation=PROMOTE_VERIFIED_STABLE

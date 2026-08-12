@@ -61,9 +61,10 @@ make_payload "$CANDIDATE" "0.4.0" "$SOURCE_A" "identical-candidate"
 make_payload "$IDENTICAL" "0.4.0" "$SOURCE_A" "identical-candidate"
 make_payload "$SUCCESSOR" "0.4.0" "$SOURCE_B" "revalidated-successor"
 
-jq -S -n '
+jq -S -n --arg source "$SOURCE_A" '
   {
     tagName:"v0.4.0",
+    targetCommitish:$source,
     isDraft:true,
     isPrerelease:false,
     assets: [
@@ -91,11 +92,12 @@ jq '.isDraft = false' "$FIXTURE/release.json" >"$FIXTURE/release-public.json"
     >"$FIXTURE/published.out"
 rg -F "Published stable payload metadata passed" "$FIXTURE/published.out" >/dev/null
 
-for mutation in public prerelease extra_asset; do
+for mutation in public prerelease extra_asset wrong_source; do
     case "$mutation" in
         public) jq '.isDraft = false' "$FIXTURE/release.json" ;;
         prerelease) jq '.isPrerelease = true' "$FIXTURE/release.json" ;;
         extra_asset) jq '.assets += [{"name":"unexpected.bin"}]' "$FIXTURE/release.json" ;;
+        wrong_source) jq '.targetCommitish = ("f" * 40)' "$FIXTURE/release.json" ;;
     esac >"$FIXTURE/release-$mutation.json"
     if "$REPO_DIR/scripts/verify-release-promotion.sh" staged \
         "$FIXTURE/release-$mutation.json" "$CANDIDATE" v0.4.0 \

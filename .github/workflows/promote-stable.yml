@@ -35,16 +35,10 @@ jobs:
       EXPECTED_DMG_SHA256: ${{ inputs.expected_dmg_sha256 }}
       PROMOTION_CONFIRMATION: ${{ inputs.confirmation }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ inputs.release_tag }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
-
-      - name: Validate manual promotion inputs and immutable tag
+      - name: Validate manual promotion inputs and derive private draft source
         id: inputs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "release_tag must be a canonical stable SemVer tag" >&2
@@ -58,22 +52,57 @@ jobs:
             echo "Explicit stable promotion confirmation is missing" >&2
             exit 1
           fi
-          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          SOURCE_COMMIT=$(git rev-list -n 1 "$RELEASE_TAG")
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease,targetCommitish,assets \
+            > release-source.json
+          gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" \
+            > release-tag-refs.json
+          SOURCE_COMMIT=$(jq -r .targetCommitish release-source.json)
           if ! [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Stable tag did not resolve to one source commit" >&2
+            echo "Private stable draft did not record one exact source commit" >&2
             exit 1
           fi
+          jq -e --arg tag "$RELEASE_TAG" --arg source "$SOURCE_COMMIT" '
+            .tagName == $tag and .targetCommitish == $source and
+            .isDraft == true and .isPrerelease == false and
+            ([.assets[].name] | sort) == ([
+              "RustThirdPartyLicenses.txt",
+              "SHA256SUMS",
+              "Wrenflow.cdx.json",
+              "Wrenflow.dmg",
+              "artifact-provenance.json",
+              "exceptions.json",
+              "pins.json",
+              "provenance.json",
+              "release-evidence.json"
+            ] | sort)
+          ' release-source.json >/dev/null
+          jq -e --arg ref "refs/tags/$RELEASE_TAG" '
+            type == "array" and ([.[] | select(.ref == $ref)] | length) == 0
+          ' release-tag-refs.json >/dev/null
           echo "source_commit=$SOURCE_COMMIT" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ steps.inputs.outputs.source_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
 
       - name: Require the exact untouched release-please draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_COMMIT: ${{ steps.inputs.outputs.source_commit }}
         run: |
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json tagName,isDraft,isPrerelease,assets > release-before.json
-          jq -e --arg tag "$RELEASE_TAG" '
-            .tagName == $tag and .isDraft == true and .isPrerelease == false and
+            --json tagName,isDraft,isPrerelease,targetCommitish,assets \
+            > release-before.json
+          gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" \
+            > release-tag-refs-before.json
+          jq -e --arg tag "$RELEASE_TAG" --arg source "$SOURCE_COMMIT" '
+            .tagName == $tag and .targetCommitish == $source and
+            .isDraft == true and .isPrerelease == false and
             ([.assets[].name] | sort) == ([
               "RustThirdPartyLicenses.txt",
               "SHA256SUMS",
@@ -86,10 +115,15 @@ jobs:
               "release-evidence.json"
             ] | sort)
           ' release-before.json >/dev/null
+          jq -e --arg ref "refs/tags/$RELEASE_TAG" '
+            type == "array" and ([.[] | select(.ref == $ref)] | length) == 0
+          ' \
+            release-tag-refs-before.json >/dev/null
           jq -S '{
             tagName,
             isDraft,
             isPrerelease,
+            targetCommitish,
             assets: ([.assets[] | {
               id,name,size,digest,state,contentType,createdAt,updatedAt
             }] | sort_by(.name))
@@ -130,13 +164,16 @@ jobs:
       - name: Close the draft-to-public time-of-check gap
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_COMMIT: ${{ steps.inputs.outputs.source_commit }}
         run: |
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json tagName,isDraft,isPrerelease,assets > release-second-check.json
+            --json tagName,isDraft,isPrerelease,targetCommitish,assets \
+            > release-second-check.json
           jq -S '{
             tagName,
             isDraft,
             isPrerelease,
+            targetCommitish,
             assets: ([.assets[] | {
               id,name,size,digest,state,contentType,createdAt,updatedAt
             }] | sort_by(.name))
@@ -150,11 +187,12 @@ jobs:
             name=$(basename "$asset")
             cmp "$asset" "staged-second-download/$name"
           done
-          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          if [ "$(git rev-list -n 1 "$RELEASE_TAG")" != "${{ steps.inputs.outputs.source_commit }}" ]; then
-            echo "Stable tag changed during promotion verification" >&2
-            exit 1
-          fi
+          gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" \
+            > release-tag-refs-second.json
+          jq -e --arg ref "refs/tags/$RELEASE_TAG" '
+            type == "array" and ([.[] | select(.ref == $ref)] | length) == 0
+          ' \
+            release-tag-refs-second.json >/dev/null
 
       - name: Publish the verified draft without touching assets
         id: promote
@@ -163,11 +201,26 @@ jobs:
           SOURCE_COMMIT: ${{ steps.inputs.outputs.source_commit }}
         run: |
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --draft=false --prerelease=false --latest --verify-tag
+            --draft=false --prerelease=false --latest --target "$SOURCE_COMMIT"
+          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          if [ "$(git rev-list -n 1 "$RELEASE_TAG")" != "$SOURCE_COMMIT" ]; then
+            echo "Published stable tag does not resolve to the approved source commit" >&2
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" \
+            > release-tag-refs-public.json
+          jq -e --arg tag "refs/tags/$RELEASE_TAG" --arg source "$SOURCE_COMMIT" '
+            type == "array" and
+            ([.[] | select(.ref == $tag)] |
+              length == 1 and .[0].object.type == "commit" and
+              .[0].object.sha == $source)
+          ' release-tag-refs-public.json >/dev/null
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json tagName,isDraft,isPrerelease,url,assets > release-public.json
-          jq -e --arg tag "$RELEASE_TAG" '
-            .tagName == $tag and .isDraft == false and .isPrerelease == false and
+            --json tagName,isDraft,isPrerelease,targetCommitish,url,assets \
+            > release-public.json
+          jq -e --arg tag "$RELEASE_TAG" --arg source "$SOURCE_COMMIT" '
+            .tagName == $tag and .targetCommitish == $source and
+            .isDraft == false and .isPrerelease == false and
             ([.assets[].name] | sort) == ([
               "RustThirdPartyLicenses.txt",
               "SHA256SUMS",
