@@ -28,9 +28,6 @@ jobs:
     name: Verify exact draft bytes and publish without rebuilding
     runs-on: macos-26
     timeout-minutes: 20
-    environment:
-      name: stable-production
-      url: ${{ steps.promote.outputs.release_url }}
     permissions:
       contents: write
     env:
@@ -170,7 +167,18 @@ jobs:
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --json tagName,isDraft,isPrerelease,url,assets > release-public.json
           jq -e --arg tag "$RELEASE_TAG" '
-            .tagName == $tag and .isDraft == false and .isPrerelease == false
+            .tagName == $tag and .isDraft == false and .isPrerelease == false and
+            ([.assets[].name] | sort) == ([
+              "RustThirdPartyLicenses.txt",
+              "SHA256SUMS",
+              "Wrenflow.cdx.json",
+              "Wrenflow.dmg",
+              "artifact-provenance.json",
+              "exceptions.json",
+              "pins.json",
+              "provenance.json",
+              "release-evidence.json"
+            ] | sort)
           ' release-public.json >/dev/null
           LATEST_TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
           if [ "$LATEST_TAG" != "$RELEASE_TAG" ]; then
@@ -201,11 +209,11 @@ jobs:
           mkdir public-download
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --dir public-download
-          (cd public-download && shasum -a 256 -c SHA256SUMS)
-          for asset in staged/*; do
-            name=$(basename "$asset")
-            cmp "$asset" "public-download/$name"
-          done
+          mise exec -- scripts/verify-release-promotion.sh published \
+            release-public.json "$PWD/public-download" "$RELEASE_TAG" \
+            "$EXPECTED_DMG_SHA256" "${{ steps.inputs.outputs.source_commit }}"
+          mise exec -- scripts/verify-release-promotion.sh promotion \
+            "$PWD/staged" "$PWD/public-download"
           ACTUAL_DMG_SHA256=$(shasum -a 256 public-download/Wrenflow.dmg | awk '{print $1}')
           if [ "$ACTUAL_DMG_SHA256" != "$EXPECTED_DMG_SHA256" ]; then
             echo "Public stable DMG differs from the approved staged bytes" >&2

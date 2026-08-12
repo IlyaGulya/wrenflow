@@ -1,45 +1,28 @@
 {
   "schema_version": 1,
-  "release_line": "gpui-v1",
+  "release_line": "gpui-first-public-v1",
+  "release_assumption": {
+    "existing_users": 0,
+    "production_deployments": 0,
+    "compatibility_scope": "clean_first_install_only",
+    "legacy_migration": "not_supported",
+    "downgrade_or_rollback": "not_supported",
+    "update_from_prerelease": "not_a_release_gate"
+  },
   "preflight": {
-    "status": "blocked",
-    "blockers": [
+    "required_tracker_gates": [
+      "wrenflow-duh.9.8",
       "wrenflow-duh.9.9",
       "wrenflow-duh.9.10",
       "wrenflow-duh.9.11"
     ]
   },
-  "owners": {
-    "release_manager": {
-      "name": "Ilya Gulya",
-      "contact": "ilya@gulya.me"
-    },
-    "build_and_notarization": {
-      "name": "Ilya Gulya",
-      "contact": "ilya@gulya.me"
-    },
-    "validation": {
-      "name": "Ilya Gulya",
-      "contact": "ilya@gulya.me"
-    },
-    "security_and_privacy": {
-      "name": "Ilya Gulya",
-      "contact": "ilya@gulya.me",
-      "subject": "Wrenflow security"
-    },
-    "support": {
-      "name": "Ilya Gulya",
-      "contact": "ilya@gulya.me",
-      "subject": "Wrenflow support"
-    },
-    "incident_recovery": {
-      "name": "Ilya Gulya",
-      "contact": "ilya@gulya.me"
-    }
+  "owner": {
+    "name": "Ilya Gulya",
+    "contact": "ilya@gulya.me"
   },
   "privacy": {
     "default_telemetry": "disabled",
-    "cohort_collection": "explicit_opt_in_manual",
     "prohibited_evidence": [
       "audio",
       "transcript",
@@ -48,42 +31,47 @@
       "full_local_path",
       "credential"
     ],
-    "participant_code_retention_days_after_stable": 30
-  },
-  "cohort": {
-    "invitation_cap": 20,
-    "enrollment_target": 10,
-    "minimum_exact_candidate_installers": 8,
-    "minimum_response_rate_percent": 80,
-    "minimum_observation_days": 7,
-    "maximum_observation_days": 14,
-    "minimum_update_attempts": 20,
-    "transcriptions_per_installer": 20
+    "owner_evidence_retention_days": 30
   },
   "go_no_go": {
+    "decision_mode": "single_owner_recorded",
+    "required_gates": [
+      "exact_signed_notarized_private_stable_draft",
+      "sealed_automated_performance_24_of_24",
+      "owner_core_first_install_smoke",
+      "owner_accessibility_appearance_display_smoke",
+      "owner_first_release_lifecycle_smoke",
+      "security_privacy_supply_chain"
+    ],
     "open_release_blockers_max": 0,
     "security_privacy_or_data_loss_events_max": 0,
     "signature_notary_gatekeeper_failures_max": 0,
-    "unlaunchable_update_recoveries_max": 0,
-    "crash_loops_max": 0,
-    "stuck_input_overlay_or_duplicate_process_events_max": 0,
-    "support_bundle_secret_findings_max": 0,
-    "install_and_launch_success_percent_min": 100,
-    "current_line_update_success_percent_min": 95,
-    "tcc_and_core_workflow_success_percent_min": 95,
-    "transcription_success_percent_min": 99
+    "core_workflow_failures_max": 0,
+    "support_bundle_secret_findings_max": 0
   },
   "promotion": {
-    "policy": "byte_identical_or_fully_revalidated_successor",
+    "policy": "exact_private_draft_bytes_only",
     "stable_architecture": "release_please_draft_then_manual_exact_byte_promotion",
     "staged_payload_retention_days": 21,
     "promotion_evidence_retention_days": 30,
-    "beta_to_stable_requires_successor_revalidation": true,
-    "required_successor_gates": [
+    "required_tracker_gates": [
+      "wrenflow-duh.9.8",
       "wrenflow-duh.9.9",
       "wrenflow-duh.9.10",
       "wrenflow-duh.9.11"
     ],
-    "post_stable_observation_hours": 48
+    "github_environment_required": false,
+    "required_external_reviewers": 0
+  },
+  "post_publish": {
+    "required_checks": [
+      "release_is_public_and_not_prerelease",
+      "latest_points_to_exact_tag",
+      "nine_asset_allowlist",
+      "public_dmg_sha256_matches_draft",
+      "public_redownload_passes_signature_notary_gatekeeper"
+    ],
+    "production_watch_hours": 0,
+    "cohort_required": false
   }
 }

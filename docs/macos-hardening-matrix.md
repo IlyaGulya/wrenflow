@@ -15,7 +15,7 @@ installed Developer ID bundle; otherwise the scripts use
 | Locked Rust and Swift compile | `mise run check` | Both root and isolated app workspaces finish successfully. |
 | App and bridge tests | `mise run test-app` | Rust semantic/action tests and the Swift schema validator pass. |
 | Developer ID bundle | `mise run build && mise run hardening-bundle` | Bundle ID `me.gulya.wrenflow`, Team ID `T4LV8K9BGV`, hardened runtime, strict nested signature. |
-| Native accessibility tree | `mise run build && mise run hardening-accessibility`, or `WRENFLOW_TEST_APP=/absolute/path/Wrenflow.app mise run hardening-accessibility` for the retained candidate | The exact Developer ID app publishes a non-empty, measured AppScreens tree through the Swift NSAccessibility bridge and exits cleanly. This is a bridge smoke, not human M18/VoiceOver acceptance. |
+| Native accessibility tree | `mise run build && mise run hardening-accessibility`, or `WRENFLOW_TEST_APP=/absolute/path/Wrenflow.app mise run hardening-accessibility` for the retained candidate | The exact Developer ID app publishes a non-empty, measured AppScreens tree through the Swift NSAccessibility bridge and exits cleanly. This supports but does not replace the S02 owner VoiceOver spot check. |
 | LaunchServices lifecycle | `mise run hardening-lifecycle` | Exact bundle path/PID, visible settings window, one process after a second `open`, accessory policy after close. |
 | Notarized artifact | `WRENFLOW_TEST_DMG=build/Wrenflow.dmg mise run hardening-notarized` | `notarytool` result is `Accepted`, ticket validates, Gatekeeper accepts the signed DMG, SHA-256 recorded. |
 

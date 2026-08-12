@@ -9,7 +9,7 @@
     "memory_gib": 8,
     "power": "AC power, Low Power Mode off, nominal thermal state"
   },
-  "validation_policy": "Hybrid: GitHub-hosted macos-14 M1/7-GB constrained evidence for deterministic non-interactive metrics; explicitly post_event_tap_synthetic signed-app typed-hotkey-callback/overlay/paste evidence with a fixture-backed recording source; and a supported physical Apple-Silicon Mac for Instruments and display interaction. Post-event-tap synthetic evidence is never relabeled as physical, event-tap, microphone, TCC or M06 human proof.",
+  "validation_policy": "The first-public-release gate is the sealed GitHub-hosted macos-14 M1/7-GB constrained 24-metric result. Post-event synthetic and physical Instruments metrics remain numeric post-launch P2 diagnostics and are never relabeled as release-gating, physical-input, microphone, TCC or owner-smoke proof.",
   "toolchain_policy": {
     "constrained": "exact Xcode 16.2 selected on the GitHub-hosted macos-14 runner",
     "physical_interactive": "record the actual selected non-unknown Xcode build and xctrace template inventory on the supported physical host"
@@ -118,7 +118,7 @@
       "unit": "ms",
       "min_samples": 20,
       "owner": "audio/ONNX/paste pipeline",
-      "rationale": "The fixed Parakeet fixture must reach successful production Cmd+V dispatch within three seconds of typed release-handler ingress; target insertion remains M07 human acceptance."
+      "rationale": "The fixed Parakeet fixture must reach successful production Cmd+V dispatch within three seconds of typed release-handler ingress; physical target insertion remains S01 owner smoke."
     },
     {
       "metric": "idle.duration_seconds",

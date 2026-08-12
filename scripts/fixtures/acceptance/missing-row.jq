@@ -1,1 +1,1 @@
-.rows |= map(select(.id != "M20"))
+.rows |= map(select(.id != "S02"))

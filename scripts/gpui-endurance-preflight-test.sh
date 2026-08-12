@@ -2,170 +2,200 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/wrenflow-endurance-harness-test.XXXXXX")"
-trap 'rm -rf -- "$FIXTURE"' EXIT
+TOOL="$REPO_DIR/scripts/gpui-endurance-evidence.py"
+HARNESS="$REPO_DIR/scripts/gpui-endurance-preflight.sh"
+TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/wrenflow-first-release-lifecycle.XXXXXX")"
+trap 'rm -rf -- "$TEST_ROOT"' EXIT
 
-OUTPUT="$FIXTURE/output"
-"$REPO_DIR/scripts/gpui-endurance-preflight.sh" automated "$OUTPUT"
-jq -e '
-    . as $root |
-    .schema_version == 1 and
-    .contract == "wrenflow.gpui.endurance.update-evidence.v1" and
-    .cycles == 20 and
-    (.source.commit | test("^[0-9a-f]{40}$")) and
-    (.source.update_source_sha256 | test("^[0-9a-f]{64}$")) and
-    (.source.verifier_source_sha256 | test("^[0-9a-f]{64}$")) and
-    (.source.policy_sha256 | test("^[0-9a-f]{64}$")) and
-    .automated_update_fixtures.status == "passed" and
-    .automated_update_fixtures.log.file == "runtime-twenty-cycles.log" and
-    (.automated_update_fixtures.log.sha256 | test("^[0-9a-f]{64}$")) and
-    ([.automated_update_fixtures.cases[].id] == [
-      "stable_beta_channel_selection",
-      "offline",
-      "rate_limit",
-      "malformed_metadata",
-      "duplicate_release",
-      "partial_transfer",
-      "transaction_recovery_cycles"
-    ]) and
-    all(.automated_update_fixtures.cases[];
-      .status == "passed" and
-      .source_sha256 == $root.source.update_source_sha256 and
-      .log_sha256 == $root.automated_update_fixtures.log.sha256) and
-    .other_automated.current_line_relaunch.status == "passed" and
-    .other_automated.current_line_relaunch.id == "current_line_relaunch" and
-    .other_automated.current_line_relaunch.test == "data_paths::tests::twenty_current_line_relaunches_preserve_only_gpui_v1_state" and
-    .other_automated.current_line_relaunch.log_sha256 == .automated_update_fixtures.log.sha256 and
-    (.other_automated.current_line_relaunch.source_sha256 | test("^[0-9a-f]{64}$")) and
-    .other_automated.interrupted_write_cleanup.status == "passed" and
-    .other_automated.interrupted_write_cleanup.id == "interrupted_write_cleanup" and
-    .other_automated.interrupted_write_cleanup.test == "recovery::tests::twenty_interrupted_launches_clean_only_bounded_temporary_state" and
-    .other_automated.interrupted_write_cleanup.log_sha256 == .automated_update_fixtures.log.sha256 and
-    (.other_automated.interrupted_write_cleanup.source_sha256 | test("^[0-9a-f]{64}$")) and
-    .candidate == "blocked_pending_immutable_notarized_artifacts" and
-    .manual_candidate_rows.M13 == "pending_signed_manual" and
-    .manual_candidate_rows.M21 == "pending_instruments_budget" and
-    .manual_candidate_rows.M22 == "pending_signed_manual"
-' "$OUTPUT/automated-preflight.json" >/dev/null
-[[ "$(shasum -a 256 "$OUTPUT/runtime-twenty-cycles.log" | awk '{print $1}')" == \
-    "$(jq -r '.automated_update_fixtures.log.sha256' "$OUTPUT/automated-preflight.json")" ]]
+mise exec -- python3 "$TOOL" source >"$TEST_ROOT/source.out"
+rg -F "First-release lifecycle source contract passed" "$TEST_ROOT/source.out" >/dev/null
+"$HARNESS" source >/dev/null
 
-if "$REPO_DIR/scripts/gpui-endurance-preflight.sh" automated "$OUTPUT" \
-    >"$FIXTURE/overwrite.stdout" 2>"$FIXTURE/overwrite.stderr"; then
-    echo "automated preflight overwrote retained evidence" >&2
+if env -u WRENFLOW_TARGET_PAYLOAD "$HARNESS" candidate-plan "$TEST_ROOT/missing.json" \
+    >"$TEST_ROOT/missing.out" 2>"$TEST_ROOT/missing.err"; then
+    echo "candidate-plan accepted missing exact stable payload" >&2
     exit 1
 fi
-rg -F "Evidence file must be a new absolute path" "$FIXTURE/overwrite.stderr" >/dev/null
+rg -F "WRENFLOW_TARGET_PAYLOAD" "$TEST_ROOT/missing.err" >/dev/null
+[[ ! -e "$TEST_ROOT/missing.json" ]]
 
-mise exec -- python3 "$REPO_DIR/scripts/gpui-endurance-evidence.py" source >/dev/null
-mise exec -- python3 "$REPO_DIR/scripts/gpui-endurance-evidence.py" test-fixtures >/dev/null
+SOURCE="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+DMG="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+BETA_SOURCE="d3e01e0ec085121f3bd3e78038836a16608b98a0"
+BETA_DMG="d7a04beb4513026dda7f72847ab2c53a5c1a82861b49192c7c6ae6937b35e1a5"
+BETA_EXECUTABLE="3a2d786a31ac6491a88d3a3f9fa8b9d66f4991f5f5d32e507c0db3caf6f573af"
+jq -S -n --arg source "$SOURCE" --arg dmg "$DMG" '
+  {
+    schema_version:1,
+    contract:"wrenflow.gpui.first-release-lifecycle.v1",
+    verification:"exact_signed_notarized_private_stable_draft",
+    candidate:{
+      tag:"v0.4.0",version:"0.4.0",build_number:"1",source_commit:$source,
+      dmg_sha256:$dmg,team_id:"T4LV8K9BGV",bundle_id:"me.gulya.wrenflow"
+    }
+  }
+' >"$TEST_ROOT/plan.json"
+mise exec -- python3 "$TOOL" validate-plan "$TEST_ROOT/plan.json" >/dev/null
 
-expect_missing_payload_rejected() {
-    local label="$1"
-    local missing_variable="$2"
-    local candidate_output="$3"
-    shift 3
-    if "$@" /bin/bash "$REPO_DIR/scripts/gpui-endurance-preflight.sh" \
-        candidate-plan "$candidate_output" \
-        >"$FIXTURE/$label.stdout" 2>"$FIXTURE/$label.stderr"; then
-        echo "candidate-plan accepted missing exact payload input: $missing_variable" >&2
-        exit 1
-    fi
-    rg -F "$missing_variable" "$FIXTURE/$label.stderr" >/dev/null
-    [[ ! -e "$candidate_output" ]]
+EVIDENCE="$TEST_ROOT/evidence"
+mkdir "$EVIDENCE"
+printf 'owner lifecycle pass\n' >"$EVIDENCE/lifecycle-result.txt"
+printf 'sleep wake and audio device recovered\n' >"$EVIDENCE/lifecycle-log.txt"
+printf 'owner disposable-state pass\n' >"$EVIDENCE/state-result.txt"
+printf 'current-format corrupt state failed closed and explicit disposable reset passed\n' \
+    >"$EVIDENCE/disposable-state-log.txt"
+mise exec -- python3 \
+    "$REPO_DIR/scripts/fixtures/performance/generate-hybrid-verifier-fixture.py" \
+    "$REPO_DIR/support/performance/budgets-v1.json" \
+    "$EVIDENCE/constrained-evidence.json" "$TEST_ROOT/unused-physical.json"
+mise exec -- python3 - \
+    "$BETA_SOURCE" "$BETA_DMG" "$BETA_EXECUTABLE" \
+    "$EVIDENCE/constrained-evidence.json" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+source, dmg, executable, output = sys.argv[1], sys.argv[2], sys.argv[3], pathlib.Path(sys.argv[4])
+value = json.loads(output.read_text(encoding="utf-8"))
+value["source"]["commit"] = source
+value["candidate"]["bundle_version"] = "0.4.0-beta.64"
+value["candidate"]["bundle_build"] = "305"
+value["candidate"]["executable_sha256"] = executable
+value["candidate_id"] = f"{source}-{dmg}"
+value.pop("evidence_sha256", None)
+encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+value["evidence_sha256"] = hashlib.sha256(encoded).hexdigest()
+output.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+mise exec -- python3 "$REPO_DIR/scripts/perf/gpui-performance.py" verify \
+    --profile release \
+    --result "$EVIDENCE/constrained-evidence.json" \
+    --budgets "$REPO_DIR/support/performance/budgets-v1.json" \
+    --report "$EVIDENCE/constrained-verification.json" >/dev/null
+
+descriptor() {
+    local kind="$1"
+    local file="$2"
+    jq -n --arg kind "$kind" --arg path "$file" \
+        --arg sha "$(shasum -a 256 "$EVIDENCE/$file" | awk '{print $1}')" \
+        '{kind:$kind,relative_path:$path,sha256:$sha}'
 }
 
-expect_missing_payload_rejected \
-    candidate-missing-both WRENFLOW_BASELINE_PAYLOAD "$FIXTURE/candidate-missing-both" \
-    env -u WRENFLOW_BASELINE_PAYLOAD -u WRENFLOW_TARGET_PAYLOAD
-expect_missing_payload_rejected \
-    candidate-missing-baseline WRENFLOW_BASELINE_PAYLOAD "$FIXTURE/candidate-missing-baseline" \
-    env -u WRENFLOW_BASELINE_PAYLOAD \
-    WRENFLOW_TARGET_PAYLOAD="$FIXTURE/nonexistent-target-payload"
-expect_missing_payload_rejected \
-    candidate-missing-target WRENFLOW_TARGET_PAYLOAD "$FIXTURE/candidate-missing-target" \
-    env -u WRENFLOW_TARGET_PAYLOAD \
-    WRENFLOW_BASELINE_PAYLOAD="$FIXTURE/nonexistent-baseline-payload"
+jq -S -n \
+    --slurpfile plan "$TEST_ROOT/plan.json" \
+    --argjson l01_result "$(descriptor result-sheet lifecycle-result.txt)" \
+    --argjson l01_log "$(descriptor lifecycle-log lifecycle-log.txt)" \
+    --argjson l02_result "$(descriptor result-sheet state-result.txt)" \
+    --argjson l02_log "$(descriptor disposable-state-log disposable-state-log.txt)" \
+    --argjson l03_result "$(descriptor performance-result constrained-evidence.json)" \
+    --argjson l03_report "$(descriptor performance-report constrained-verification.json)" '
+  {
+    schema_version:1,
+    contract:"wrenflow.gpui.first-release-lifecycle.v1",
+    candidate:$plan[0].candidate,
+    owner:"Ilya Gulya",
+    executed_at:"2026-08-12T12:00:00+06:00",
+    tcc_mutated:false,
+    rows:{
+      L01:{
+        title:"Owner sleep, wake and audio-device lifecycle smoke",
+        result:"pass",notes:"Owner observed one exact process recover.",
+        evidence:[$l01_result,$l01_log]
+      },
+      L02:{
+        title:"Disposable current-format corruption and explicit reset smoke",
+        result:"pass",notes:"Only a disposable data root was used.",
+        evidence:[$l02_result,$l02_log]
+      },
+      L03:{
+        title:"Frozen beta.64 sealed automated performance baseline reuse",
+        result:"pass",notes:"Release verifier recomputed the frozen beta.64 baseline at 24 of 24 metrics.",
+        evidence:[$l03_result,$l03_report]
+      }
+    },
+    decision:"passed_first_release_lifecycle"
+  }
+' >"$TEST_ROOT/manifest.json"
 
-AUTH_PLAN="$REPO_DIR/scripts/fixtures/endurance/candidate-plan-pass.json"
-AUTH_TEMP="$FIXTURE/auth-temp"
-mkdir "$AUTH_TEMP"
-if env -u WRENFLOW_BASELINE_PAYLOAD \
-    WRENFLOW_TARGET_PAYLOAD="$FIXTURE/nonexistent-target-payload" \
-    TMPDIR="$AUTH_TEMP" \
-    /bin/bash "$REPO_DIR/scripts/gpui-endurance-preflight.sh" verify-evidence \
-    "$FIXTURE/nonexistent-automated.json" "$AUTH_PLAN" "$FIXTURE/nonexistent-manifest.json" \
-    >"$FIXTURE/auth-missing-baseline.stdout" \
-    2>"$FIXTURE/auth-missing-baseline.stderr"; then
-    echo "verify-evidence accepted missing WRENFLOW_BASELINE_PAYLOAD" >&2
+"$HARNESS" verify-evidence "$TEST_ROOT/plan.json" "$TEST_ROOT/manifest.json" "$EVIDENCE" \
+    >"$TEST_ROOT/pass.out"
+rg -F "passed for v0.4.0" "$TEST_ROOT/pass.out" >/dev/null
+
+expect_failure() {
+    local name="$1"
+    local filter="$2"
+    local expected="$3"
+    jq "$filter" "$TEST_ROOT/manifest.json" >"$TEST_ROOT/$name.json"
+    if "$HARNESS" verify-evidence "$TEST_ROOT/plan.json" "$TEST_ROOT/$name.json" "$EVIDENCE" \
+        >"$TEST_ROOT/$name.out" 2>"$TEST_ROOT/$name.err"; then
+        echo "lifecycle verifier accepted $name" >&2
+        exit 1
+    fi
+    rg -F "$expected" "$TEST_ROOT/$name.err" >/dev/null
+}
+
+expect_failure pending '.rows.L01.result="pending"' "not an exact passing policy row"
+expect_failure tcc-reset '.tcc_mutated=true' "without TCC mutation"
+expect_failure missing-row 'del(.rows.L02)' "ordered exactly L01,L02,L03"
+expect_failure legacy-row '.rows.M13=.rows.L01' "ordered exactly L01,L02,L03"
+expect_failure report-count '.rows.L03.evidence[1].sha256=("0"*64)' "evidence hash mismatch"
+expect_failure extra-field '.rows.L01.legacy_migration="passed"' "unknown ['legacy_migration']"
+
+cp "$EVIDENCE/constrained-evidence.json" "$TEST_ROOT/constrained-evidence.original.json"
+expect_invalid_performance() {
+    local name="$1"
+    local filter="$2"
+    local expected="${3:-did not recompute as an exact passing release result}"
+    jq "$filter | del(.evidence_sha256)" "$TEST_ROOT/constrained-evidence.original.json" \
+        >"$EVIDENCE/constrained-evidence.json"
+    mise exec -- python3 - "$EVIDENCE/constrained-evidence.json" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text(encoding="utf-8"))
+encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+value["evidence_sha256"] = hashlib.sha256(encoded).hexdigest()
+path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+    jq --arg sha "$(shasum -a 256 "$EVIDENCE/constrained-evidence.json" | awk '{print $1}')" \
+        '.rows.L03.evidence[0].sha256=$sha' "$TEST_ROOT/manifest.json" \
+        >"$TEST_ROOT/$name.json"
+    if "$HARNESS" verify-evidence "$TEST_ROOT/plan.json" "$TEST_ROOT/$name.json" "$EVIDENCE" \
+        >"$TEST_ROOT/$name.out" 2>"$TEST_ROOT/$name.err"; then
+        echo "lifecycle verifier accepted $name performance evidence" >&2
+        exit 1
+    fi
+    rg -F "$expected" "$TEST_ROOT/$name.err" >/dev/null
+}
+expect_invalid_performance missing-performance-metrics 'del(.metrics)'
+expect_invalid_performance tampered-performance-metric '.metrics["launch.cold.p95_ms"].value=9999'
+expect_invalid_performance wrong-performance-candidate-id \
+    '.candidate_id=("f"*40 + "-" + "e"*64)' \
+    'candidate_id differs from the frozen beta.64 DMG'
+cp "$TEST_ROOT/constrained-evidence.original.json" "$EVIDENCE/constrained-evidence.json"
+
+cp "$TEST_ROOT/manifest.json" "$TEST_ROOT/symlink-manifest.json"
+ln -s constrained-evidence.json "$EVIDENCE/result-link.json"
+jq --arg sha "$(shasum -a 256 "$EVIDENCE/constrained-evidence.json" | awk '{print $1}')" '
+  .rows.L03.evidence[0].relative_path="result-link.json" |
+  .rows.L03.evidence[0].sha256=$sha
+' "$TEST_ROOT/manifest.json" >"$TEST_ROOT/symlink-manifest.json"
+if "$HARNESS" verify-evidence "$TEST_ROOT/plan.json" "$TEST_ROOT/symlink-manifest.json" "$EVIDENCE" \
+    >"$TEST_ROOT/symlink.out" 2>"$TEST_ROOT/symlink.err"; then
+    echo "lifecycle verifier accepted symlinked evidence" >&2
     exit 1
 fi
-rg -F "WRENFLOW_BASELINE_PAYLOAD" "$FIXTURE/auth-missing-baseline.stderr" >/dev/null
-[[ -z "$(find "$AUTH_TEMP" -mindepth 1 -print -quit)" ]]
+rg -F "must not traverse a symlink" "$TEST_ROOT/symlink.err" >/dev/null
 
-if env -u WRENFLOW_TARGET_PAYLOAD \
-    WRENFLOW_BASELINE_PAYLOAD="$FIXTURE/nonexistent-baseline-payload" \
-    TMPDIR="$AUTH_TEMP" \
-    /bin/bash "$REPO_DIR/scripts/gpui-endurance-preflight.sh" verify-post-promotion \
-    "$AUTH_PLAN" "$FIXTURE/nonexistent-observation.json" \
-    >"$FIXTURE/auth-missing-target.stdout" \
-    2>"$FIXTURE/auth-missing-target.stderr"; then
-    echo "verify-post-promotion accepted missing WRENFLOW_TARGET_PAYLOAD" >&2
-    exit 1
-fi
-rg -F "WRENFLOW_TARGET_PAYLOAD" "$FIXTURE/auth-missing-target.stderr" >/dev/null
-[[ -z "$(find "$AUTH_TEMP" -mindepth 1 -print -quit)" ]]
-
-if "$REPO_DIR/scripts/gpui-endurance-preflight.sh" kill-stage hostile "$$" \
-    "$FIXTURE/kill.json" >"$FIXTURE/kill.stdout" 2>"$FIXTURE/kill.stderr"; then
-    echo "kill-stage accepted a non-allowlisted stage" >&2
-    exit 1
-fi
-rg -F "Unknown fault-injection stage" "$FIXTURE/kill.stderr" >/dev/null
-
-ALIAS="$FIXTURE/aliased-evidence.json"
-if WRENFLOW_JOURNAL_EVIDENCE="$ALIAS" \
-    "$REPO_DIR/scripts/gpui-endurance-preflight.sh" kill-stage update_staging 999999 "$ALIAS" \
-    >"$FIXTURE/alias.stdout" 2>"$FIXTURE/alias.stderr"; then
-    echo "kill-stage accepted aliased journal/SIGKILL output" >&2
-    exit 1
-fi
-rg -F "must be distinct new files" "$FIXTURE/alias.stderr" >/dev/null
-[[ ! -e "$ALIAS" ]]
-
-rg -F 'WRENFLOW_ENDURANCE_DISPOSABLE_ROOT' \
-    "$REPO_DIR/core/wrenflow-runtime/src/data_paths.rs" \
-    "$REPO_DIR/core/wrenflow-runtime/src/recovery.rs" \
-    "$REPO_DIR/core/wrenflow-runtime/src/update.rs" >/dev/null
-rg -F 'blocked_pending_immutable_notarized_artifacts' \
-    "$REPO_DIR/scripts/gpui-endurance-preflight.sh" >/dev/null
-rg -F 'scripts/verify-release-artifact.sh' \
-    "$REPO_DIR/scripts/gpui-endurance-preflight.sh" >/dev/null
-for required_contract in \
-    'WRENFLOW_BASELINE_PAYLOAD' \
-    'WRENFLOW_TARGET_PAYLOAD' \
-    'WRENFLOW_M13_M22_PLAN' \
-    'WRENFLOW_UPDATE_JOURNAL' \
-    'WRENFLOW_JOURNAL_EVIDENCE' \
-    'before_ready_finalization' \
-    'update_helper' \
-    'pre_signal_state' \
-    'externally SIGSTOPed' \
-    'authenticate_candidate_plan' \
-    'hdiutil attach -readonly -nobrowse' \
-    'candidate_plan_sha256' \
-    'journal_sha256'; do
-    rg -F "$required_contract" "$REPO_DIR/scripts/gpui-endurance-preflight.sh" >/dev/null
-done
-if rg -n 'WRENFLOW_(BASELINE|TARGET)_APP|WRENFLOW_(BASELINE|TARGET)_DMG' \
-    "$REPO_DIR/scripts/gpui-endurance-preflight.sh"; then
-    echo "candidate identity must be derived from the mounted payload DMGs" >&2
-    exit 1
-fi
-if rg -n 'mise run (build|run)|open -[an]?|open "?\$' \
-    "$REPO_DIR/scripts/gpui-endurance-preflight.sh"; then
-    echo "endurance harness must not rebuild, install or launch a candidate implicitly" >&2
+rg -F 'legacy_migration": "excluded"' "$REPO_DIR/support/acceptance/endurance-v1-policy.json" >/dev/null
+rg -F 'updater_transaction_fault_injection' "$REPO_DIR/support/acceptance/endurance-v1-policy.json" >/dev/null
+if rg -n 'tccutil|kill-stage|WRENFLOW_BASELINE_PAYLOAD|WRENFLOW_M13_M22_PLAN' "$HARNESS"; then
+    echo "first-release lifecycle harness retained destructive or legacy/update execution" >&2
     exit 1
 fi
 
-echo "GPUI endurance preflight harness source and failure behavior passed"
+echo "First-release lifecycle evidence tests passed"

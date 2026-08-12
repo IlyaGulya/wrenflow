@@ -104,15 +104,15 @@ native/wrenflow-gpui/scripts/accessibility-harness-test.sh
 """
 
 [tasks.endurance-preflight]
-description = "Run deterministic disposable-root GPUI M13-M16/M21-M22 preflight only"
-run = "scripts/gpui-endurance-preflight.sh automated"
+description = "Validate the clean-install first-release lifecycle evidence contract"
+run = "scripts/gpui-endurance-preflight.sh source"
 
 [tasks.test-endurance-preflight]
 description = "Test fail-closed GPUI endurance and candidate-evidence harness behavior"
 run = "scripts/gpui-endurance-preflight-test.sh"
 
 [tasks.human-acceptance]
-description = "Create or verify immutable-candidate M01-M12/M17-M20 evidence manifests"
+description = "Create or verify immutable-candidate first-release owner smoke manifests"
 run = "mise exec -- python3 scripts/gpui-human-acceptance.py"
 
 [tasks.test-human-acceptance]
@@ -164,7 +164,7 @@ description = "Validate the GPUI beta/stable runbook policy and workflow source 
 run = "scripts/verify-release-promotion.sh source"
 
 [tasks.test-release-runbook]
-description = "Test byte-identical and fully revalidated successor promotion decisions"
+description = "Test exact-private-draft first-release promotion decisions"
 run = "scripts/test-production-release-runbook.sh"
 
 [tasks.hardening-bundle]

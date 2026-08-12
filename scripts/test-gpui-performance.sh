@@ -1800,14 +1800,14 @@ PY
 mise exec -- python3 "$HARNESS" verify \
     --profile release \
     --result "$TEST_ROOT/constrained.json" \
-    --companion-result "$TEST_ROOT/physical.json" \
     --budgets "$BUDGETS" \
-    --report "$TEST_ROOT/hybrid-report.json" >/dev/null
+    --report "$TEST_ROOT/release-report.json" >/dev/null
 mise exec -- jq -e '
   .passed == true and
-  .evaluated_metrics > 25 and
-  ([.evidence_sets[].role] | sort == ["constrained_noninteractive", "physical_interactive"])
-' "$TEST_ROOT/hybrid-report.json" >/dev/null
+  .evaluated_metrics == 24 and
+  .evaluated_measurements == 24 and
+  ([.evidence_sets[].role] == ["constrained_noninteractive"])
+' "$TEST_ROOT/release-report.json" >/dev/null
 mise exec -- python3 "$HARNESS" verify \
     --profile constrained \
     --result "$TEST_ROOT/constrained.json" \
@@ -1820,10 +1820,21 @@ mise exec -- jq -e '
 if mise exec -- python3 "$HARNESS" verify \
     --profile release \
     --result "$TEST_ROOT/constrained.json" \
+    --companion-result "$TEST_ROOT/physical.json" \
     --budgets "$BUDGETS" >/dev/null 2>&1; then
-    echo "Constrained-only evidence unexpectedly passed the hybrid release gate" >&2
+    echo "Release gate accepted nonblocking physical companion evidence" >&2
     exit 1
 fi
+if mise exec -- python3 "$HARNESS" verify \
+    --profile release \
+    --result "$TEST_ROOT/constrained.json" \
+    --companion-result "$TEST_ROOT/constrained.json" \
+    --budgets "$BUDGETS" >/dev/null 2>"$TEST_ROOT/release-duplicate.err"; then
+    echo "Release gate accepted a duplicate constrained evidence set" >&2
+    exit 1
+fi
+rg -F "exactly one constrained result and no companions" \
+    "$TEST_ROOT/release-duplicate.err" >/dev/null
 
 mise exec -- python3 - "$HARNESS" "$TEST_ROOT" "$TRANSCRIPTION_FIXTURE" <<'PY'
 import copy

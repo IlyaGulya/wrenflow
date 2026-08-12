@@ -5192,6 +5192,8 @@ def check_provenance(result: dict[str, Any], label: str) -> list[str]:
 
 def verify(args: argparse.Namespace) -> None:
     result_paths = [pathlib.Path(args.result)] + [pathlib.Path(path) for path in args.companion_result]
+    if args.profile == "release" and len(result_paths) != 1:
+        raise EvidenceError("release profile requires exactly one constrained result and no companions")
     results = [(path.name, read_json(path)) for path in result_paths]
     budgets = read_json(pathlib.Path(args.budgets))
     if budgets.get("schema_version") != SCHEMA_VERSION:
@@ -5211,16 +5213,12 @@ def verify(args: argparse.Namespace) -> None:
         for label, result in results:
             failures.extend(check_provenance(result, label))
         roles = {evidence_role(result) for _, result in results}
-        required_roles = (
-            ("constrained_noninteractive", "physical_interactive")
-            if args.profile == "release"
-            else ("constrained_noninteractive",)
-        )
+        required_roles = ("constrained_noninteractive",)
         for required_role in required_roles:
             if required_role not in roles:
                 failures.append(f"{args.profile} evidence is missing {required_role}")
-        if args.profile == "constrained" and roles - {"constrained_noninteractive"}:
-            failures.append("constrained profile contains evidence from another host class")
+        if roles - {"constrained_noninteractive"}:
+            failures.append(f"{args.profile} profile contains evidence from another host class")
         reference = results[0][1]
         identity_keys = ("bundle_tree_sha256", "executable_sha256", "cdhash", "bundle_version", "bundle_build")
         for label, result in results[1:]:
@@ -5246,7 +5244,7 @@ def verify(args: argparse.Namespace) -> None:
         if args.profile in {"release", "constrained"} and required_role is None:
             failures.append(f"budget evidence policy does not assign {key}")
             continue
-        if args.profile == "constrained" and required_role != "constrained_noninteractive":
+        if args.profile in {"release", "constrained"} and required_role != "constrained_noninteractive":
             continue
         selected = []
         for label, result in results:

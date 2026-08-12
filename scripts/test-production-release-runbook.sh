@@ -85,6 +85,12 @@ CANDIDATE_SHA="$(jq -r '.artifact.sha256' "$CANDIDATE/release-evidence.json")"
     >"$FIXTURE/staged.out"
 rg -F "Staged stable payload metadata passed" "$FIXTURE/staged.out" >/dev/null
 
+jq '.isDraft = false' "$FIXTURE/release.json" >"$FIXTURE/release-public.json"
+"$REPO_DIR/scripts/verify-release-promotion.sh" published \
+    "$FIXTURE/release-public.json" "$IDENTICAL" v0.4.0 "$CANDIDATE_SHA" "$SOURCE_A" \
+    >"$FIXTURE/published.out"
+rg -F "Published stable payload metadata passed" "$FIXTURE/published.out" >/dev/null
+
 for mutation in public prerelease extra_asset; do
     case "$mutation" in
         public) jq '.isDraft = false' "$FIXTURE/release.json" ;;
@@ -124,48 +130,57 @@ fi
 
 "$REPO_DIR/scripts/verify-release-promotion.sh" promotion "$CANDIDATE" "$IDENTICAL" \
     >"$FIXTURE/identical.out"
-rg -F "Byte-identical promotion verified" "$FIXTURE/identical.out" >/dev/null
+rg -F "Exact private-draft promotion verified" "$FIXTURE/identical.out" >/dev/null
 
 if "$REPO_DIR/scripts/verify-release-promotion.sh" promotion "$CANDIDATE" "$SUCCESSOR" \
     >"$FIXTURE/missing.out" 2>"$FIXTURE/missing.err"; then
     echo "Changed stable bytes passed without successor revalidation" >&2
     exit 1
 fi
-rg -F "Changed stable bytes require" "$FIXTURE/missing.err" >/dev/null
+rg -F "must use the exact approved private draft" "$FIXTURE/missing.err" >/dev/null
 
-SUCCESSOR_SHA="$(jq -r '.artifact.sha256' "$SUCCESSOR/release-evidence.json")"
-jq -S -n \
-    --arg candidate_sha "$CANDIDATE_SHA" \
-    --arg stable_sha "$SUCCESSOR_SHA" \
-    --arg stable_source "$SOURCE_B" '
-  {
-    schema_version: 1,
-    decision: "approved",
-    candidate_dmg_sha256: $candidate_sha,
-    stable_dmg_sha256: $stable_sha,
-    stable_source_commit: $stable_source,
-    owner: "Ilya Gulya",
-    approved_at: "2026-08-09T12:00:00Z",
-    gates: {
-      "wrenflow-duh.9.9":"passed",
-      "wrenflow-duh.9.10":"passed",
-      "wrenflow-duh.9.11":"passed"
-    }
-  }
-' >"$FIXTURE/revalidation.json"
-"$REPO_DIR/scripts/verify-release-promotion.sh" promotion \
-    "$CANDIDATE" "$SUCCESSOR" "$FIXTURE/revalidation.json" \
-    >"$FIXTURE/successor.out"
-rg -F "Fully revalidated successor promotion verified" \
-    "$FIXTURE/successor.out" >/dev/null
-
-BAD_REVALIDATION="$FIXTURE/bad-revalidation.json"
-jq '.gates["wrenflow-duh.9.10"] = "pending"' \
-    "$FIXTURE/revalidation.json" >"$BAD_REVALIDATION"
+CHANGED_METADATA="$FIXTURE/changed-metadata"
+cp -R "$IDENTICAL" "$CHANGED_METADATA"
+printf 'changed metadata\n' >"$CHANGED_METADATA/pins.json"
+(
+    cd "$CHANGED_METADATA"
+    shasum -a 256 Wrenflow.dmg Wrenflow.cdx.json RustThirdPartyLicenses.txt \
+        pins.json exceptions.json provenance.json artifact-provenance.json \
+        release-evidence.json >SHA256SUMS
+)
 if "$REPO_DIR/scripts/verify-release-promotion.sh" promotion \
-    "$CANDIDATE" "$SUCCESSOR" "$BAD_REVALIDATION" \
-    >"$FIXTURE/bad.out" 2>"$FIXTURE/bad.err"; then
-    echo "Successor promotion accepted a pending external gate" >&2
+    "$CANDIDATE" "$CHANGED_METADATA" \
+    >"$FIXTURE/changed-metadata.out" 2>"$FIXTURE/changed-metadata.err"; then
+    echo "Promotion accepted changed non-DMG draft bytes" >&2
+    exit 1
+fi
+rg -F "changed approved draft asset pins.json" "$FIXTURE/changed-metadata.err" >/dev/null
+
+EXTRA_PAYLOAD="$FIXTURE/extra-payload"
+cp -R "$IDENTICAL" "$EXTRA_PAYLOAD"
+printf 'not approved\n' >"$EXTRA_PAYLOAD/unexpected.bin"
+if "$REPO_DIR/scripts/verify-release-promotion.sh" promotion \
+    "$CANDIDATE" "$EXTRA_PAYLOAD" \
+    >"$FIXTURE/extra-payload.out" 2>"$FIXTURE/extra-payload.err"; then
+    echo "Promotion accepted an extra public payload file" >&2
+    exit 1
+fi
+rg -F "exact nine-file allowlist" "$FIXTURE/extra-payload.err" >/dev/null
+
+jq '.assets += [{"name":"unexpected.bin"}]' "$FIXTURE/release-public.json" \
+    >"$FIXTURE/release-public-extra.json"
+if "$REPO_DIR/scripts/verify-release-promotion.sh" published \
+    "$FIXTURE/release-public-extra.json" "$IDENTICAL" v0.4.0 \
+    "$CANDIDATE_SHA" "$SOURCE_A" \
+    >"$FIXTURE/public-extra.out" 2>"$FIXTURE/public-extra.err"; then
+    echo "Published verifier accepted an extra public release asset" >&2
+    exit 1
+fi
+
+if "$REPO_DIR/scripts/verify-release-promotion.sh" promotion \
+    "$CANDIDATE" "$IDENTICAL" "$FIXTURE/unexpected-waiver.json" \
+    >"$FIXTURE/waiver.out" 2>"$FIXTURE/waiver.err"; then
+    echo "Promotion accepted a successor waiver argument" >&2
     exit 1
 fi
 

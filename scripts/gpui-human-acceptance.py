@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create and verify fail-closed M01-M12/M17-M20 evidence manifests.
+"""Create and verify fail-closed first-release owner smoke manifests.
 
 This tool only reads candidate/evidence files and writes a new manifest when
 `init` is requested. It never launches Wrenflow or changes TCC, macOS settings,
@@ -23,8 +23,8 @@ from typing import Any, NoReturn
 REPO_DIR = Path(__file__).resolve().parents[1]
 POLICY_PATH = REPO_DIR / "support/acceptance/macos-human-v1-policy.json"
 SCHEMA_PATH = REPO_DIR / "support/acceptance/macos-human-v1.schema.json"
-SCHEMA_ID = "wrenflow-macos-human-acceptance-v1"
-SCHEMA_CANONICAL_SHA256 = "69b2798c4255e675a38d01e622a4efc5d6499f8ba2cc3f0062f03cfbbbc0d4f0"
+SCHEMA_ID = "wrenflow-first-release-owner-smoke-v1"
+SCHEMA_CANONICAL_SHA256 = "c4f49bd1688786f18c8eb46ec8055f43928d6937dd30e53bd64c88346440e6cf"
 TEAM_ID = "T4LV8K9BGV"
 BUNDLE_ID = "me.gulya.wrenflow"
 PUBLISHED_PAYLOAD = [
@@ -54,39 +54,15 @@ UUID_RE = re.compile(
 )
 RESOLUTION_RE = re.compile(r"^[0-9]+x[0-9]+$")
 PLACEHOLDERS = {"anonymous", "n/a", "none", "tbd", "todo", "unknown"}
-GENERIC_HUMAN_NAME_TOKENS = {
-    "acceptance",
-    "assurance",
-    "demo",
-    "example",
-    "fixture",
-    "human",
-    "named",
-    "operator",
-    "person",
-    "qa",
-    "quality",
-    "sample",
-    "test",
-    "tester",
-    "user",
-    "validation",
-    "validator",
-}
 EVIDENCE_KINDS = {
-    "accessibility-inspector",
-    "appearance-matrix",
+    "accessibility-summary",
     "artifact-verification",
     "automated-gate",
     "display-metadata",
-    "focus-order",
-    "lifecycle-log",
+    "permission-status",
     "result-sheet",
     "screen-recording",
     "screenshots",
-    "size-scale-matrix",
-    "store-integrity",
-    "unified-log",
 }
 
 
@@ -157,14 +133,6 @@ def non_placeholder(value: Any, label: str) -> str:
     if value.lower() in PLACEHOLDERS:
         fail(f"{label} cannot be a placeholder")
     return value
-
-
-def named_human(value: Any, label: str) -> str:
-    name = non_placeholder(value, label)
-    tokens = re.findall(r"[a-z0-9]+", name.casefold())
-    if not tokens or all(token in GENERIC_HUMAN_NAME_TOKENS for token in tokens):
-        fail(f"{label} must identify a named human, not a generic test identity")
-    return name
 
 
 def valid_datetime(value: Any, label: str) -> str:
@@ -251,7 +219,14 @@ def load_policy() -> dict[str, Any]:
     policy = expect_object(read_json(POLICY_PATH.resolve(), "acceptance policy"), "policy")
     exact_keys(
         policy,
-        {"schema_version", "schema_id", "candidate_identity", "candidate_artifacts", "rows"},
+        {
+            "schema_version",
+            "schema_id",
+            "candidate_identity",
+            "candidate_artifacts",
+            "execution_constraints",
+            "rows",
+        },
         "policy",
     )
     if policy["schema_version"] != 1 or policy["schema_id"] != SCHEMA_ID:
@@ -261,11 +236,19 @@ def load_policy() -> dict[str, Any]:
         fail("policy production identity drifted")
     if policy["candidate_artifacts"] != PUBLISHED_PAYLOAD:
         fail("policy candidate artifacts drifted from the exact published payload")
+    if policy["execution_constraints"] != {
+        "owner": "Ilya Gulya",
+        "mode": "single_owner_first_public_release",
+        "tcc_mutation": "prohibited",
+        "existing_permission_grants": "inspect_without_reset",
+        "fresh_permission_paths": "automated_state_tests",
+    }:
+        fail("policy execution constraints drifted")
     validate_schema_contract()
     rows = expect_object(policy["rows"], "policy.rows")
-    expected_rows = [*(f"M{number:02d}" for number in range(1, 13)), *(f"M{number:02d}" for number in range(17, 21))]
+    expected_rows = ["S01", "S02"]
     if list(rows) != expected_rows:
-        fail("policy rows must be ordered exactly M01-M12,M17-M20")
+        fail("policy rows must be ordered exactly S01,S02")
     for row_id, row_value in rows.items():
         row = expect_object(row_value, f"policy.rows.{row_id}")
         exact_keys(
@@ -576,8 +559,8 @@ def validate_context(value: Any, label: str = "execution context") -> dict[str, 
 
     tester = expect_object(context["tester"], f"{label}.tester")
     exact_keys(tester, {"name", "role"}, f"{label}.tester")
-    named_human(tester["name"], f"{label}.tester.name")
-    non_placeholder(tester["role"], f"{label}.tester.role")
+    if tester != {"name": "Ilya Gulya", "role": "release owner"}:
+        fail(f"{label}.tester must be the exact release owner")
 
     machine = expect_object(context["machine"], f"{label}.machine")
     exact_keys(machine, {"model", "chip", "memory_gib"}, f"{label}.machine")
@@ -637,7 +620,7 @@ def init_manifest(args: argparse.Namespace) -> None:
                 "title": row_policy["title"],
                 "candidate_binding": dict(binding),
                 "classification": {
-                    "acceptance": "named_human_required",
+                    "acceptance": "owner_operated_required",
                     "automation": row_policy["automation"],
                 },
                 "result": "pending",
@@ -739,7 +722,7 @@ def verify_manifest(args: argparse.Namespace) -> None:
     rows = expect_list(manifest["rows"], "manifest.rows")
     expected_row_ids = list(policy["rows"])
     if [row.get("id") if isinstance(row, dict) else None for row in rows] != expected_row_ids:
-        fail("manifest rows must appear exactly once in M01-M12,M17-M20 order")
+        fail("manifest rows must appear exactly once in S01,S02 order")
 
     incomplete: list[str] = []
     for index, row_value in enumerate(rows):
@@ -773,10 +756,10 @@ def verify_manifest(args: argparse.Namespace) -> None:
         classification = expect_object(row["classification"], f"{row_id}.classification")
         exact_keys(classification, {"acceptance", "automation"}, f"{row_id}.classification")
         if classification != {
-            "acceptance": "named_human_required",
+            "acceptance": "owner_operated_required",
             "automation": row_policy["automation"],
         }:
-            fail(f"{row_id} classification cannot replace named-human acceptance")
+            fail(f"{row_id} classification cannot replace owner-operated acceptance")
         validate_context(
             {
                 "tester": row["tester"],
@@ -815,7 +798,7 @@ def verify_manifest(args: argparse.Namespace) -> None:
 
     if incomplete and not args.allow_pending:
         fail(f"final acceptance requires every row to pass; incomplete rows: {','.join(incomplete)}")
-    status = "structurally valid but incomplete" if incomplete else "final human acceptance passed"
+    status = "structurally valid but incomplete" if incomplete else "final owner smoke passed"
     print(f"{SCHEMA_ID}: {status}; candidate {candidate['tag']} {candidate['dmg_sha256']}")
 
 

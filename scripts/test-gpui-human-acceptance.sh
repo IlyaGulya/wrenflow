@@ -138,7 +138,7 @@ rg -F "duplicate JSON key: schema_version" \
 
 jq -S -n '
   {
-    tester:{name:"Ilya Gulya",role:"release acceptance owner"},
+    tester:{name:"Ilya Gulya",role:"release owner"},
     machine:{model:"MacBookPro18,4",chip:"Apple M1 Max",memory_gib:64},
     macos:{version:"26.5.1",build:"25F90"},
     displays:[{
@@ -151,9 +151,8 @@ jq -S -n '
 ' >"$TEST_ROOT/context.json"
 
 for kind in \
-    accessibility-inspector appearance-matrix artifact-verification automated-gate \
-    display-metadata focus-order lifecycle-log result-sheet screen-recording \
-    screenshots size-scale-matrix store-integrity unified-log; do
+    accessibility-summary artifact-verification automated-gate display-metadata \
+    permission-status result-sheet screen-recording screenshots; do
     printf '%s retained fixture\n' "$kind" >"$EVIDENCE/$kind.txt"
 done
 
@@ -207,7 +206,7 @@ for row in manifest["rows"]:
     row_policy = policy["rows"][row["id"]]
     row["result"] = "pass"
     row["executed_at"] = "2026-08-11T12:00:00+06:00"
-    row["notes"] = "Named human completed the retained row procedure."
+    row["notes"] = "Release owner completed the retained first-release smoke."
     row["evidence"] = [descriptor(group[0]) for group in row_policy["required_evidence_groups"]]
     if row_policy["automation"] == "supporting_required":
         row["automated_evidence"] = [descriptor("automated-gate")]
@@ -218,7 +217,7 @@ mise exec -- python3 "$TOOL" verify \
     --candidate-dir "$CANDIDATE" \
     --evidence-root "$EVIDENCE" \
     --manifest "$FINAL" >"$TEST_ROOT/final.out"
-rg -F "final human acceptance passed" "$TEST_ROOT/final.out" >/dev/null
+rg -F "final owner smoke passed" "$TEST_ROOT/final.out" >/dev/null
 
 HASHED="$(mise exec -- python3 "$TOOL" hash-evidence \
     --evidence-root "$EVIDENCE" \
@@ -244,7 +243,7 @@ expect_negative_fixture() {
 }
 
 expect_negative_fixture wrong-candidate-binding.jq "candidate binding"
-expect_negative_fixture automated-human-substitution.jq "cannot replace named-human acceptance"
+expect_negative_fixture automated-human-substitution.jq "cannot replace owner-operated acceptance"
 expect_negative_fixture missing-row.jq "must appear exactly once"
 expect_negative_fixture evidence-hash-mismatch.jq "hash mismatch"
 expect_negative_fixture evidence-path-escape.jq "unsafe path component"
@@ -299,17 +298,17 @@ if mise exec -- python3 "$TOOL" verify \
 fi
 rg -F "contains non-finite JSON number 1e400" "$TEST_ROOT/exponent-overflow.err" >/dev/null
 
-GENERIC_HUMAN="$TEST_ROOT/generic-human.json"
+GENERIC_HUMAN="$TEST_ROOT/wrong-owner.json"
 jq '(.rows[].tester.name) = "Acceptance Tester"' "$FINAL" >"$GENERIC_HUMAN"
 if mise exec -- python3 "$TOOL" verify \
     --candidate-dir "$CANDIDATE" \
     --evidence-root "$EVIDENCE" \
     --manifest "$GENERIC_HUMAN" \
     >"$TEST_ROOT/generic-human.out" 2>"$TEST_ROOT/generic-human.err"; then
-    echo "Verifier accepted a generic named-human placeholder" >&2
+    echo "Verifier accepted a non-owner operator" >&2
     exit 1
 fi
-rg -F "must identify a named human, not a generic test identity" \
+rg -F "tester must be the exact release owner" \
     "$TEST_ROOT/generic-human.err" >/dev/null
 
 expect_candidate_negative() {

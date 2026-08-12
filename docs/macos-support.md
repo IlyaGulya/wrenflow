@@ -16,7 +16,7 @@ value drifts.
 | Install location | `/Applications/Wrenflow.app` or `$HOME/Applications/Wrenflow.app` |
 | Displays | One or two displays; built-in Retina and external 1×/2× backing scales, including scaled desktop modes |
 | Audio input | Built-in microphone or a directly connected CoreAudio USB input that exposes a default input configuration |
-| Application state | Clean install or an update from an earlier GPUI-line Wrenflow release |
+| Application state | Clean first installation of the public GPUI release |
 
 Intel Macs are not supported. The app is not a Universal binary, Rosetta does
 not make an arm64 application runnable on Intel, and the pinned ONNX Runtime
@@ -25,9 +25,9 @@ LaunchServices may present the standard incompatible-application UI; release
 verification rejects an Intel or Universal Mach-O before publication.
 
 Pre-GPUI releases and their data are outside the support contract. There is no
-Flutter-state import, schema migration, downgrade or rollback promise. A user
-moving to the GPUI line starts clean; supported updates only cover GPUI-line
-application versions that use the current data contract.
+Flutter-state import, schema migration, downgrade, rollback, or update-from-beta
+promise. This first public release starts clean; later update compatibility is
+not claimed by this release contract.
 
 ## Display and input boundaries
 
@@ -81,16 +81,11 @@ every shipped Mach-O rather than trusting build settings.
 ## Real-hardware release evidence
 
 CI is sufficient for architecture, deployment floor and clean bundle assembly.
-Each production candidate still needs the signed/notarized clean-machine matrix
-owned by `wrenflow-duh.9.9`. Record the artifact SHA-256, exact macOS version,
-Mac model/chip, memory, display topology/scales, input device/transport and the
-M01–M20 result. Required coverage is:
-
-- one base M1/8 GiB system on the newest macOS 14 point release;
-- one system on current macOS 26;
-- built-in Retina, one external display and a two-display topology;
-- built-in microphone and one ordinary USB CoreAudio microphone/interface;
-- clean install plus an update from the previous GPUI-line candidate.
-
-Do not substitute a cross-compiled binary, a newer OS with a 14.0 deployment
-target, or a virtual audio/display device for those manual rows.
+Each production candidate still needs S01/S02 owner smoke on the available
+physical Apple-Silicon host. Record the artifact SHA-256, exact macOS version,
+Mac model/chip, memory, display topology/scale and the actually used input
+device. This is a clean-install/core-workflow and accessibility/appearance/
+display spot check, not an invented base-M1 physical cohort. The automated
+`macos-14` runner remains the fail-closed minimum-machine build and performance
+gate. Do not substitute a terminal-launched Mach-O for the owner LaunchServices
+observation.

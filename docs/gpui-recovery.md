@@ -70,7 +70,7 @@ mise exec -- cargo test -p wrenflow-runtime update:: -- --test-threads=1
 mise run test-endurance-preflight
 ```
 
-`.9.11` owns the signed human M13/M15 update and crash acceptance on an
-installed candidate; unit tests do not claim that external proof. The exact
-candidate/fault/sleep/device procedure is
-[GPUI current-line endurance and fault acceptance](gpui-endurance-acceptance.md).
+`.9.11` owns the signed L01/L02 clean-install sleep/wake/audio-device and
+disposable current-state recovery smoke plus L03 frozen beta.64 performance
+reuse. Updater fault injection is post-launch P2, not a first-release blocker.
+See [first-public-release lifecycle acceptance](gpui-endurance-acceptance.md).

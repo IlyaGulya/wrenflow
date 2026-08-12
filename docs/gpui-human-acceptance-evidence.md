@@ -1,183 +1,74 @@
-# GPUI M01-M12 and M17-M20 evidence contract
+# First-public-release owner smoke evidence
 
-This contract makes the clean-account and accessibility matrix reproducible.
-It does not execute an acceptance row. The tooling never launches Wrenflow,
-opens System Settings, changes TCC, changes display or accessibility
-preferences, creates users, operates login items, or edits evidence files.
+This is a two-row, owner-operated acceptance contract for the first public GPUI
+release. There are no external testers, installed production cohort, or legacy
+release population. It does not claim a fresh-account matrix that does not
+exist.
 
-The normative versioned sources of truth are:
+The immutable candidate is still bound to all nine release assets, the exact
+source commit, DMG SHA-256, Developer ID team, bundle identifier, Accepted
+notarization submission, and workflow URL. The verifier never launches the app
+or changes macOS settings.
 
-- `support/acceptance/macos-human-v1-policy.json` for row ownership,
-  classification and retained-evidence requirements;
-- `scripts/gpui-human-acceptance.py` for strict payload and evidence
-  verification.
+## Rows
 
-`support/acceptance/macos-human-v1.schema.json` is the reviewable JSON Schema
-mirror of the verifier's closed manifest shape. The verifier pins its exact
-canonical JSON content and fails if the mirror drifts; the Python checks remain
-normative, including constraints that JSON Schema cannot express conveniently.
+| Row | Tracker | Required owner observation |
+| --- | --- | --- |
+| S01 | `wrenflow-duh.9.9` | Clean DMG install and Gatekeeper first open; existing microphone/accessibility grants inspected without reset; physical hotkey, local transcription, controlled paste, Settings, model and History smoke |
+| S02 | `wrenflow-duh.9.10` | Keyboard traversal plus VoiceOver, Light/Dark, one available display/scale and window-size spot checks |
 
-M13 and M22 use the separate evidence verifier described in
-`docs/gpui-endurance-acceptance.md`; M14-M16 and M21 follow the existing
-endurance procedure in that document.
+Both rows are operated by release owner Ilya Gulya on the available physical
+Mac. This is not a tester cohort. A row passes only with its retained result
+sheet, candidate binding, screenshots or recording, required supporting
+evidence, and the automated state-test record.
 
-## Safety boundary
+## TCC boundary
 
-Every M01-M12 and M17-M20 final result is `named_human_required`. Automated
-checks are either required or optional supporting evidence and can never
-replace the tester, execution timestamp, machine/macOS/display context, or
-retained human evidence. `--allow-pending` validates only an in-progress
-manifest and is forbidden as a release gate.
+No acceptance step resets, edits, or fabricates TCC state. Existing grants may
+be inspected and used. If a permission is not granted, the owner records the
+blocked observation; the row does not pass by accepting a prompt or changing
+Privacy settings during the evidence run. Fresh grant, denial, revocation, and
+recovery state transitions are covered by the signed shell/runtime automated
+tests and are attached as supporting evidence. They are not represented as a
+fresh-user manual observation.
 
-The verifier checks that tester name and role are explicit, non-placeholder
-fields and rejects normalized generic test identities. It does not authenticate a person's legal identity, verify a signature,
-or prove who operated the machine. The release owner remains responsible for
-the truthful attribution and retained manual evidence.
+## Evidence workflow
 
-Run candidate steps only after `wrenflow-duh.9.8` publishes the immutable
-Developer ID, Accepted-notarized payload and the product owner authorizes the
-disposable-account/manual procedure owned by `wrenflow-duh.9.9` and
-`wrenflow-duh.9.10`.
-
-## Candidate payload
-
-Place the exact downloaded release payload in a new non-symlink directory. It
-must contain exactly these nine regular, non-symlink files and no others:
-
-- `Wrenflow.dmg`;
-- `Wrenflow.cdx.json`;
-- `RustThirdPartyLicenses.txt`;
-- `pins.json`;
-- `exceptions.json`;
-- `provenance.json`;
-- `artifact-provenance.json`; and
-- `release-evidence.json`; and
-- `SHA256SUMS`.
-
-`SHA256SUMS` must contain exactly one closed-format entry for each of the other
-eight files. The initializer recomputes all eight hashes and also records the
-checksum file's hash. It rejects missing or extra payload files, missing or
-extra checksum entries, duplicate names, symlinks and digest drift.
-
-The initializer cross-checks the release metadata contract: the DMG digest,
-canonical tag/version/build and recorded canonical tag-asset URL; source commit; workflow run
-and attempt; Team `T4LV8K9BGV`; bundle `me.gulya.wrenflow`; recorded Accepted
-Apple submission; and the in-toto/SLSA subject, source dependency, pins,
-workflow and notary bindings. This proves that the retained payload bytes and
-their release metadata agree with one another. It does not independently query
-GitHub or Apple, inspect the app inside the DMG, or prove current code-signing,
-stapling or Gatekeeper behavior.
-
-M01 is the live candidate check for those platform properties. Its retained
-`artifact-verification` and visual evidence must come from mounting the exact
-DMG and performing the authorized signature, notarization/stapling, Gatekeeper,
-installation and first-open procedure on macOS. Payload metadata binding is
-supporting input to M01, not a substitute for that observation.
-
-## Initialize a pending manifest
-
-Create an execution-context JSON file outside the repository. It names the
-person who will actually execute the rows and the exact environment. Example:
+Prepare an absolute non-symlink directory containing the exact nine assets and
+an absolute retained evidence directory. Create a context file whose operator
+is exactly:
 
 ```json
-{
-  "tester": {
-    "name": "Ilya Gulya",
-    "role": "release acceptance owner"
-  },
-  "machine": {
-    "model": "MacBookPro18,4",
-    "chip": "Apple M1 Max",
-    "memory_gib": 64
-  },
-  "macos": {
-    "version": "26.5.1",
-    "build": "25F90"
-  },
-  "displays": [
-    {
-      "name": "Built-in Retina",
-      "pixel_resolution": "3024x1964",
-      "logical_resolution": "1512x982",
-      "scale": 2
-    }
-  ]
-}
+{"tester":{"name":"Ilya Gulya","role":"release owner"}}
 ```
 
-Initialize a new manifest; the output path must not already exist:
+along with the physical machine, macOS, and display fields required by
+`support/acceptance/macos-human-v1.schema.json`.
+
+Create a pending manifest:
 
 ```bash
 mise run human-acceptance -- init \
-  --candidate-dir /absolute/candidate-payload \
-  --evidence-root /absolute/retained-evidence \
-  --context /absolute/execution-context.json \
-  --artifact-url https://github.com/IlyaGulya/wrenflow/releases/download/v0.4.0-beta.1/Wrenflow.dmg \
-  --output /absolute/retained-evidence/macos-human-acceptance-v1.json
+  --candidate-dir /absolute/private-draft-payload \
+  --evidence-root /absolute/owner-smoke \
+  --context /absolute/owner-smoke/context.json \
+  --artifact-url https://github.com/IlyaGulya/wrenflow/releases/download/vX.Y.Z/Wrenflow.dmg \
+  --output /absolute/owner-smoke/owner-smoke-v1.json
 ```
 
-The generated rows are deliberately `pending`. Every row repeats the exact
-candidate binding and execution context, preventing evidence from another
-candidate, tester or host from being mixed into the release decision.
-
-## Retain and bind evidence
-
-Perform the authorized manual procedure without using this verifier to drive
-the system. Keep privacy-reviewed evidence below the declared evidence root.
-Do not retain audio, transcripts, vocabulary, credentials, device identifiers
-or unrestricted paths.
-
-Use the read-only helper to create an evidence descriptor:
-
-```bash
-mise run human-acceptance -- hash-evidence \
-  --evidence-root /absolute/retained-evidence \
-  --kind screen-recording \
-  --relative-path M18/voiceover-run.mp4
-```
-
-Copy the emitted object into the row's `evidence` array. Supporting automated
-artifacts go only in `automated_evidence` and must use kind
-`automated-gate`. Set `executed_at` to an ISO-8601 timestamp with timezone and
-set `result` to `pass`, `fail` or `blocked`. A failed or blocked row requires a
-truthful note. A pass requires every evidence group declared by the policy;
-alternatives such as a screen recording or screenshots are explicit in that
-policy.
-
-Evidence paths are relative to the fixed root. The verifier rejects absolute
-paths, `..`, symlinks, missing/empty files, duplicate paths and SHA-256 drift.
-
-## Verify
-
-An in-progress structural check is:
+Hash retained files with `hash-evidence`, fill only observations that actually
+occurred, then verify:
 
 ```bash
 mise run human-acceptance -- verify \
-  --candidate-dir /absolute/candidate-payload \
-  --evidence-root /absolute/retained-evidence \
-  --manifest /absolute/retained-evidence/macos-human-acceptance-v1.json \
-  --allow-pending
+  --candidate-dir /absolute/private-draft-payload \
+  --evidence-root /absolute/owner-smoke \
+  --manifest /absolute/owner-smoke/owner-smoke-v1.json
 ```
 
-The final release gate omits `--allow-pending`:
+`--allow-pending` is structural review only. It never satisfies release
+acceptance. Unknown fields, missing rows, altered candidate identity, evidence
+hash drift, symlinks, automated-only substitution, or a non-owner operator fail
+closed.
 
-```bash
-mise run human-acceptance -- verify \
-  --candidate-dir /absolute/candidate-payload \
-  --evidence-root /absolute/retained-evidence \
-  --manifest /absolute/retained-evidence/macos-human-acceptance-v1.json
-```
-
-Final verification fails unless all sixteen rows pass, every row binds to the
-exact nine-file candidate payload, every tester/context field is
-non-placeholder, all required human and automated evidence is retained, and
-every file hash still matches. A successful verification proves the retained
-manifest's structural completeness, payload/metadata binding and evidence-file
-integrity. The named human and release owner remain responsible for the
-underlying observations and attribution.
-
-Run deterministic behavior tests with:
-
-```bash
-mise run test-human-acceptance
-```
+Run the contract tests with `mise run test-human-acceptance`.

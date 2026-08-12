@@ -1,6 +1,0 @@
-{
-  "id": "missing-required-stage",
-  "operation": "delete",
-  "path": ["M22", "stages", 3],
-  "value": null
-}

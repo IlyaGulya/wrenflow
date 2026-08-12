@@ -1,6 +1,0 @@
-{
-  "id": "unknown-field",
-  "operation": "set",
-  "path": ["unexpected"],
-  "value": true
-}

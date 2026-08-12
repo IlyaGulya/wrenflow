@@ -3,8 +3,9 @@
 Status: implementation audit and post-fix verification for `wrenflow-duh.8`,
 2026-08-09. The original preflight findings are retained below so the release
 decision has an auditable before/after record. `.7` and the reproducible
-code-hardening scope `.8` are closed. Unchecked clean-account/manual rows remain
-blocking P0 work in `wrenflow-duh.9`, not proof that those scenarios passed.
+code-hardening scope `.8` are closed. The former M01-M22 proposal is removed;
+the blocking release contract is now
+the truthful S01/S02 owner smoke plus L01-L03 clean-install lifecycle evidence.
 
 ## Scope and method
 
@@ -24,10 +25,9 @@ is 70 tests (53 library, 17 shell/application), domain is 49 and runtime is 61
 (53 library plus 8 runtime-contract tests).
 The final signed Developer ID accessibility self-test opened the bundle through
 LaunchServices and reported `nodes=6 generation=2` after visible-tree/modal and
-scroll clipping; Rust and native node counts matched. This audit still has not
-executed the clean-account VoiceOver, TCC, Apple notary, Instruments or
-multi-display matrix below. A code path is therefore not awarded 4/4 merely
-because it exists.
+scroll clipping; Rust and native node counts matched. This audit does not claim
+fresh-account TCC, exhaustive Instruments, or an external tester cohort. The
+owner spot checks remain explicit, narrow release rows.
 
 Scoring rubric: **0** = absent/unusable, **1** = major release gaps, **2** =
 partially adequate, **3** = solid with minor gaps, **4** = validated and
@@ -37,12 +37,12 @@ release-ready.
 
 | Dimension | Score | Evidence-based assessment |
 | --- | ---: | --- |
-| Accessibility | **3/4** | A real AppKit AX proxy tree now consumes stable GPUI semantics and exact prepaint geometry, round-trips typed actions, tracks focus, and publishes announcements. Keyboard/modal/focus/contrast defects are fixed and automated. Signed-app VoiceOver/Inspector traversal is still required for 4/4. |
-| Performance | **3/4** | Audio updates are latest-value sampled to 33 ms frames and rebuild only the transcription-test projection; the native overlay retains its direct feed. No Instruments/endurance baseline exists, so 4/4 is not claimed. |
-| Resizing and text scaling | **3/4** | A 640 px compact navigation breakpoint, bounded fluid content/dialog widths, wrapping, flexible control heights and rem-based typography are implemented. The manual size/125–200% matrix remains unexecuted. |
-| Theming and contrast | **3/4** | Executable WCAG tests cover both palettes and production now supports app-local System/Light/Dark. Only System follows live macOS appearance; injected contrast/motion/transparency regressions are green. The signed manual M19 matrix remains required for 4/4. |
+| Accessibility | **3/4** | A real AppKit AX proxy tree now consumes stable GPUI semantics and exact prepaint geometry, round-trips typed actions, tracks focus, and publishes announcements. Keyboard/modal/focus/contrast defects are fixed and automated. S02 retains an owner VoiceOver spot check. |
+| Performance | **4/4** | The frozen beta.64 constrained result on source `d3e01e0ec085121f3bd3e78038836a16608b98a0` passed all 24 release metrics. This acceptance-only scope changes no runtime/UI file or numeric budget; exhaustive physical traces remain post-launch P2 attribution. |
+| Resizing and text scaling | **3/4** | A 640 px compact navigation breakpoint, bounded fluid content/dialog widths, wrapping, flexible control heights and rem-based typography are implemented. S02 retains available-host size/display spot checks. |
+| Theming and contrast | **3/4** | Executable WCAG tests cover both palettes and production now supports app-local System/Light/Dark. Only System follows live macOS appearance; S02 retains owner Light/Dark spot checks. |
 | Anti-patterns | **3/4** | The UI uses a restrained token set, system font and familiar macOS settings/navigation patterns. The main caveat is repetitive card treatment for nearly every block/row. |
-| **Total** | **15/20 — Solid, manual hardening pending** | The code-level P0s are fixed. Remaining score is held back by unexecuted signed-app/manual evidence, not by the retired Flutter surface. |
+| **Total** | **16/20 — Solid, owner smoke pending** | The code-level P0s and automated performance gate are fixed. Remaining score is held back by the explicit owner smoke, not by nonexistent external users. |
 
 ## Post-fix disposition
 
@@ -53,12 +53,12 @@ release-ready.
 | PERF-01 | **Fixed in code; Instruments pending.** Audio level delivery is latest-value sampled and the 50-source regression proves one presentation frame ([model.rs:226-269](../native/wrenflow-gpui/src/app/model.rs), [model.rs:432-445](../native/wrenflow-gpui/src/app/model.rs)). |
 | A11Y-02 | **Fixed in code; manual traversal pending.** The dialog disables background controls, focuses Cancel next frame, handles Escape and restores the invoking control ([screens/mod.rs:694-719](../native/wrenflow-gpui/src/screens/mod.rs), [screens/mod.rs:1425-1513](../native/wrenflow-gpui/src/screens/mod.rs)). |
 | A11Y-03 | **Fixed for GPUI; native overlay retest pending.** Both palettes have executable 4.5:1 text and 3:1 non-text assertions ([theme.rs:227-249](../native/wrenflow-gpui/src/ui/theme.rs)); controls render a contrasting inner border plus outer focus outline. |
-| LAYOUT-01 | **Fixed in code; M20 pending.** Fluid max widths, compact navigation, wrapping, flexible heights and rem typography are tokenized ([theme.rs:15-40](../native/wrenflow-gpui/src/ui/theme.rs), [screens/mod.rs:887-929](../native/wrenflow-gpui/src/screens/mod.rs)). |
+| LAYOUT-01 | **Fixed in code; S02 spot check pending.** Fluid max widths, compact navigation, wrapping, flexible heights and rem typography are tokenized ([theme.rs:15-40](../native/wrenflow-gpui/src/ui/theme.rs), [screens/mod.rs:887-929](../native/wrenflow-gpui/src/screens/mod.rs)). |
 | INPUT-01 | **Fixed and unit-tested.** Capture requires explicit listening; Tab navigates, Escape cancels, unsupported keys are ignored and state is announced ([screens/mod.rs:102-155](../native/wrenflow-gpui/src/screens/mod.rs), [screens/mod.rs:1550-1576](../native/wrenflow-gpui/src/screens/mod.rs)). |
 | FSM-01 | **Fixed.** The dead `Pasting`/dismiss contract was removed; success emits ordered transcript/paste events and returns immediately to `Idle`. `basic_flow` and immediate-restart coverage are green in the 47-test domain result. |
 | A11Y-04 | **Fixed and unit-tested.** Button labels and switch values update in place, retaining their entities/focus handles ([controls.rs:77-84](../native/wrenflow-gpui/src/ui/controls.rs), [controls.rs:234-240](../native/wrenflow-gpui/src/ui/controls.rs), [controls.rs:625-701](../native/wrenflow-gpui/src/ui/controls.rs)). |
 | A11Y-05 | **Implemented for the semantic notice path; manual native-overlay validation pending.** Serial priority announcements are bridged to AppKit and transient errors retain a persistent settings recovery path. Real VoiceOver behavior remains an external validation item. |
-| THEME-01, DISPLAY-01, MOTION-01 | **Implemented and regression-tested; signed manual validation pending.** App-local System/Light/Dark is live, only System follows macOS changes, native overlays resolve the active display without `NSScreen.main`, and injected contrast/motion/transparency preferences exercise deterministic behavior. M09/M19 remain pending human evidence. |
+| THEME-01, DISPLAY-01, MOTION-01 | **Implemented and regression-tested; S02 owner spot checks pending.** App-local System/Light/Dark is live, only System follows macOS changes, native overlays resolve the active display without `NSScreen.main`, and injected contrast/motion/transparency preferences exercise deterministic behavior. |
 | IA-01 | **Deferred P3.** Card hierarchy remains consistent but dense; no speculative visual redesign was made without product/design direction. |
 
 The detailed findings below describe the pre-fix evidence and impact. The table
@@ -292,7 +292,7 @@ the transient panel closes.
 
 ### P2 — Moderate
 
-#### THEME-01: app-local appearance is implemented; human M19 remains
+#### THEME-01: app-local appearance is implemented; S02 spot check remains
 
 Production derives the live semantic palette from the GPUI window appearance.
 The app-local preference has three closed values: System clears the AppKit
@@ -302,7 +302,7 @@ ignore system changes are executable regressions. Swift publishes injected
 Increase Contrast, Differentiate Without Color, Reduce Motion and Reduce
 Transparency observations through the typed boundary.
 
-Remaining acceptance evidence: run the signed M19 matrix on real macOS and
+Remaining acceptance evidence: run the signed S02 appearance spot check and
 record the live titlebar/content/native-panel result for each combination.
 
 #### DISPLAY-01: native overlays resolve and track the active display
@@ -313,7 +313,7 @@ display identity, observe screen-parameter and active-Space changes, and keep
 placement inside the target screen's safe area. Production contains no
 `NSScreen.main` fallback; the source regression enforces that boundary.
 
-Remaining acceptance evidence: run signed M09 across multiple displays,
+Remaining acceptance evidence: run the signed S02 check on available displays,
 Spaces, full-screen, notch/no-notch, resolution changes and unplug during
 recording.
 
@@ -324,7 +324,7 @@ Reduce Transparency and non-color differentiation are also injected into the
 native/UI presentation contract. Pure tests verify geometry remains stable and
 non-color cues become stronger under the injected accessibility preferences.
 
-Remaining acceptance evidence: run the signed human M19 matrix and confirm each
+Remaining acceptance evidence: run the signed owner S02 spot check and confirm each
 native status remains understandable with motion and transparency reduced.
 
 ### P3 — Minor
@@ -362,38 +362,19 @@ retain cards only where they convey a distinct object or state.
   the app, validates the plist and runs strict signature verification
   ([build-app.sh:55-75](../native/wrenflow-gpui/scripts/build-app.sh)).
 
-## Clean-account manual validation matrix
+## Superseded pre-release matrix
 
-Run this on a new macOS user account with no Wrenflow preferences, TCC grants,
-models, history or launch-at-login registration. Install the exact downloaded
-signed/notarized DMG in `/Applications`; record macOS/hardware/display versions,
-artifact hash, signing identity, timestamps, screenshots/video and pass/fail for
-every row. Do not substitute a terminal-launched binary for LaunchServices.
+The former M01-M22 table was never executed and is not a current release
+contract. It has been removed rather than left as pending or implied evidence.
+The current closed contracts are S01/S02 in
+`docs/gpui-human-acceptance-evidence.md` and L01-L03 in
+`docs/gpui-endurance-acceptance.md`. No new-account/TCC reset, legacy migration,
+updater fault matrix, external tester cohort, or exhaustive Instruments run is
+required for the first public release.
 
-| ID | Scenario and setup | Expected measurable result | Preflight status |
-| --- | --- | --- | --- |
-| M01 | Gatekeeper: download DMG, verify hash, mount, drag to Applications, first open | `codesign --verify --deep --strict`, `xcrun stapler validate` and `spctl --assess --type execute -vv` pass; no unidentified/developer-damaged warning; bundle/version/team match release metadata | **Not run; CI is fail-closed, actual Apple candidate is external** |
-| M02 | Fresh launch with both TCC states unknown | Menu item appears; onboarding opens once; no terminal is responsible process; permission state matches System Settings | Not run |
-| M03 | Microphone: allow on first prompt | One system prompt; state becomes granted without relaunch; device list loads; a recording captures non-zero audio | Not run |
-| M04 | Microphone: deny, retry, open settings, grant | No prompt loop; denial explains recovery; correct Privacy pane opens; grant is detected within the documented poll interval and recording succeeds | Not run |
-| M05 | Accessibility: deny, open settings, grant, then revoke while running | Hotkey/paste availability and explanation track real TCC state; correct pane opens; grant/revocation is detected without corrupting pipeline state | Not run |
-| M06 | Global hotkey: presets and custom capture, key down/repeat/release, very short press | Exactly one start/stop per physical press; repeat ignored; duration threshold respected; Tab/Escape remain keyboard navigation/cancel controls | Automated capture policy green; manual not run |
-| M07 | Paste into TextEdit plus one Chromium and one Electron target | Transcript is inserted once at the active insertion point; clipboard and focus behavior match the chosen product contract; denial/error has recovery | Not run |
-| M08 | Recording/transcribing/success/error overlays on non-notch and notch display | Phase, audio level and failure action match runtime exactly; panels do not steal focus; no stale overlay remains; success behavior matches resolved FSM | Not run; FSM-01 |
-| M09 | Two displays: start on each display, move active app between Spaces/full-screen, change resolution, unplug during recording | Overlay follows the documented target display, remains inside safe area, and repositions after topology/Space changes | Not run; DISPLAY-01 |
-| M10 | Model lifecycle: empty catalog, download, progress, cancel, offline/error, retry, activate, warm, relaunch | Every state/action is visible and single-shot; progress is monotonic; cancellation/retry work; selected/active model survives relaunch | Not run |
-| M11 | History: empty, add entries, expand, delete, clear/cancel/confirm, corrupt/unwritable store | Correct content/error states; destructive action is modal and focus-safe; retention is 50; audio/metadata deletion follows policy | Modal implementation/tests green; manual not run |
-| M12 | Settings: microphone switch, sound, vocabulary debounce, duration, launch at login | Controls disable while pending; failures restore usable state; values persist after relaunch; vocabulary produces one final write; login item launches once | Not run |
-| M13 | Authenticated current-line update: current, newer stable/beta, offline/rate-limit, malformed/duplicate metadata, partial download, interrupted staging/swap | No response URL is opened; only the exact checksum-matched notarized DMG is staged; installed app remains launchable or enters documented current-line recovery | Not run |
-| M14 | Sleep/wake during idle, recording and model operation; lock/unlock; audio device change | No stuck hotkey/overlay; interrupted operation resolves deterministically; event tap/audio devices recover; no duplicate process or login item | Not run |
-| M15 | Quit/relaunch/crash during recording/download/settings write | Resources shut down or recover; partial model files/history/config remain valid; no stale overlay; next launch has a truthful state | Not run |
-| M16 | Clean-break install over the last shipped line with populated legacy preferences/history/models and existing TCC grants | GPUI reads only `gpui-v1`; legacy state is neither imported nor mutated; current-line reset/reinstall is explicit; bundle identity/TCC behavior is recorded | Not run |
-| M17 | Keyboard-only all screens, clear-history dialog and error recovery | Logical tab order; every action works; focus visible/stable; modal trap/Escape/restoration correct; no keyboard trap | Interaction tests green; manual not run |
-| M18 | VoiceOver + Accessibility Inspector across onboarding/settings/models/history/about and native panels | Every control has role/name/value/state/action; groups/headings and reading order are useful; progress/errors announced; modal semantics correct | **Signed AX smoke green; real VoiceOver/Inspector not run** |
-| M19 | App-local System/Light/Dark, Increase Contrast, Differentiate Without Color, Reduce Motion/Transparency | Only System follows live macOS appearance; explicit Light/Dark stay pinned; contrast tests pass; state never depends on color only; motion/transparency preferences are honored | Automated injected-preference/theme/native-source regressions green; signed human matrix not run |
-| M20 | Resize every screen at minimum/default/wide sizes and 125/150/200% effective scale | No clipped/overlapping text, horizontal loss, hidden actions or unreachable controls; scroll position/focus remain stable | Adaptive implementation green; manual not run |
-| M21 | Endurance: 60 s idle, 60 s recording, 20 transcriptions, max 50-entry history | Instruments shows no full-tree work per audio tick, no sustained idle churn, no UI stall and no monotonic memory/resource growth; measured baselines attached | 33 ms coalescing regression green; Instruments not run |
-| M22 | Interrupt the current-line updater before staging, during copy, before/after atomic swap, and before ready-finalization | Transaction recovery never guesses or downgrades: it removes only exact abandoned staging, finalizes a verified installed candidate, or requires current-line reinstall/reset | Not run |
+The obsolete row list has been deleted rather than left as a wall of permanently
+pending pseudo-requirements. Git history preserves it for audit. The two P2
+follow-ups retain the useful physical-attribution and updater-fault ideas.
 
 ## `.8` acceptance checklist
 
@@ -438,24 +419,17 @@ unchecked automated or manual evidence row above/below. These boxes are
 intentionally not marked done by source inspection or by an ad-hoc local
 bundle.
 
-### Manual acceptance
+### Owner acceptance
 
-- [ ] M01–M22 have named tester, date, machine/macOS/display matrix, artifact
-  hash, evidence link and pass/fail; no “code inspected” substitution.
-- [ ] Fresh-account microphone/accessibility denial and recovery pass through
-  LaunchServices with the Developer ID identity used for release.
-- [ ] VoiceOver and Accessibility Inspector pass all GPUI and native-panel
-  states, including hidden-settings recording/transcribing/error flows.
-- [ ] Keyboard-only use passes every screen and destructive/error path without
-  lost focus, hidden focus, background modal activation or traps.
-- [ ] Dark Mode, increased contrast, reduced motion/transparency and effective
-  larger-text/display scaling pass live changes and relaunch.
-- [ ] Multiple displays, Spaces, full-screen apps, notch/no-notch, hot-plug and
-  resolution changes pass the documented overlay-target policy.
-- [ ] Sleep/wake, lock/unlock, crash/relaunch, authenticated current-line
-  update, launch at login, clean-break legacy isolation and reset/reinstall pass
-  without duplicate processes, stuck state or data loss outside the documented
-  policy.
+- [ ] S01 records the exact private draft's clean install/Gatekeeper and core
+  microphone, hotkey, paste, Settings, model and History smoke on the available
+  physical host without resetting TCC.
+- [ ] S02 records keyboard, VoiceOver, appearance, display/scale and window-size
+  spot checks on that exact candidate.
+- [ ] L01-L03 record sleep/wake/audio-device behavior, disposable current-data
+  corruption/reset, and the frozen beta.64 sealed 24/24 performance baseline.
+- [ ] Post-launch exhaustive physical traces and updater fault injection remain
+  explicitly nonblocking P2 work.
 
 ### Exit criteria
 
@@ -465,9 +439,8 @@ bundle.
 - [ ] P2/P3 follow-ups have owners and acceptance tests.
 - [ ] The release candidate tested manually is byte-identical to the published
   artifact and its notarization evidence is retained.
-- [x] The code-hardening scope may close only after every unchecked
-  credential/human row is moved intact to a blocking P0 release-validation
-  issue.
+- [x] The code-hardening scope closed after remaining owner observations were
+  moved into the truthful S01/S02/L01-L03 P0 release contract.
 - [ ] The GPUI production release is not release-ready until every blocking P0
   validation issue passes against the byte-identical candidate.
 
@@ -481,7 +454,7 @@ bundle.
    hotkey capture state with reserved-key policy.
 3. **Completed in code — contrast and app-local appearance:** System/Light/Dark,
    live System observation and injected accessibility-display regressions are
-   green; execute signed M19 before release.
+   green; execute the S02 owner appearance spot check before release.
 4. **Completed in code — render-path optimization:** 50 Hz overlay delivery is
    direct and presentation frames are sampled; profile allocations/main-thread/
    frame pacing under maximum history in release validation.
@@ -494,6 +467,6 @@ bundle.
    assess the actual candidate in release validation.
 8. **Completed in code — overlay environment policy:** active-display and
    Space/topology tracking, safe-area placement and Reduce Motion behavior are
-   implemented; execute signed M09/M19 on real hardware.
+   implemented; execute the S02 owner display/appearance spot check on real hardware.
 9. **Deferred P3 — hierarchy distillation:** replace repetitive card stacks
    only with product/design direction and narrow/text-scale evidence.

@@ -6,17 +6,18 @@ The machine contract is `gpui-performance-v1`. It applies only to the current
 GPUI line and its default pinned Parakeet TDT
 0.6B int8 model. There is no Flutter, legacy-data or pre-GPUI baseline.
 
-The release gate is deliberately stricter than a developer benchmark. A valid
-hybrid result binds the same source commit, complete signed app tree hash,
-executable hash, CDHash and candidate ID on two hosts. `verify --profile
-release` rejects dirty source, ad-hoc signatures, incomplete metrics, changed
-evidence, candidate drift, or evidence recorded on the wrong host class.
+The first-public-release P1 gate is the sealed GitHub-hosted `macos-14`
+constrained result: exactly 24 metrics and 24 evaluated measurements. `verify
+--profile release` rejects dirty source, ad-hoc signatures, incomplete metrics,
+changed evidence, or another host class. The remaining twelve synthetic and
+physical metrics stay versioned as nonblocking post-launch P2 attribution; they
+are not silently treated as completed release evidence.
 
 ## What is and is not minimum-machine evidence
 
 The local development host used to build this harness is a physical 10-core M1
-Max with 64 GiB on macOS 26.5.1. It is the valid Instruments and display/UI
-half of the hybrid gate. Automated hotkey-handler-to-overlay and
+Max with 64 GiB on macOS 26.5.1. It is valid for post-launch Instruments and
+display/UI attribution. Automated hotkey-handler-to-overlay and
 release-handler-to-paste latency comes from the separately classified
 signed-app `post_event_tap_synthetic` phase; it is not real event-tap,
 microphone, external keyboard, TCC or human evidence. The host is not relabeled
@@ -194,7 +195,7 @@ not by leaving an ordinary fresh-account launch running with its required
 Onboarding or Permission Recovery window visible. Standalone resource phases
 remain useful only for additional physical-host attribution. The automated
 60-second hold is owned by the signed synthetic interaction mode below; it
-does not establish M06.
+does not establish S01 owner smoke.
 
 ```bash
 mise run performance-sample -- \
@@ -292,11 +293,9 @@ and only the `top` return code plus a stderr category/hash. Raw stderr, samples,
 diagnostics, app/data paths, transcripts and audio never enter this artifact;
 its presence is diagnostic only and can never satisfy publish or verification.
 
-On the physical host, run 20 real record-release-transcribe-paste cycles as
-human acceptance only under `.9.9` M06. They are not required or inferred by
-the `.9.5` automated latency evidence. No direct runtime command counts as a
-user cycle. Follow the `.9.9` acceptance plan rather than adding those human
-events to the automated `.9.5` result.
+Physical hotkey/record-transcribe-paste is an S01 owner-smoke observation. It
+is not required or inferred by the `.9.5` automated result. No direct runtime
+command counts as a physical user cycle.
 
 The self-test writes 50 acknowledged entries through the normal current-format
 History service; it never imports or clears user/Flutter data. The harness then
@@ -341,9 +340,9 @@ imports only bounded timings and a hash, labels every derived metric
 Wrong, partial or ordinary launches cannot activate the source override. This
 phase proves nothing about incoming CGEvent delivery, the event tap, a physical
 key, actual target insertion, microphone or TCC. Human target-insertion proof
-remains `.9.9` M07; keyboard/microphone/TCC proof remains `.9.9` M06.
+remains S01 owner smoke; TCC state is never reset for that observation.
 
-## Instruments traces and attribution
+## Nonblocking post-launch Instruments traces and attribution
 
 Attach to an already LaunchServices-started exact candidate. The wrapper never
 uses `xctrace --launch`, because launching the Mach-O through Instruments would
@@ -440,7 +439,7 @@ into the retained command above. Both scans surround exactly the same twenty
 digest-verified fixture transcriptions used for resource evidence; accepted
 correlations have paired `transcription_started`/`completed` markers and no
 recording marker. This evidence therefore needs neither a real
-microphone/hotkey nor `.9.9` M06 human cycles.
+microphone/hotkey nor S01 physical cycles.
 
 Both scans must use the same `MallocStackLogging=1` exact LaunchServices
 process. The guard verifies its PID and executable before and after each
@@ -455,9 +454,9 @@ owned by non-blocking `wrenflow-bda`. Raw stacks are never uploaded. The
 RSS/fd/thread growth guards complement this scan.
 
 The standalone `performance-leaks` command remains diagnostic compatibility
-for already-running ordinary candidates, but it is not the `.9.5` physical
-contract and cannot substitute real events or a different PID for the retained
-direct-cycle comparison.
+for already-running ordinary candidates. Neither it nor the retained workflow
+is a first-public-release gate; neither can substitute real events or a
+different PID for its own direct-cycle comparison.
 
 Each trace review must assign observed stacks to one of these owners in its
 notes:
@@ -476,33 +475,27 @@ table.
 
 ## Seal and verify
 
-After every metric and trace is recorded, remove local paths and seal both JSON
-documents with the same candidate ID. Any later edit changes the canonical
-evidence hash and fails release verification; the verifier also rejects
-different source/app hashes or evidence that was not explicitly sanitized.
+The automated release result is sanitized and sealed in CI. Any later edit
+changes the canonical evidence hash and fails release verification. Physical
+post-launch evidence may be sanitized and sealed separately for P2 analysis,
+but it is not supplied to the release profile.
 
 ```bash
 mise exec -- python3 scripts/perf/gpui-performance.py sanitize \
   --result "$WRENFLOW_PERF_CONSTRAINED"
-mise exec -- python3 scripts/perf/gpui-performance.py sanitize \
-  --result "$WRENFLOW_PERF_INTERACTIVE"
 mise exec -- python3 scripts/perf/gpui-performance.py seal \
   --result "$WRENFLOW_PERF_CONSTRAINED" \
-  --candidate-id '<commit>-<dmg-sha256>'
-mise exec -- python3 scripts/perf/gpui-performance.py seal \
-  --result "$WRENFLOW_PERF_INTERACTIVE" \
   --candidate-id '<commit>-<dmg-sha256>'
 
 mise run performance-verify -- \
   --profile release \
   --result "$WRENFLOW_PERF_CONSTRAINED" \
-  --companion-result "$WRENFLOW_PERF_INTERACTIVE" \
   --report "$WRENFLOW_PERF_DIR/verification.json"
 ```
 
-`performance-verify` requires every v1 numeric metric on the host class named
-by `evidence_policy` and evaluates every matching measurement, so a faster host
-cannot hide a constrained failure. A GitHub probe without the full workload,
-Tart result, incomplete physical phase, unsigned app, dirty commit or unsealed
-JSON may be attached for diagnosis but cannot be reported as a pass. Final
-immutable-candidate M21 acceptance remains owned by `.9.11`.
+`performance-verify --profile release` requires all 24 constrained metrics and
+evaluates every matching measurement, so a faster host cannot hide a failure.
+A GitHub probe without the full workload, Tart result, physical trace, unsigned
+app, dirty commit or unsealed JSON may be retained for diagnosis but cannot be
+reported as this release pass. `.9.11` reuses the frozen beta.64 24/24 baseline;
+it does not invent a separate physical-performance blocker.

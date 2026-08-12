@@ -1,6 +1,0 @@
-{
-  "id": "malformed-evidence-hash",
-  "operation": "set",
-  "path": ["M22", "stages", 0, "sigkill", "sha256"],
-  "value": "not-a-sha256"
-}

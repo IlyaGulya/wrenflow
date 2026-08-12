@@ -1,6 +1,0 @@
-{
-  "id": "duplicate-evidence-file",
-  "operation": "set",
-  "path": ["M22", "stages", 1, "journal", "file"],
-  "value": "m22-staging-journal.json"
-}
