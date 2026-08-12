@@ -108,6 +108,9 @@ require_frozen_stable_baseline_contract() {
     [[ "$(grep -Fxc -- "    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag == ''" "$file")" -eq 2 ]] || return 1
     grep -Fqx -- '      verifier_source_commit: e233cc6db6b37307e9774db228ab11ecc4d0673c' "$release_file" || return 1
     [[ "$(grep -Fxc -- '      verifier_source_commit: e233cc6db6b37307e9774db228ab11ecc4d0673c' "$release_file")" -eq 1 ]] || return 1
+    grep -Fqx -- '      actions: read' "$release_file" || return 1
+    [[ "$(grep -Fxc -- '      actions: read' "$release_file")" -eq 1 ]] || return 1
+    ! grep -Fqx -- '      actions: write' "$release_file"
 }
 
 require_pattern "workflow_call:" "$BUILD_WORKFLOW"
@@ -408,6 +411,7 @@ done
 require_pattern '"draft": true' "$RELEASE_CONFIG"
 require_pattern "build-staged-stable-release:" "$RELEASE_WORKFLOW"
 require_pattern "if: needs.release-please.outputs.release_created == 'true'" "$RELEASE_WORKFLOW"
+require_pattern "      actions: read" "$RELEASE_WORKFLOW"
 require_pattern "uses: ./.github/workflows/build.yml" "$RELEASE_WORKFLOW"
 require_pattern "release_tag: \${{ needs.release-please.outputs.tag_name }}" "$RELEASE_WORKFLOW"
 require_pattern "source_commit: \${{ steps.release.outputs.sha }}" "$RELEASE_WORKFLOW"
@@ -511,6 +515,13 @@ sed 's/verifier_source_commit: e233cc6db6b37307e9774db228ab11ecc4d0673c/verifier
     > "$REPO_SCOPE_FIXTURE/release-frozen-floating-mutated.yml"
 expect_frozen_contract_rejected floating-automatic-verifier \
     "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/release-frozen-floating-mutated.yml"
+
+cp "$RELEASE_WORKFLOW" "$REPO_SCOPE_FIXTURE/release-frozen-actions.yml"
+sed 's/^      actions: read$/      actions: write/' \
+    "$REPO_SCOPE_FIXTURE/release-frozen-actions.yml" \
+    > "$REPO_SCOPE_FIXTURE/release-frozen-actions-mutated.yml"
+expect_frozen_contract_rejected writable-artifact-permission \
+    "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/release-frozen-actions-mutated.yml"
 
 validate_empty_tagless_draft_fixture() {
     local release_json="$1"

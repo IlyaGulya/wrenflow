@@ -31,6 +31,7 @@ jobs:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
     permissions:
+      actions: read
       contents: write
     uses: ./.github/workflows/build.yml
     with:
