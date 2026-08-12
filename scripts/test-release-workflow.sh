@@ -26,6 +26,36 @@ reject_pattern() {
     fi
 }
 
+require_repo_scoped_gh_release_commands() {
+    local file="$1"
+    local command=""
+    local line
+    while IFS= read -r line; do
+        if [[ -z "$command" ]]; then
+            if [[ "$line" != *"gh release "* ]]; then
+                continue
+            fi
+            command="$line"
+        else
+            command="$command
+$line"
+        fi
+        if [[ "$line" == *'\' ]]; then
+            continue
+        fi
+        if [[ "$command" != *'--repo "$GITHUB_REPOSITORY"'* ]]; then
+            echo "GitHub release command is not explicitly repository-scoped in $file:" >&2
+            echo "$command" >&2
+            exit 1
+        fi
+        command=""
+    done < "$file"
+    if [[ -n "$command" ]]; then
+        echo "Unterminated GitHub release command in $file" >&2
+        exit 1
+    fi
+}
+
 require_pattern "workflow_call:" "$BUILD_WORKFLOW"
 require_pattern "release_tag:" "$BUILD_WORKFLOW"
 require_pattern "IS_RELEASE: \${{ inputs.release_tag != '' }}" "$BUILD_WORKFLOW"
@@ -99,6 +129,9 @@ require_pattern "cd build/release-payload && shasum -a 256 -c SHA256SUMS" "$BUIL
 require_pattern "Refuse to overwrite staged or published candidate bytes" "$BUILD_WORKFLOW"
 require_pattern "Stable release must be an empty release-please draft" "$BUILD_WORKFLOW"
 require_pattern 'gh release upload "$RELEASE_TAG" release-payload/*' "$BUILD_WORKFLOW"
+require_pattern 'elif gh release view "$PUBLISH_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then' "$BUILD_WORKFLOW"
+require_pattern 'gh release create "$PUBLISH_TAG" release-payload/*' "$BUILD_WORKFLOW"
+require_pattern '            --repo "$GITHUB_REPOSITORY" \' "$BUILD_WORKFLOW"
 require_pattern '.isDraft == true and .isPrerelease == false' "$BUILD_WORKFLOW"
 require_pattern '--target "$SOURCE_COMMIT"' "$BUILD_WORKFLOW"
 require_pattern 'ref: ${{ needs.build_release.outputs.source_commit }}' "$BUILD_WORKFLOW"
@@ -300,5 +333,74 @@ require_pattern "retention-days: 30" "$PROMOTION_WORKFLOW"
 reject_pattern "mise run build" "$PROMOTION_WORKFLOW"
 reject_pattern "gh release upload" "$PROMOTION_WORKFLOW"
 reject_pattern "--clobber" "$PROMOTION_WORKFLOW"
+require_repo_scoped_gh_release_commands "$BUILD_WORKFLOW"
+require_repo_scoped_gh_release_commands "$PROMOTION_WORKFLOW"
+
+
+REPO_SCOPE_FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/wrenflow-release-repo-scope.XXXXXX")"
+cleanup_repo_scope_fixture() { rm -rf -- "$REPO_SCOPE_FIXTURE"; }
+trap cleanup_repo_scope_fixture EXIT
+
+expect_repo_scope_rejected() {
+    local label="$1"
+    local workflow="$2"
+    if (require_repo_scoped_gh_release_commands "$workflow") \
+        >"$REPO_SCOPE_FIXTURE/$label.stdout" 2>"$REPO_SCOPE_FIXTURE/$label.stderr"; then
+        echo "Release workflow repository-scope audit accepted $label" >&2
+        exit 1
+    fi
+    rg -F "GitHub release command is not explicitly repository-scoped" \
+        "$REPO_SCOPE_FIXTURE/$label.stderr" >/dev/null
+}
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-create.yml"
+mise exec -- python3 - "$REPO_SCOPE_FIXTURE/build-create.yml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+lines = path.read_text().splitlines(keepends=True)
+create_index = next(
+    index
+    for index, line in enumerate(lines)
+    if 'gh release create "$PUBLISH_TAG" release-payload/*' in line
+)
+scope_index = create_index + 1
+if '--repo "$GITHUB_REPOSITORY"' not in lines[scope_index]:
+    raise SystemExit("beta release create repository scope fixture drifted")
+del lines[scope_index]
+path.write_text("".join(lines))
+PY
+expect_repo_scope_rejected unscoped-beta-create "$REPO_SCOPE_FIXTURE/build-create.yml"
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-view.yml"
+mise exec -- python3 - "$REPO_SCOPE_FIXTURE/build-view.yml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text()
+needle = 'gh release view "$PUBLISH_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1'
+replacement = 'gh release view "$PUBLISH_TAG" >/dev/null 2>&1'
+if source.count(needle) != 1:
+    raise SystemExit("beta release view repository scope fixture drifted")
+path.write_text(source.replace(needle, replacement, 1))
+PY
+expect_repo_scope_rejected unscoped-beta-view "$REPO_SCOPE_FIXTURE/build-view.yml"
+
+cp "$PROMOTION_WORKFLOW" "$REPO_SCOPE_FIXTURE/promote-stable.yml"
+mise exec -- python3 - "$REPO_SCOPE_FIXTURE/promote-stable.yml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text()
+needle = 'gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"'
+replacement = 'gh release edit "$RELEASE_TAG"'
+if source.count(needle) != 1:
+    raise SystemExit("stable promotion repository scope fixture drifted")
+path.write_text(source.replace(needle, replacement, 1))
+PY
+expect_repo_scope_rejected unscoped-stable-edit "$REPO_SCOPE_FIXTURE/promote-stable.yml"
 
 echo "Release workflow trigger and fail-closed artifact invariants are wired"

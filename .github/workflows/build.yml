@@ -675,7 +675,7 @@ jobs:
               echo "Stable release must be an empty release-please draft; refusing mutation" >&2
               exit 1
             fi
-          elif gh release view "$PUBLISH_TAG" >/dev/null 2>&1; then
+          elif gh release view "$PUBLISH_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Beta release $PUBLISH_TAG already exists; refusing replacement" >&2
             exit 1
           fi
@@ -710,6 +710,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "$PUBLISH_TAG" release-payload/* \
+            --repo "$GITHUB_REPOSITORY" \
             --target "$SOURCE_COMMIT" \
             --title "Wrenflow $PUBLISH_TAG" \
             --prerelease \
