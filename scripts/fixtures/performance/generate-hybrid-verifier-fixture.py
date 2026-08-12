@@ -64,6 +64,84 @@ def idle_phase_and_metrics():
     return phase, metrics
 
 
+def launch_sample(index, latency, *, shutdown=False, fresh_runner_id=None, shard_digest=None):
+    started = 10_000_000 + index * 10_000
+    sample = {
+        "started_at_unix_ms": started,
+        "startup_diagnostic_at_unix_ms": started + 100,
+        "menu_bar_ready_at_unix_ms": started + 300,
+        "terminal_policy_ready_at_unix_ms": started + 350,
+        "launch_services_observed_at_unix_ms": started + latency,
+        "ready_at_unix_ms": started + latency,
+        "terminal_application_type": "Foreground",
+        "latency_ms": latency,
+        "session_id": f"s-{index:016x}",
+        "stages_ms": {
+            "external_open_to_startup_ms": 100,
+            "startup_to_menu_bar_ms": 200,
+            "menu_bar_to_terminal_policy_ms": 50,
+            "terminal_policy_to_launch_services_ms": latency - 350,
+            "total_ms": latency,
+        },
+    }
+    if shutdown:
+        sample.update({
+            "typed_shutdown_requested_at_unix_ms": started + latency + 1,
+            "process_terminated_at_unix_ms": started + latency + 2,
+            "launch_services_deregistered_at_unix_ms": started + latency + 3,
+        })
+    if fresh_runner_id is not None:
+        sample["fresh_runner_id"] = fresh_runner_id
+    if shard_digest is not None:
+        sample["shard_evidence_sha256"] = shard_digest
+    return sample
+
+
+def launch_phases_and_metrics():
+    priming = {
+        "contract": "unmeasured-route-aware-exact-candidate-v1",
+        "metric_contribution": False,
+        **launch_sample(1, 500, shutdown=True),
+    }
+    warm = [launch_sample(index + 2, 500, shutdown=True) for index in range(10)]
+    for index, sample in enumerate(warm):
+        if index == 0:
+            previous_deregistered = priming["launch_services_deregistered_at_unix_ms"]
+        else:
+            previous_deregistered = warm[index - 1][
+                "launch_services_deregistered_at_unix_ms"
+            ]
+        if sample["started_at_unix_ms"] < previous_deregistered:
+            raise AssertionError("synthetic launch epochs overlap")
+    cold = [
+        launch_sample(
+            index + 20,
+            1_000,
+            fresh_runner_id=f"gh-12345-1-cold-{index + 1}",
+            shard_digest=f"{index + 1:064x}",
+        )
+        for index in range(5)
+    ]
+    phases = {
+        "launch_warm": {
+            "phase": "launch_warm",
+            "definition": "ten measured exact signed LaunchServices restarts after one excluded route-aware priming launch",
+            "priming": priming,
+            "samples": warm,
+        },
+        "launch_cold": {
+            "phase": "launch_cold",
+            "definition": "one exact signed LaunchServices launch on each of five fresh GitHub-hosted macos-14 runners",
+            "samples": cold,
+        },
+    }
+    metrics = {
+        "launch.warm.p95_ms": {"value": 500.0, "sample_count": 10, "evidence": []},
+        "launch.cold.p95_ms": {"value": 1_000.0, "sample_count": 5, "evidence": []},
+    }
+    return phases, metrics
+
+
 def make_result(role, budgets):
     metrics = {}
     assigned = set(budgets["evidence_policy"][role])
@@ -92,6 +170,9 @@ def make_result(role, budgets):
         idle_phase, idle_metrics = idle_phase_and_metrics()
         phases["idle"] = idle_phase
         metrics.update(idle_metrics)
+        launch_phases, launch_metrics = launch_phases_and_metrics()
+        phases.update(launch_phases)
+        metrics.update(launch_metrics)
     eligibility = {
         "github_m1_7gb_constrained_preflight": role == "constrained_noninteractive",
         "physical_supported_interactive": role == "physical_interactive",

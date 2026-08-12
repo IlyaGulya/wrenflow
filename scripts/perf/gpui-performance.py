@@ -71,6 +71,7 @@ SAMPLING_DEADLINE_EXTRA_INTERVALS = 2.0
 TOP_EVENT_COUNT_MODE = "e"
 SELF_TEST_AUTO_EXIT_GRACE_SECONDS = 30.0
 LSAPPINFO_TIMEOUT_SECONDS = 2.0
+LAUNCH_SERVICES_DEREGISTRATION_TIMEOUT_SECONDS = 10.0
 WINDOW_POLICY_APPLICATION_TYPES = {
     "window_policy_accessory_ready": "UIElement",
     "window_policy_foreground_ready": "Foreground",
@@ -80,6 +81,14 @@ HUMAN_COLD_DEFINITION = (
 )
 CONSTRAINED_COLD_DEFINITION = (
     "machine-verified exact signed LaunchServices launch on one fresh GitHub-hosted macos-14 runner"
+)
+WARM_LAUNCH_DEFINITION = (
+    "ten measured exact signed LaunchServices restarts after one excluded route-aware priming launch"
+)
+WARM_PRIMING_CONTRACT = "unmeasured-route-aware-exact-candidate-v1"
+MALLOC_LAUNCH_DEFINITION = "retained MallocStackLogging LaunchServices launch"
+AGGREGATED_COLD_DEFINITION = (
+    "one exact signed LaunchServices launch on each of five fresh GitHub-hosted macos-14 runners"
 )
 PHASES = {
     "idle",
@@ -2402,7 +2411,11 @@ def add_history_count(result: dict[str, Any], path: pathlib.Path) -> None:
 
 def launch_diagnostic_state(
     path: pathlib.Path, after_ms: int
-) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None]:
+) -> tuple[
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+]:
     records = read_diagnostics(path, after_ms)
     startups = [
         record
@@ -2433,8 +2446,8 @@ def launch_diagnostic_state(
             ),
             None,
         )
-        return True, ready, terminal
-    return bool(startups), None, None
+        return startup, ready, terminal
+    return (startups[-1] if startups else None), None, None
 
 
 def sanitized_launch_services_state(
@@ -2461,8 +2474,14 @@ def sanitized_launch_services_state(
         if len(matches) == 1:
             values[key] = matches[0]
     nonempty_lines = [line for line in output.splitlines() if line.strip()]
+    null_field_count = sum(
+        len(re.findall(rf'(?m)^"{re.escape(key)}"=\[ NULL \]\s*$', output.strip()))
+        for key in expected_fields
+    )
     if not nonempty_lines:
         stdout_shape = "empty"
+    elif null_field_count == len(expected_fields) and len(nonempty_lines) == len(expected_fields):
+        stdout_shape = "null_fields"
     elif any(count > 1 for count in match_counts.values()):
         stdout_shape = "duplicate_fields"
     elif any(count == 0 for count in match_counts.values()):
@@ -2558,6 +2577,54 @@ def launch_services_state_matches(
         and state.get("bundle_path_matches") is True
         and state.get("pid_matches") is True
         and state.get("application_type") == expected_type
+    )
+
+
+def launch_services_record_absent(state: dict[str, Any]) -> bool:
+    return (
+        state.get("application_type") == "missing"
+        and state.get("bundle_id_matches") is False
+        and state.get("bundle_path_matches") is False
+        and state.get("pid_matches") is False
+        and (
+            (
+                state.get("stdout_shape") == "null_fields"
+                and state.get("returncode") == 0
+                and state.get("stderr_category") == "empty"
+            )
+            or (
+                state.get("stdout_shape") == "empty"
+                and isinstance(state.get("returncode"), int)
+                and state.get("returncode") != 0
+                and state.get("stderr_category") == "not_found"
+            )
+        )
+    )
+
+
+def wait_for_launch_services_deregistration(
+    *,
+    app: pathlib.Path,
+    pid: int,
+    timeout_seconds: float = LAUNCH_SERVICES_DEREGISTRATION_TIMEOUT_SECONDS,
+) -> int:
+    deadline = time.monotonic() + timeout_seconds
+    last_state: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        last_state = query_launch_services_state(app=app, pid=pid)
+        if launch_services_record_absent(last_state):
+            return int(time.time() * 1000)
+        if last_state.get("stderr_category") in {
+            "permission_denied",
+            "invocation_failed",
+            "other",
+        }:
+            break
+        time.sleep(0.05)
+    sanitized = json.dumps(last_state, sort_keys=True, separators=(",", ":"))
+    raise EvidenceError(
+        "typed shutdown completed but LaunchServices did not prove exact PID deregistration; "
+        f"sanitized state={sanitized}"
     )
 
 
@@ -2671,6 +2738,300 @@ def launch_ready_at_ms(
     return max(terminal_policy_ready_ms, launch_services_observed_ms)
 
 
+def launch_stage_durations(sample: dict[str, Any]) -> dict[str, int]:
+    started = sample["started_at_unix_ms"]
+    startup = sample["startup_diagnostic_at_unix_ms"]
+    menu = sample["menu_bar_ready_at_unix_ms"]
+    terminal = sample["terminal_policy_ready_at_unix_ms"]
+    launch_services = sample["launch_services_observed_at_unix_ms"]
+    return {
+        "external_open_to_startup_ms": startup - started,
+        "startup_to_menu_bar_ms": menu - startup,
+        "menu_bar_to_terminal_policy_ms": terminal - menu,
+        "terminal_policy_to_launch_services_ms": launch_services - terminal,
+        "total_ms": sample["ready_at_unix_ms"] - started,
+    }
+
+
+LAUNCH_SAMPLE_KEYS = {
+    "started_at_unix_ms",
+    "startup_diagnostic_at_unix_ms",
+    "ready_at_unix_ms",
+    "menu_bar_ready_at_unix_ms",
+    "terminal_policy_ready_at_unix_ms",
+    "launch_services_observed_at_unix_ms",
+    "terminal_application_type",
+    "latency_ms",
+    "session_id",
+    "stages_ms",
+}
+LAUNCH_SHUTDOWN_KEYS = {
+    "typed_shutdown_requested_at_unix_ms",
+    "process_terminated_at_unix_ms",
+    "launch_services_deregistered_at_unix_ms",
+}
+LAUNCH_STAGE_KEYS = {
+    "external_open_to_startup_ms",
+    "startup_to_menu_bar_ms",
+    "menu_bar_to_terminal_policy_ms",
+    "terminal_policy_to_launch_services_ms",
+    "total_ms",
+}
+
+
+def validate_launch_sample(
+    sample: Any,
+    *,
+    expected_keys: set[str],
+    require_shutdown: bool,
+) -> None:
+    if not isinstance(sample, dict) or set(sample) != expected_keys:
+        raise EvidenceError("launch sample has an unexpected closed shape")
+    timestamp_keys = (
+        "started_at_unix_ms",
+        "startup_diagnostic_at_unix_ms",
+        "menu_bar_ready_at_unix_ms",
+        "terminal_policy_ready_at_unix_ms",
+        "launch_services_observed_at_unix_ms",
+        "ready_at_unix_ms",
+        "latency_ms",
+    )
+    values = [sample.get(key) for key in timestamp_keys]
+    if not all(isinstance(value, int) and not isinstance(value, bool) for value in values):
+        raise EvidenceError("launch sample timings are not exact integers")
+    started, startup, menu, terminal, launch_services, ready, latency = values
+    if (
+        started < 0
+        or startup < started
+        or menu < startup
+        or terminal < menu
+        or launch_services < terminal
+        or ready != launch_ready_at_ms(terminal, launch_services)
+        or latency != ready - started
+    ):
+        raise EvidenceError("launch sample timestamps are inconsistent")
+    if sample.get("terminal_application_type") not in WINDOW_POLICY_APPLICATION_TYPES.values():
+        raise EvidenceError("launch sample has an invalid terminal ApplicationType")
+    if not re.fullmatch(r"s-[0-9a-f]{16}", sample.get("session_id", "")):
+        raise EvidenceError("launch sample has an invalid session ID")
+    stages = sample.get("stages_ms")
+    if not isinstance(stages, dict) or set(stages) != LAUNCH_STAGE_KEYS:
+        raise EvidenceError("launch sample stages have an unexpected closed shape")
+    if stages != launch_stage_durations(sample):
+        raise EvidenceError("launch sample stages differ from their timestamps")
+    if require_shutdown:
+        shutdown_values = [
+            sample.get("typed_shutdown_requested_at_unix_ms"),
+            sample.get("process_terminated_at_unix_ms"),
+            sample.get("launch_services_deregistered_at_unix_ms"),
+        ]
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool)
+            for value in shutdown_values
+        ):
+            raise EvidenceError("launch shutdown proof is not exact integer evidence")
+        shutdown_requested, process_terminated, deregistered = shutdown_values
+        if not (
+            ready <= shutdown_requested <= process_terminated <= deregistered
+        ):
+            raise EvidenceError("launch shutdown proof is not ordered after readiness")
+
+
+def check_launch_sampling(result: dict[str, Any], label: str) -> list[str]:
+    try:
+        phases = result.get("phases", {})
+        metrics = result.get("metrics", {})
+        warm = phases.get("launch_warm")
+        if (warm is None) != (metrics.get("launch.warm.p95_ms") is None):
+            raise EvidenceError("warm launch phase and metric presence differ")
+        if warm is not None:
+            if warm.get("malloc_stack_logging") is True:
+                if (
+                    set(warm)
+                    != {
+                        "phase",
+                        "definition",
+                        "samples",
+                        "malloc_stack_logging",
+                    }
+                    or warm.get("phase") != "launch_warm"
+                    or warm.get("definition") != MALLOC_LAUNCH_DEFINITION
+                ):
+                    raise EvidenceError("stack-logged launch has an invalid closed shape")
+                samples = warm.get("samples")
+                if not isinstance(samples, list) or len(samples) != 1:
+                    raise EvidenceError("stack-logged launch requires exactly one retained sample")
+                validate_launch_sample(
+                    samples[0],
+                    expected_keys=LAUNCH_SAMPLE_KEYS,
+                    require_shutdown=False,
+                )
+                metric = metrics.get("launch.warm.p95_ms")
+                if (
+                    not isinstance(metric, dict)
+                    or metric.get("sample_count") != 1
+                    or float(metric.get("value", -1))
+                    != float(samples[0]["latency_ms"])
+                ):
+                    raise EvidenceError("stack-logged launch metric differs from its retained sample")
+            else:
+                if set(warm) != {"phase", "definition", "priming", "samples"}:
+                    raise EvidenceError("warm launch phase has an unexpected closed shape")
+                if warm.get("phase") != "launch_warm" or warm.get("definition") != WARM_LAUNCH_DEFINITION:
+                    raise EvidenceError("warm launch phase has an invalid definition")
+                priming = warm.get("priming")
+                priming_keys = LAUNCH_SAMPLE_KEYS | LAUNCH_SHUTDOWN_KEYS | {
+                    "contract",
+                    "metric_contribution",
+                }
+                validate_launch_sample(
+                    priming,
+                    expected_keys=priming_keys,
+                    require_shutdown=True,
+                )
+                if (
+                    priming.get("contract") != WARM_PRIMING_CONTRACT
+                    or priming.get("metric_contribution") is not False
+                ):
+                    raise EvidenceError("warm priming proof can contribute to the metric")
+                samples = warm.get("samples")
+                if not isinstance(samples, list) or len(samples) != 10:
+                    raise EvidenceError("warm launch requires exactly ten measured restarts")
+                previous = priming
+                sessions = {priming["session_id"]}
+                for sample in samples:
+                    validate_launch_sample(
+                        sample,
+                        expected_keys=LAUNCH_SAMPLE_KEYS | LAUNCH_SHUTDOWN_KEYS,
+                        require_shutdown=True,
+                    )
+                    if sample["session_id"] in sessions:
+                        raise EvidenceError("warm launch reuses a diagnostic session")
+                    if sample["started_at_unix_ms"] < previous["launch_services_deregistered_at_unix_ms"]:
+                        raise EvidenceError("warm restart began before prior LaunchServices deregistration")
+                    sessions.add(sample["session_id"])
+                    previous = sample
+                metric = metrics.get("launch.warm.p95_ms")
+                expected_value = percentile(sample["latency_ms"] for sample in samples)
+                if (
+                    not isinstance(metric, dict)
+                    or metric.get("sample_count") != 10
+                    or float(metric.get("value", -1)) != float(expected_value)
+                ):
+                    raise EvidenceError("warm launch metric differs from its ten measured restarts")
+
+        cold = phases.get("launch_cold")
+        if (cold is None) != (metrics.get("launch.cold.p95_ms") is None):
+            raise EvidenceError("cold launch phase and metric presence differ")
+        if cold is not None:
+            if set(cold) != {"phase", "definition", "samples"} or cold.get("phase") != "launch_cold":
+                raise EvidenceError("cold launch phase has an unexpected closed shape")
+            definition = cold.get("definition")
+            samples = cold.get("samples")
+            if not isinstance(samples, list):
+                raise EvidenceError("cold launch samples are missing")
+            if definition == CONSTRAINED_COLD_DEFINITION:
+                expected_count = 1
+                extra_keys = {"fresh_runner_id"}
+            elif definition == AGGREGATED_COLD_DEFINITION:
+                expected_count = 5
+                extra_keys = {"fresh_runner_id", "shard_evidence_sha256"}
+            elif definition == HUMAN_COLD_DEFINITION:
+                expected_count = 1
+                extra_keys = set()
+            else:
+                raise EvidenceError("cold launch phase has an invalid definition")
+            if len(samples) != expected_count:
+                raise EvidenceError("cold launch sample count differs from its definition")
+            runner_ids: set[str] = set()
+            for sample in samples:
+                validate_launch_sample(
+                    sample,
+                    expected_keys=LAUNCH_SAMPLE_KEYS | extra_keys,
+                    require_shutdown=False,
+                )
+                if "fresh_runner_id" in extra_keys:
+                    runner_id = sample.get("fresh_runner_id", "")
+                    if not re.fullmatch(r"gh-[0-9]+-[0-9]+-cold-[1-5]", runner_id):
+                        raise EvidenceError("cold launch has an invalid fresh runner ID")
+                    if runner_id in runner_ids:
+                        raise EvidenceError("cold launch reuses a fresh runner ID")
+                    runner_ids.add(runner_id)
+                if "shard_evidence_sha256" in extra_keys and not re.fullmatch(
+                    r"[0-9a-f]{64}", sample.get("shard_evidence_sha256", "")
+                ):
+                    raise EvidenceError("aggregated cold launch has an invalid shard digest")
+            metric = metrics.get("launch.cold.p95_ms")
+            expected_value = percentile(sample["latency_ms"] for sample in samples)
+            if (
+                not isinstance(metric, dict)
+                or metric.get("sample_count") != expected_count
+                or float(metric.get("value", -1)) != float(expected_value)
+            ):
+                raise EvidenceError("cold launch metric differs from its raw samples")
+    except (EvidenceError, KeyError, TypeError, ValueError) as error:
+        return [f"{label}: {error}"]
+    return []
+
+
+def observe_launch_sample(
+    *,
+    app: pathlib.Path,
+    identity: dict[str, Any],
+    diagnostics: pathlib.Path,
+    timeout_seconds: float,
+    malloc_stack_logging: bool = False,
+) -> tuple[dict[str, Any], int]:
+    started_ms = int(time.time() * 1000)
+    launch_command = ["/usr/bin/open", "-n"]
+    if malloc_stack_logging:
+        launch_command.extend(["--env", "MallocStackLogging=1"])
+    launch_command.append(str(app))
+    subprocess.run(launch_command, check=True)
+    observation = wait_for_route_aware_launch(
+        app=app,
+        identity=identity,
+        diagnostics=diagnostics,
+        started_ms=started_ms,
+        timeout_seconds=timeout_seconds,
+    )
+    startup = observation["startup"]
+    ready = observation["ready"]
+    terminal = observation["terminal"]
+    launch_services_observed_ms = observation["launch_services_observed_at_unix_ms"]
+    ready_at_ms = launch_ready_at_ms(
+        terminal["timestamp_unix_ms"], launch_services_observed_ms
+    )
+    latency = ready_at_ms - started_ms
+    if latency < 0:
+        raise EvidenceError("wall clock moved backwards during launch measurement")
+    sample = {
+        "started_at_unix_ms": started_ms,
+        "startup_diagnostic_at_unix_ms": startup["timestamp_unix_ms"],
+        "ready_at_unix_ms": ready_at_ms,
+        "menu_bar_ready_at_unix_ms": ready["timestamp_unix_ms"],
+        "terminal_policy_ready_at_unix_ms": terminal["timestamp_unix_ms"],
+        "launch_services_observed_at_unix_ms": launch_services_observed_ms,
+        "terminal_application_type": WINDOW_POLICY_APPLICATION_TYPES[terminal["code"]],
+        "latency_ms": latency,
+        "session_id": ready.get("session_id"),
+    }
+    sample["stages_ms"] = launch_stage_durations(sample)
+    return sample, observation["pid"]
+
+
+def terminate_and_deregister_launch(
+    *, app: pathlib.Path, identity: dict[str, Any], pid: int
+) -> dict[str, int]:
+    shutdown_requested, terminated = terminate_exact(identity, pid)
+    deregistered = wait_for_launch_services_deregistration(app=app, pid=pid)
+    return {
+        "typed_shutdown_requested_at_unix_ms": shutdown_requested,
+        "process_terminated_at_unix_ms": terminated,
+        "launch_services_deregistered_at_unix_ms": deregistered,
+    }
+
+
 def wait_for_route_aware_launch(
     *,
     app: pathlib.Path,
@@ -2705,7 +3066,7 @@ def wait_for_route_aware_launch(
                     ) from shutdown_error
                 raise EvidenceError("exact candidate PID changed during launch readiness observation")
         current_startup, ready, terminal = launch_diagnostic_state(diagnostics, started_ms)
-        startup_observed |= current_startup
+        startup_observed |= current_startup is not None
         if pid is not None and ready is not None and terminal is not None:
             last_launch_services_state = query_launch_services_state(app=app, pid=pid)
             launch_services_observation_count += 1
@@ -2715,6 +3076,7 @@ def wait_for_route_aware_launch(
                 observed_at_ms = int(time.time() * 1000)
                 return {
                     "pid": pid,
+                    "startup": current_startup,
                     "ready": ready,
                     "terminal": terminal,
                     "launch_services_state": last_launch_services_state,
@@ -2751,14 +3113,15 @@ def wait_for_route_aware_launch(
     raise EvidenceError(failure)
 
 
-def terminate_exact(identity: dict[str, Any], pid: int) -> None:
+def terminate_exact(identity: dict[str, Any], pid: int) -> tuple[int, int]:
     if executable_for_pid(pid) != identity["executable_path"]:
         raise EvidenceError("refusing to terminate a process whose executable identity changed")
+    shutdown_requested_at_ms = int(time.time() * 1000)
     os.kill(pid, signal.SIGUSR1)
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         if executable_for_pid(pid) is None:
-            return
+            return shutdown_requested_at_ms, int(time.time() * 1000)
         time.sleep(0.05)
     raise EvidenceError(f"exact candidate pid {pid} did not complete typed SIGUSR1 shutdown")
 
@@ -2776,6 +3139,11 @@ def measure_launch(args: argparse.Namespace) -> None:
         raise EvidenceError(
             "MallocStackLogging launch is a single retained process for paired private leak scans"
         )
+    if args.mode == "warm" and not args.malloc_stack_logging:
+        if args.iterations != 10 or args.leave_running:
+            raise EvidenceError(
+                "warm evidence requires one excluded priming launch followed by exactly ten terminated restart samples"
+            )
     constrained_cold = (
         args.mode == "cold"
         and result.get("host", {})
@@ -2790,47 +3158,46 @@ def measure_launch(args: argparse.Namespace) -> None:
         )
     diagnostics = pathlib.Path(args.diagnostics)
     key = f"launch_{args.mode}"
-    existing = result["phases"].get(key, {}).get("samples", [])
-    samples = list(existing)
-    for _ in range(args.iterations):
-        started_ms = int(time.time() * 1000)
-        launch_command = ["/usr/bin/open", "-n"]
-        if args.malloc_stack_logging:
-            launch_command.extend(["--env", "MallocStackLogging=1"])
-        launch_command.append(str(app))
-        subprocess.run(launch_command, check=True)
-        observation = wait_for_route_aware_launch(
+    if key in result["phases"] or f"launch.{args.mode}.p95_ms" in result["metrics"]:
+        raise EvidenceError(f"{key} evidence already exists; launch epochs cannot be appended or mixed")
+    samples: list[dict[str, Any]] = []
+    priming: dict[str, Any] | None = None
+    if args.mode == "warm" and not args.malloc_stack_logging:
+        prime_sample, prime_pid = observe_launch_sample(
             app=app,
             identity=identity,
             diagnostics=diagnostics,
-            started_ms=started_ms,
             timeout_seconds=args.timeout,
         )
-        pid = observation["pid"]
-        ready = observation["ready"]
-        terminal = observation["terminal"]
-        launch_services_observed_ms = observation["launch_services_observed_at_unix_ms"]
-        ready_at_ms = launch_ready_at_ms(
-            terminal["timestamp_unix_ms"], launch_services_observed_ms
-        )
-        latency = ready_at_ms - started_ms
-        if latency < 0:
-            raise EvidenceError("wall clock moved backwards during launch measurement")
-        sample = {
-            "started_at_unix_ms": started_ms,
-            "ready_at_unix_ms": ready_at_ms,
-            "menu_bar_ready_at_unix_ms": ready["timestamp_unix_ms"],
-            "terminal_policy_ready_at_unix_ms": terminal["timestamp_unix_ms"],
-            "launch_services_observed_at_unix_ms": launch_services_observed_ms,
-            "terminal_application_type": WINDOW_POLICY_APPLICATION_TYPES[terminal["code"]],
-            "latency_ms": latency,
-            "session_id": ready.get("session_id"),
+        priming = {
+            "contract": WARM_PRIMING_CONTRACT,
+            "metric_contribution": False,
+            **prime_sample,
+            **terminate_and_deregister_launch(
+                app=app, identity=identity, pid=prime_pid
+            ),
         }
+        time.sleep(args.settle_seconds)
+    for _ in range(args.iterations):
+        if exact_pid(identity, required=False) is not None:
+            raise EvidenceError("exact candidate is still running before the next launch")
+        sample, pid = observe_launch_sample(
+            app=app,
+            identity=identity,
+            diagnostics=diagnostics,
+            timeout_seconds=args.timeout,
+            malloc_stack_logging=args.malloc_stack_logging,
+        )
         if constrained_cold:
             sample["fresh_runner_id"] = args.fresh_runner_id
-        samples.append(sample)
         if not args.leave_running:
-            terminate_exact(identity, pid)
+            if args.mode == "warm":
+                sample.update(
+                    terminate_and_deregister_launch(app=app, identity=identity, pid=pid)
+                )
+            else:
+                terminate_exact(identity, pid)
+        samples.append(sample)
         if args.mode == "warm" and args.iterations > 1:
             time.sleep(args.settle_seconds)
     result["phases"][key] = {
@@ -2840,10 +3207,14 @@ def measure_launch(args: argparse.Namespace) -> None:
             if constrained_cold
             else HUMAN_COLD_DEFINITION
             if args.mode == "cold"
-            else "LaunchServices restart after a verified exact-candidate termination"
+            else MALLOC_LAUNCH_DEFINITION
+            if args.malloc_stack_logging
+            else WARM_LAUNCH_DEFINITION
         ),
         "samples": samples,
     }
+    if priming is not None:
+        result["phases"][key]["priming"] = priming
     if args.malloc_stack_logging:
         result["phases"][key]["malloc_stack_logging"] = True
     values = [sample["latency_ms"] for sample in samples]
@@ -3088,49 +3459,12 @@ def merge_cold_launch(args: argparse.Namespace) -> None:
         if not isinstance(phase_samples, list) or len(phase_samples) != 1 or metric.get("sample_count") != 1:
             raise EvidenceError(f"cold shard must contain exactly one sample: {label}")
         sample = phase_samples[0]
-        if not isinstance(sample, dict) or set(sample) != {
-            "started_at_unix_ms",
-            "ready_at_unix_ms",
-            "menu_bar_ready_at_unix_ms",
-            "terminal_policy_ready_at_unix_ms",
-            "launch_services_observed_at_unix_ms",
-            "terminal_application_type",
-            "latency_ms",
-            "session_id",
-            "fresh_runner_id",
-        }:
-            raise EvidenceError(f"cold shard sample has an unexpected shape: {label}")
-        started = sample.get("started_at_unix_ms")
-        ready = sample.get("ready_at_unix_ms")
-        menu_bar_ready = sample.get("menu_bar_ready_at_unix_ms")
-        terminal_policy_ready = sample.get("terminal_policy_ready_at_unix_ms")
-        launch_services_observed = sample.get("launch_services_observed_at_unix_ms")
-        latency = sample.get("latency_ms")
-        if not all(
-            isinstance(value, int) and not isinstance(value, bool)
-            for value in (
-                started,
-                ready,
-                menu_bar_ready,
-                terminal_policy_ready,
-                launch_services_observed,
-                latency,
-            )
-        ):
-            raise EvidenceError(f"cold shard sample has non-integer timings: {label}")
-        if (
-            started < 0
-            or menu_bar_ready < started
-            or terminal_policy_ready < menu_bar_ready
-            or launch_services_observed < terminal_policy_ready
-            or ready != launch_ready_at_ms(terminal_policy_ready, launch_services_observed)
-            or latency != ready - started
-        ):
-            raise EvidenceError(f"cold shard sample timings are inconsistent: {label}")
-        if sample.get("terminal_application_type") not in WINDOW_POLICY_APPLICATION_TYPES.values():
-            raise EvidenceError(f"cold shard has an invalid terminal ApplicationType: {label}")
-        if not re.fullmatch(r"s-[0-9a-f]{16}", sample.get("session_id", "")):
-            raise EvidenceError(f"cold shard sample has an invalid session ID: {label}")
+        validate_launch_sample(
+            sample,
+            expected_keys=LAUNCH_SAMPLE_KEYS | {"fresh_runner_id"},
+            require_shutdown=False,
+        )
+        latency = sample["latency_ms"]
         runner_id = sample.get("fresh_runner_id", "")
         if not re.fullmatch(r"gh-[0-9]+-[0-9]+-cold-[1-5]", runner_id):
             raise EvidenceError(f"cold shard sample has an invalid fresh runner ID: {label}")
@@ -3147,7 +3481,7 @@ def merge_cold_launch(args: argparse.Namespace) -> None:
 
     result["phases"]["launch_cold"] = {
         "phase": "launch_cold",
-        "definition": "one exact signed LaunchServices launch on each of five fresh GitHub-hosted macos-14 runners",
+        "definition": AGGREGATED_COLD_DEFINITION,
         "samples": sorted(samples, key=lambda sample: sample["shard_evidence_sha256"]),
     }
     latencies = [sample["latency_ms"] for sample in samples]
@@ -3545,6 +3879,7 @@ def check_provenance(result: dict[str, Any], label: str) -> list[str]:
         failures.append(f"{label}: cache-staged functional smoke cannot become release evidence")
     failures.extend(check_idle_sampling(result, label))
     failures.extend(check_active_sampling(result, label))
+    failures.extend(check_launch_sampling(result, label))
     if host.get("missing_required_templates"):
         failures.append(f"{label}: missing Instruments templates: {host['missing_required_templates']}")
     if role == "physical_interactive":
@@ -3776,7 +4111,12 @@ def build_parser() -> argparse.ArgumentParser:
     command = subparsers.add_parser("launch", help="measure LaunchServices-to-ready latency")
     command.add_argument("--app", required=True)
     command.add_argument("--mode", required=True, choices=("cold", "warm"))
-    command.add_argument("--iterations", type=int, default=1)
+    command.add_argument(
+        "--iterations",
+        type=int,
+        default=1,
+        help="number of measured samples; warm mode first performs one excluded verified priming launch",
+    )
     command.add_argument("--cold-confirmed", action="store_true")
     command.add_argument("--fresh-runner-id")
     command.add_argument("--malloc-stack-logging", action="store_true")

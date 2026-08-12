@@ -1825,6 +1825,31 @@ mod tests {
                 && accessibility_poller < quit
                 && quit < ready
         );
+
+        let swift = include_str!("../macos/WrenflowShell.swift");
+        let Some((_, install)) = swift.split_once("func install(") else {
+            panic!("Swift shell install exists");
+        };
+        let Some((install, _)) = install.split_once("func shutdown(") else {
+            panic!("Swift shell install has a bounded source region");
+        };
+        assert!(install.contains("statusItem = item"));
+        assert!(!install.contains("updateTray("));
+
+        let screens = include_str!("screens/mod.rs");
+        let Some((_, constructor)) = screens.split_once("pub fn new(") else {
+            panic!("AppScreens constructor exists");
+        };
+        let Some((constructor, _)) = constructor.split_once("fn ensure_controls_for_plan") else {
+            panic!("initial control installation has a bounded source region");
+        };
+        let Some(plan) = constructor.find("let initial_plan") else {
+            panic!("initial screen plan is derived before returning AppScreens");
+        };
+        let Some(controls) = constructor.find("ensure_controls_for_plan(&initial_plan") else {
+            panic!("initial required controls are installed before returning AppScreens");
+        };
+        assert!(plan < controls);
     }
 
     #[test]

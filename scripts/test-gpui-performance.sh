@@ -169,7 +169,11 @@ assert "\"count\":2" in closed_message
 assert module["launch_ready_at_ms"](1100, 1300) == 1300
 assert module["launch_ready_at_ms"](1400, 1300) == 1400
 measure_source = inspect.getsource(module["measure_launch"])
-assert "wait_for_route_aware_launch" in measure_source
+assert "observe_launch_sample" in measure_source
+assert "terminate_and_deregister_launch" in measure_source
+assert measure_source.index("priming = {") < measure_source.index("for _ in range(args.iterations)")
+assert "args.iterations != 10" in measure_source
+assert "launch epochs cannot be appended or mixed" in measure_source
 self_test_source = inspect.getsource(module["_run_signed_self_test"])
 initial_accessory_barrier = self_test_source.index("validate_initial_self_test_accessory")
 idle_call = self_test_source.index("phase=\"idle\"")
@@ -238,20 +242,21 @@ records = [
     {"timestamp_unix_ms": 1001, "session_id": "s-other0000000000", "code": "menu_bar_ready"},
 ]
 diagnostics.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
-assert module["launch_diagnostic_state"](diagnostics, 1000) == (True, None, None)
+startup, ready, terminal = module["launch_diagnostic_state"](diagnostics, 1000)
+assert startup["timestamp_unix_ms"] == 1000 and ready is None and terminal is None
 records.append(
     {"timestamp_unix_ms": 1002, "session_id": "s-0123456789abcdef", "code": "menu_bar_ready"}
 )
 diagnostics.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
 startup, ready, terminal = module["launch_diagnostic_state"](diagnostics, 1000)
-assert startup and ready["timestamp_unix_ms"] == 1002 and terminal is None
+assert startup["timestamp_unix_ms"] == 1000 and ready["timestamp_unix_ms"] == 1002 and terminal is None
 records.extend((
     {"timestamp_unix_ms": 1003, "session_id": "s-other0000000000", "code": "window_policy_accessory_ready"},
     {"timestamp_unix_ms": 1004, "session_id": "s-0123456789abcdef", "code": "window_policy_foreground_ready"},
 ))
 diagnostics.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
 startup, ready, terminal = module["launch_diagnostic_state"](diagnostics, 1000)
-assert startup and ready["timestamp_unix_ms"] == 1002
+assert startup["timestamp_unix_ms"] == 1000 and ready["timestamp_unix_ms"] == 1002
 assert terminal["timestamp_unix_ms"] == 1004
 assert terminal["code"] == "window_policy_foreground_ready"
 
@@ -260,7 +265,7 @@ old_records = [
     {"timestamp_unix_ms": 999, "session_id": "s-old000000000000", "code": "menu_bar_ready"},
 ]
 diagnostics.write_text("".join(json.dumps(record) + "\n" for record in old_records), encoding="utf-8")
-assert module["launch_diagnostic_state"](diagnostics, 1000) == (False, None, None)
+assert module["launch_diagnostic_state"](diagnostics, 1000) == (None, None, None)
 ' "$HARNESS" "$TEST_ROOT/launch-diagnostics.ndjson"
 
 mise exec -- python3 -c '
@@ -335,6 +340,8 @@ def fake_query(*, app, pid):
         next(app_info), expected_app=app, expected_pid=pid
     )
 globals_["exact_pid"] = lambda identity, required=False: 4242
+startup_record = {"timestamp_unix_ms": 1000, "session_id": "s-0123456789abcdef", "code": "startup"}
+diagnostic_states = iter(((startup_record, ready, None), (startup_record, ready, terminal), (startup_record, ready, terminal)))
 globals_["launch_diagnostic_state"] = lambda diagnostics, started_ms: next(diagnostic_states)
 globals_["query_launch_services_state"] = fake_query
 observation = observer(
@@ -349,6 +356,176 @@ assert observation["terminal"] == terminal
 # No lsappinfo query happened before the terminal marker, and the transient
 # post-marker UIElement mismatch did not satisfy the Foreground contract.
 assert len(observer_queries) == 2
+' "$HARNESS"
+
+mise exec -- python3 -c '
+import argparse, copy, pathlib, runpy, sys
+module = runpy.run_path(sys.argv[1])
+
+def sample(index, latency=40, shutdown=True):
+    started = 1000 + index * 2000
+    value = {
+        "started_at_unix_ms": started,
+        "startup_diagnostic_at_unix_ms": started + 10,
+        "menu_bar_ready_at_unix_ms": started + 20,
+        "terminal_policy_ready_at_unix_ms": started + 30,
+        "launch_services_observed_at_unix_ms": started + latency,
+        "ready_at_unix_ms": started + latency,
+        "terminal_application_type": "Foreground",
+        "latency_ms": latency,
+        "session_id": f"s-{index:016x}",
+    }
+    value["stages_ms"] = module["launch_stage_durations"](value)
+    if shutdown:
+        value.update({
+            "typed_shutdown_requested_at_unix_ms": started + latency + 1,
+            "process_terminated_at_unix_ms": started + latency + 2,
+            "launch_services_deregistered_at_unix_ms": started + latency + 3,
+        })
+    return value
+
+prime = {
+    "contract": module["WARM_PRIMING_CONTRACT"],
+    "metric_contribution": False,
+    **sample(0, 1057),
+}
+warm_samples = [sample(index + 20, latency) for index, latency in enumerate(
+    (218, 328, 440, 239, 388, 209, 194, 232, 216, 300)
+)]
+result = {
+    "phases": {"launch_warm": {
+        "phase": "launch_warm",
+        "definition": module["WARM_LAUNCH_DEFINITION"],
+        "priming": prime,
+        "samples": warm_samples,
+    }},
+    "metrics": {"launch.warm.p95_ms": {"value": 440, "sample_count": 10}},
+}
+launch_failures = module["check_launch_sampling"](result, "fixture")
+assert launch_failures == [], launch_failures
+
+for mutate in (
+    lambda value: value["phases"]["launch_warm"]["priming"].update(metric_contribution=True),
+    lambda value: value["phases"]["launch_warm"]["samples"].pop(),
+    lambda value: value["phases"]["launch_warm"]["samples"][1].update(session_id=value["phases"]["launch_warm"]["samples"][0]["session_id"]),
+    lambda value: value["phases"]["launch_warm"]["samples"][0].update(started_at_unix_ms=100),
+    lambda value: value["phases"]["launch_warm"]["samples"][0]["stages_ms"].update(total_ms=999),
+    lambda value: value["metrics"]["launch.warm.p95_ms"].update(value=439),
+):
+    broken = copy.deepcopy(result)
+    mutate(broken)
+    assert module["check_launch_sampling"](broken, "fixture")
+
+metric_without_phase = copy.deepcopy(result)
+del metric_without_phase["phases"]["launch_warm"]
+assert module["check_launch_sampling"](metric_without_phase, "fixture")
+phase_without_metric = copy.deepcopy(result)
+del phase_without_metric["metrics"]["launch.warm.p95_ms"]
+assert module["check_launch_sampling"](phase_without_metric, "fixture")
+
+ls_absent = {
+    "returncode": 0,
+    "stdout_shape": "empty",
+    "stderr_category": "empty",
+    "bundle_id_matches": False,
+    "bundle_path_matches": False,
+    "pid_matches": False,
+    "application_type": "missing",
+}
+assert not module["launch_services_record_absent"](ls_absent)
+assert module["launch_services_record_absent"]({
+    **ls_absent, "returncode": 1, "stderr_category": "not_found"
+})
+null_output = "\n".join((
+    "\"LSBundlePath\"=[ NULL ] ",
+    "\"CFBundleIdentifier\"=[ NULL ] ",
+    "\"pid\"=[ NULL ] ",
+    "\"ApplicationType\"=[ NULL ] ",
+))
+null_state = module["sanitized_launch_services_state"](
+    null_output,
+    expected_app=pathlib.Path("/private/candidate/Wrenflow.app"),
+    expected_pid=4242,
+)
+assert null_state["stdout_shape"] == "null_fields"
+assert module["launch_services_record_absent"](null_state)
+for key, value in (("stdout_shape", "exact_fields"), ("stderr_category", "permission_denied"), ("pid_matches", True)):
+    assert not module["launch_services_record_absent"]({**ls_absent, key: value})
+
+measure = module["measure_launch"]
+globals_ = measure.__globals__
+captured = {}
+failure_base = {"candidate": {"executable_path": "/private/candidate/Wrenflow.app/Contents/MacOS/wrenflow"}, "phases": {}, "metrics": {}}
+globals_["require_app"] = lambda value: pathlib.Path("/private/candidate/Wrenflow.app")
+globals_["load_result"] = lambda output, app: failure_base
+globals_["exact_pid"] = lambda identity, required=False: None
+globals_["observe_launch_sample"] = lambda **kwargs: (_ for _ in ()).throw(
+    module["EvidenceError"]("injected priming readiness failure")
+)
+globals_["write_json"] = lambda output, value: (_ for _ in ()).throw(
+    AssertionError("failed priming persisted a partial phase")
+)
+try:
+    measure(argparse.Namespace(
+        app="unused", output="/private/result.json", mode="warm", iterations=10,
+        cold_confirmed=False, fresh_runner_id=None, malloc_stack_logging=False,
+        leave_running=False, settle_seconds=1.0, timeout=15.0,
+        diagnostics="/private/diagnostics.ndjson",
+    ))
+except module["EvidenceError"] as error:
+    assert "priming readiness failure" in str(error)
+else:
+    raise AssertionError("failed priming passed")
+assert failure_base["phases"] == {} and failure_base["metrics"] == {}
+
+launch_latencies = iter((1057, 218, 328, 440, 239, 388, 209, 194, 232, 216, 300))
+launch_count = 0
+last_ready = 0
+def fake_observe(**kwargs):
+    global launch_count, last_ready
+    latency = next(launch_latencies)
+    value = sample(launch_count + 100, latency, shutdown=False)
+    launch_count += 1
+    last_ready = value["ready_at_unix_ms"]
+    return value, 4242
+def fake_terminate(**kwargs):
+    return {
+        "typed_shutdown_requested_at_unix_ms": last_ready + 1,
+        "process_terminated_at_unix_ms": last_ready + 2,
+        "launch_services_deregistered_at_unix_ms": last_ready + 3,
+    }
+base = {"candidate": {"executable_path": "/private/candidate/Wrenflow.app/Contents/MacOS/wrenflow"}, "phases": {}, "metrics": {}}
+globals_["load_result"] = lambda output, app: base
+globals_["observe_launch_sample"] = fake_observe
+globals_["terminate_and_deregister_launch"] = fake_terminate
+globals_["write_json"] = lambda output, value: captured.update(result=copy.deepcopy(value))
+globals_["time"].sleep = lambda seconds: None
+measure(argparse.Namespace(
+    app="unused", output="/private/result.json", mode="warm", iterations=10,
+    cold_confirmed=False, fresh_runner_id=None, malloc_stack_logging=False,
+    leave_running=False, settle_seconds=1.0, timeout=15.0,
+    diagnostics="/private/diagnostics.ndjson",
+))
+assert launch_count == 11
+phase = captured["result"]["phases"]["launch_warm"]
+assert phase["priming"]["latency_ms"] == 1057
+assert phase["priming"]["metric_contribution"] is False
+assert len(phase["samples"]) == 10
+assert captured["result"]["metrics"]["launch.warm.p95_ms"]["value"] == 440.0
+assert captured["result"]["metrics"]["launch.warm.p95_ms"]["sample_count"] == 10
+
+for iterations in (9, 11):
+    try:
+        measure(argparse.Namespace(
+            app="unused", output="/private/result.json", mode="warm", iterations=iterations,
+            cold_confirmed=False, fresh_runner_id=None, malloc_stack_logging=False,
+            leave_running=False, settle_seconds=1.0, timeout=15.0,
+            diagnostics="/private/diagnostics.ndjson",
+        ))
+    except module["EvidenceError"]:
+        pass
+    else:
+        raise AssertionError("invalid warm measured sample count passed")
 ' "$HARNESS"
 
 mise exec -- python3 -c '
@@ -680,6 +857,7 @@ for index in range(5):
             "definition": module["CONSTRAINED_COLD_DEFINITION"],
             "samples": [{
                 "started_at_unix_ms": 1000 + index,
+                "startup_diagnostic_at_unix_ms": 1001 + index,
                 "ready_at_unix_ms": 1000 + index + latency,
                 "menu_bar_ready_at_unix_ms": 1000 + index + latency - 2,
                 "terminal_policy_ready_at_unix_ms": 1000 + index + latency - 1,
@@ -688,6 +866,13 @@ for index in range(5):
                 "latency_ms": latency,
                 "session_id": f"s-{index:016x}",
                 "fresh_runner_id": f"gh-12345-1-cold-{index + 1}",
+                "stages_ms": {
+                    "external_open_to_startup_ms": 1,
+                    "startup_to_menu_bar_ms": latency - 3,
+                    "menu_bar_to_terminal_policy_ms": 1,
+                    "terminal_policy_to_launch_services_ms": 1,
+                    "total_ms": latency,
+                },
             }],
         }},
         "traces": [], "sanitized": True, "sealed": True,

@@ -69,6 +69,55 @@ struct HotkeyControl<'a> {
     parent_id: &'a str,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ControlRequirements {
+    hotkey: bool,
+    vocabulary: bool,
+    duration: bool,
+}
+
+fn control_requirements(plan: &ScreenPlan) -> ControlRequirements {
+    let mut requirements = ControlRequirements::default();
+    for section in &plan.sections {
+        for block in &section.blocks {
+            let BlockPlan::Card(card) = block else {
+                continue;
+            };
+            for control in &card.controls {
+                match control {
+                    ControlPlan::Input {
+                        kind: InputKind::Hotkey,
+                        ..
+                    } => requirements.hotkey = true,
+                    ControlPlan::Input {
+                        kind: InputKind::Vocabulary,
+                        ..
+                    } => requirements.vocabulary = true,
+                    ControlPlan::Slider {
+                        kind: SliderKind::MinimumRecordingDuration,
+                        ..
+                    } => requirements.duration = true,
+                    ControlPlan::Actions(_)
+                    | ControlPlan::Toggle { .. }
+                    | ControlPlan::Progress { .. } => {}
+                }
+            }
+        }
+    }
+    requirements
+}
+
+fn uninitialized_controls(
+    initialized: ControlRequirements,
+    required: ControlRequirements,
+) -> ControlRequirements {
+    ControlRequirements {
+        hotkey: required.hotkey && !initialized.hotkey,
+        vocabulary: required.vocabulary && !initialized.vocabulary,
+        duration: required.duration && !initialized.duration,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum HotkeyCaptureEvent {
     Changed(String),
@@ -466,10 +515,10 @@ fn hotkey_display_name(value: &str) -> String {
 /// owner of window hiding, TCC and other AppKit-only behavior.
 pub struct AppScreens {
     model: Entity<AppModel>,
-    hotkey_capture: Entity<HotkeyCapture>,
-    vocabulary_input: Entity<InputState>,
-    duration_slider_state: Entity<SliderState>,
-    duration_slider: Entity<DurationSlider>,
+    hotkey_capture: Option<Entity<HotkeyCapture>>,
+    vocabulary_input: Option<Entity<InputState>>,
+    duration_slider_state: Option<Entity<SliderState>>,
+    duration_slider: Option<Entity<DurationSlider>>,
     buttons: HashMap<String, ButtonRecord>,
     button_intents: HashMap<String, ScreenIntent>,
     switches: HashMap<String, SwitchRecord>,
@@ -540,27 +589,6 @@ impl AppScreens {
             cx.notify();
         })
         .detach();
-        let presentation = model.read(cx).presentation();
-        let hotkey_value = presentation.settings.selected_hotkey.clone();
-        let vocabulary_value = presentation.settings.custom_vocabulary.clone();
-        let duration_value = presentation.settings.minimum_recording_duration_ms as f32;
-        let hotkey_capture = cx.new(|cx| HotkeyCapture::new(hotkey_value, window, cx));
-        let vocabulary_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder(VOCABULARY_PLACEHOLDER)
-                .default_value(vocabulary_value)
-                .multi_line(true)
-        });
-        let duration_slider_state = cx.new(|_| {
-            SliderState::new()
-                .min(100.)
-                .max(1_000.)
-                .step(50.)
-                .default_value(duration_value)
-        });
-        let duration_slider =
-            cx.new(|cx| DurationSlider::new(duration_slider_state.clone(), 100., 1_000., 50., cx));
-
         cx.observe(&model, |this, model, cx| {
             let (persisted, command) = {
                 let presentation = model.read(cx).presentation();
@@ -576,32 +604,71 @@ impl AppScreens {
             cx.refresh_windows();
         })
         .detach();
-        cx.observe(&hotkey_capture, |_, _, cx| cx.notify()).detach();
-        cx.observe(&vocabulary_input, |_, _, cx| cx.notify())
-            .detach();
+
+        let mut screens = Self {
+            model,
+            hotkey_capture: None,
+            vocabulary_input: None,
+            duration_slider_state: None,
+            duration_slider: None,
+            buttons: HashMap::new(),
+            button_intents: HashMap::new(),
+            switches: HashMap::new(),
+            switch_kinds: HashMap::new(),
+            confirm_clear_history: false,
+            confirm_reset_current_data: false,
+            pending_theme_preference: None,
+            system_theme_mode,
+            vocabulary_revision: 0,
+            accessibility: AccessibilityState::default(),
+            modal_restore_focus_id: None,
+            modal_needs_initial_focus: false,
+            modal_needs_restore: false,
+            last_accessibility_route: None,
+            last_screen_announcement_key: None,
+        };
+        let presentation = screens.model.read(cx).presentation().clone();
+        let initial_plan = screens.screen_plan(&presentation);
+        screens.ensure_controls_for_plan(&initial_plan, window, cx);
+        screens
+    }
+
+    fn ensure_controls_for_plan(
+        &mut self,
+        plan: &ScreenPlan,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let required = control_requirements(plan);
+        let initialized = ControlRequirements {
+            hotkey: self.hotkey_capture.is_some(),
+            vocabulary: self.vocabulary_input.is_some(),
+            duration: self.duration_slider.is_some(),
+        };
+        let requirements = uninitialized_controls(initialized, required);
+        if requirements.hotkey {
+            self.install_hotkey_capture(window, cx);
+        }
+        if requirements.vocabulary {
+            self.install_vocabulary_input(window, cx);
+        }
+        if requirements.duration {
+            self.install_duration_slider(cx);
+        }
+    }
+
+    fn install_hotkey_capture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let value = self
+            .model
+            .read(cx)
+            .presentation()
+            .settings
+            .selected_hotkey
+            .clone();
+        let capture = cx.new(|cx| HotkeyCapture::new(value, window, cx));
+        cx.observe(&capture, |_, _, cx| cx.notify()).detach();
         cx.subscribe(
-            &duration_slider_state,
-            |this, _, event: &SliderEvent, cx| {
-                if let SliderEvent::Change(SliderValue::Single(value)) = event {
-                    this.dispatch(
-                        AppAction::SetMinimumRecordingDurationMs(f64::from(*value)),
-                        cx,
-                    );
-                }
-            },
-        )
-        .detach();
-        cx.subscribe(
-            &duration_slider,
-            |this, _, event: &DurationSliderEvent, cx| match event {
-                DurationSliderEvent::Changed(value) => {
-                    this.dispatch(AppAction::SetMinimumRecordingDurationMs(*value), cx);
-                }
-            },
-        )
-        .detach();
-        cx.subscribe(
-            &hotkey_capture,
+            &capture,
             |this, _, event: &HotkeyCaptureEvent, cx| match event {
                 HotkeyCaptureEvent::Changed(value) => {
                     this.accessibility.announce(
@@ -628,44 +695,74 @@ impl AppScreens {
             },
         )
         .detach();
+        self.hotkey_capture = Some(capture);
+    }
+
+    fn install_vocabulary_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let value = self
+            .model
+            .read(cx)
+            .presentation()
+            .settings
+            .custom_vocabulary
+            .clone();
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(VOCABULARY_PLACEHOLDER)
+                .default_value(value)
+                .multi_line(true)
+        });
+        cx.observe(&input, |_, _, cx| cx.notify()).detach();
+        cx.subscribe(&input, |this, input, event: &InputEvent, cx| match event {
+            InputEvent::Change => this.schedule_vocabulary_update(input.clone(), cx),
+            InputEvent::Blur => {
+                this.vocabulary_revision = this.vocabulary_revision.saturating_add(1);
+                this.dispatch(
+                    AppAction::SetCustomVocabulary(input.read(cx).value().to_string()),
+                    cx,
+                );
+            }
+            InputEvent::PressEnter { .. } | InputEvent::Focus => {}
+        })
+        .detach();
+        self.vocabulary_input = Some(input);
+    }
+
+    fn install_duration_slider(&mut self, cx: &mut Context<Self>) {
+        let value = self
+            .model
+            .read(cx)
+            .presentation()
+            .settings
+            .minimum_recording_duration_ms as f32;
+        let state = cx.new(|_| {
+            SliderState::new()
+                .min(100.)
+                .max(1_000.)
+                .step(50.)
+                .default_value(value)
+        });
+        let slider = cx.new(|cx| DurationSlider::new(state.clone(), 100., 1_000., 50., cx));
+        cx.subscribe(&state, |this, _, event: &SliderEvent, cx| {
+            if let SliderEvent::Change(SliderValue::Single(value)) = event {
+                this.dispatch(
+                    AppAction::SetMinimumRecordingDurationMs(f64::from(*value)),
+                    cx,
+                );
+            }
+        })
+        .detach();
         cx.subscribe(
-            &vocabulary_input,
-            |this, input, event: &InputEvent, cx| match event {
-                InputEvent::Change => this.schedule_vocabulary_update(input.clone(), cx),
-                InputEvent::Blur => {
-                    this.vocabulary_revision = this.vocabulary_revision.saturating_add(1);
-                    this.dispatch(
-                        AppAction::SetCustomVocabulary(input.read(cx).value().to_string()),
-                        cx,
-                    );
+            &slider,
+            |this, _, event: &DurationSliderEvent, cx| match event {
+                DurationSliderEvent::Changed(value) => {
+                    this.dispatch(AppAction::SetMinimumRecordingDurationMs(*value), cx);
                 }
-                InputEvent::PressEnter { .. } | InputEvent::Focus => {}
             },
         )
         .detach();
-
-        Self {
-            model,
-            hotkey_capture,
-            vocabulary_input,
-            duration_slider_state,
-            duration_slider,
-            buttons: HashMap::new(),
-            button_intents: HashMap::new(),
-            switches: HashMap::new(),
-            switch_kinds: HashMap::new(),
-            confirm_clear_history: false,
-            confirm_reset_current_data: false,
-            pending_theme_preference: None,
-            system_theme_mode,
-            vocabulary_revision: 0,
-            accessibility: AccessibilityState::default(),
-            modal_restore_focus_id: None,
-            modal_needs_initial_focus: false,
-            modal_needs_restore: false,
-            last_accessibility_route: None,
-            last_screen_announcement_key: None,
-        }
+        self.duration_slider_state = Some(state);
+        self.duration_slider = Some(slider);
     }
 
     /// Latest fully-measured accessibility tree. The generation covers semantic
@@ -713,7 +810,10 @@ impl AppScreens {
                     self.activate_switch(id, !checked, cx);
                     Ok(())
                 } else if id == "settings-hotkey-input" {
-                    self.hotkey_capture.update(cx, |capture, cx| {
+                    let Some(hotkey_capture) = self.hotkey_capture.clone() else {
+                        return Err(AccessibilityActionError::UnknownNode(id.to_string()));
+                    };
+                    hotkey_capture.update(cx, |capture, cx| {
                         capture.start_listening(window, cx);
                     });
                     Ok(())
@@ -725,13 +825,19 @@ impl AppScreens {
                 let value =
                     value.ok_or_else(|| AccessibilityActionError::MissingValue(id.to_string()))?;
                 if id == "settings-vocabulary-input" {
+                    let Some(vocabulary_input) = self.vocabulary_input.clone() else {
+                        return Err(AccessibilityActionError::UnknownNode(id.to_string()));
+                    };
                     self.vocabulary_revision = self.vocabulary_revision.saturating_add(1);
-                    self.vocabulary_input.update(cx, |input, cx| {
+                    vocabulary_input.update(cx, |input, cx| {
                         input.set_value(value.to_string(), window, cx);
                     });
                     self.dispatch(AppAction::SetCustomVocabulary(value.to_string()), cx);
                     Ok(())
                 } else if id == "settings-minimum-duration-slider" {
+                    let Some(duration_slider) = self.duration_slider.clone() else {
+                        return Err(AccessibilityActionError::UnknownNode(id.to_string()));
+                    };
                     let numeric = value
                         .trim()
                         .trim_end_matches(" ms")
@@ -746,7 +852,7 @@ impl AppScreens {
                             value: value.to_string(),
                         });
                     }
-                    self.duration_slider.update(cx, |slider, cx| {
+                    duration_slider.update(cx, |slider, cx| {
                         slider.set_value(numeric, window, cx);
                     });
                     Ok(())
@@ -760,12 +866,15 @@ impl AppScreens {
             AccessibilityAction::Increment | AccessibilityAction::Decrement
                 if id == "settings-minimum-duration-slider" =>
             {
+                let Some(duration_slider) = self.duration_slider.clone() else {
+                    return Err(AccessibilityActionError::UnknownNode(id.to_string()));
+                };
                 let delta = if action == AccessibilityAction::Increment {
                     50.0
                 } else {
                     -50.0
                 };
-                self.duration_slider.update(cx, |slider, cx| {
+                duration_slider.update(cx, |slider, cx| {
                     slider.adjust(delta, window, cx);
                 });
                 Ok(())
@@ -792,25 +901,22 @@ impl AppScreens {
         }
         if self
             .hotkey_capture
-            .read(cx)
-            .focus_handle(cx)
-            .is_focused(window)
+            .as_ref()
+            .is_some_and(|capture| capture.read(cx).focus_handle(cx).is_focused(window))
         {
             return Some("settings-hotkey-input".to_string());
         }
         if self
             .vocabulary_input
-            .read(cx)
-            .focus_handle(cx)
-            .is_focused(window)
+            .as_ref()
+            .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window))
         {
             return Some("settings-vocabulary-input".to_string());
         }
         if self
             .duration_slider
-            .read(cx)
-            .focus_handle(cx)
-            .is_focused(window)
+            .as_ref()
+            .is_some_and(|slider| slider.read(cx).focus_handle(cx).is_focused(window))
         {
             return Some("settings-minimum-duration-slider".to_string());
         }
@@ -832,18 +938,24 @@ impl AppScreens {
             return Ok(());
         }
         if id == "settings-hotkey-input" {
-            self.hotkey_capture.read(cx).focus_handle(cx).focus(window);
+            let Some(hotkey_capture) = self.hotkey_capture.as_ref() else {
+                return Err(AccessibilityActionError::UnknownNode(id.to_string()));
+            };
+            hotkey_capture.read(cx).focus_handle(cx).focus(window);
             return Ok(());
         }
         if id == "settings-vocabulary-input" {
-            self.vocabulary_input
-                .read(cx)
-                .focus_handle(cx)
-                .focus(window);
+            let Some(vocabulary_input) = self.vocabulary_input.as_ref() else {
+                return Err(AccessibilityActionError::UnknownNode(id.to_string()));
+            };
+            vocabulary_input.read(cx).focus_handle(cx).focus(window);
             return Ok(());
         }
         if id == "settings-minimum-duration-slider" {
-            self.duration_slider.read(cx).focus_handle(cx).focus(window);
+            let Some(duration_slider) = self.duration_slider.as_ref() else {
+                return Err(AccessibilityActionError::UnknownNode(id.to_string()));
+            };
+            duration_slider.read(cx).focus_handle(cx).focus(window);
             return Ok(());
         }
         Err(AccessibilityActionError::UnknownNode(id.to_string()))
@@ -1843,8 +1955,11 @@ impl AppScreens {
                     cx,
                 ),
                 InputKind::Vocabulary => {
+                    let Some(vocabulary_input) = self.vocabulary_input.clone() else {
+                        return div().into_any_element();
+                    };
                     let enabled = *enabled && !self.destructive_confirmation_visible();
-                    let accessibility_value = self.vocabulary_input.read(cx).value().to_string();
+                    let accessibility_value = vocabulary_input.read(cx).value().to_string();
                     let input_height = if parent_id == "onboarding-vocabulary" {
                         px(48.)
                     } else {
@@ -1860,7 +1975,7 @@ impl AppScreens {
                         .value(accessibility_value)
                         .enabled(enabled)
                         .actions([AccessibilityAction::Focus, AccessibilityAction::SetValue]),
-                        text_input(&self.vocabulary_input)
+                        text_input(&vocabulary_input)
                             .h(input_height)
                             .rounded(px(7.))
                             .border(tokens.controls.border_width)
@@ -1920,10 +2035,15 @@ impl AppScreens {
             } => {
                 debug_assert_eq!(*kind, SliderKind::MinimumRecordingDuration);
                 debug_assert_eq!((*minimum, *maximum, *step), (100., 1_000., 50.));
+                let (Some(duration_slider), Some(duration_slider_state)) = (
+                    self.duration_slider.clone(),
+                    self.duration_slider_state.clone(),
+                ) else {
+                    return div().into_any_element();
+                };
                 let enabled = *enabled && !self.destructive_confirmation_visible();
-                self.duration_slider
-                    .update(cx, |slider, cx| slider.set_disabled(!enabled, cx));
-                let live_value = f64::from(self.duration_slider_state.read(cx).value().end())
+                duration_slider.update(cx, |slider, cx| slider.set_disabled(!enabled, cx));
+                let live_value = f64::from(duration_slider_state.read(cx).value().end())
                     .clamp(*minimum, *maximum);
                 self.accessibility_element(
                     AccessibilityNodeDraft::new(
@@ -1960,7 +2080,7 @@ impl AppScreens {
                                         .child(format!("{live_value:.0} ms")),
                                 ),
                         )
-                        .child(self.duration_slider.clone()),
+                        .child(duration_slider),
                     cx,
                 )
             }
@@ -1980,6 +2100,9 @@ impl AppScreens {
             enabled,
             parent_id,
         } = plan;
+        let Some(hotkey_capture) = self.hotkey_capture.clone() else {
+            return div().into_any_element();
+        };
         let tokens = WrenflowTheme::current(cx).tokens;
         let presets = [
             ("63", "Fn"),
@@ -2009,14 +2132,14 @@ impl AppScreens {
             label,
         ));
         let preset_buttons = self.render_actions(&actions, &group_id, cx);
-        self.hotkey_capture.update(cx, |capture, cx| {
+        hotkey_capture.update(cx, |capture, cx| {
             capture.sync(
                 value,
                 !enabled || self.destructive_confirmation_visible(),
                 cx,
             );
         });
-        let hotkey_value = if self.hotkey_capture.read(cx).listening {
+        let hotkey_value = if hotkey_capture.read(cx).listening {
             "Listening; press a key, or Escape to cancel".to_string()
         } else {
             hotkey_display_name(value)
@@ -2031,7 +2154,7 @@ impl AppScreens {
             .value(hotkey_value)
             .enabled(enabled && !self.destructive_confirmation_visible())
             .actions([AccessibilityAction::Press, AccessibilityAction::Focus]),
-            self.hotkey_capture.clone(),
+            hotkey_capture,
             cx,
         );
 
@@ -2269,6 +2392,7 @@ impl Render for AppScreens {
             window.refresh();
         }
         let plan = self.screen_plan(&presentation);
+        self.ensure_controls_for_plan(&plan, window, cx);
         let root_id = accessibility_root_id(plan.route);
         let logical_width = window.viewport_size().width;
         let text_scale = WrenflowTheme::current(cx).accessibility.text_scale();
@@ -2388,8 +2512,8 @@ mod tests {
     use crate::app::{CommandStatus, NavigationTarget};
     use crate::screens::{
         about, effective_theme_preference, history, hotkey_capture_decision, mac_keycode, models,
-        onboarding, settings, snap_duration_value, theme_selection, uses_compact_layout,
-        HotkeyCaptureDecision, VOCABULARY_PLACEHOLDER,
+        onboarding, settings, snap_duration_value, theme_selection, uninitialized_controls,
+        uses_compact_layout, ControlRequirements, HotkeyCaptureDecision, VOCABULARY_PLACEHOLDER,
     };
     use crate::ui::ThemeSelection;
     use wrenflow_runtime::ThemePreference;
@@ -2426,6 +2550,66 @@ mod tests {
     fn multiline_vocabulary_input_uses_a_single_line_placeholder() {
         assert!(!VOCABULARY_PLACEHOLDER.contains(['\n', '\r']));
         assert_eq!(VOCABULARY_PLACEHOLDER, "One word or phrase per line...");
+    }
+
+    #[test]
+    fn route_controls_are_claimed_once_only_when_the_route_needs_them() {
+        let mut initialized = ControlRequirements::default();
+        let permission = uninitialized_controls(initialized, ControlRequirements::default());
+        assert_eq!(permission, ControlRequirements::default());
+
+        let hotkey = uninitialized_controls(
+            initialized,
+            ControlRequirements {
+                hotkey: true,
+                ..ControlRequirements::default()
+            },
+        );
+        assert_eq!(
+            hotkey,
+            ControlRequirements {
+                hotkey: true,
+                ..ControlRequirements::default()
+            }
+        );
+        initialized.hotkey = true;
+
+        let vocabulary = uninitialized_controls(
+            initialized,
+            ControlRequirements {
+                vocabulary: true,
+                ..ControlRequirements::default()
+            },
+        );
+        assert_eq!(
+            vocabulary,
+            ControlRequirements {
+                vocabulary: true,
+                ..ControlRequirements::default()
+            }
+        );
+        initialized.vocabulary = true;
+
+        let settings = uninitialized_controls(
+            initialized,
+            ControlRequirements {
+                hotkey: true,
+                vocabulary: true,
+                duration: true,
+            },
+        );
+        assert_eq!(
+            settings,
+            ControlRequirements {
+                duration: true,
+                ..ControlRequirements::default()
+            }
+        );
+        initialized.duration = true;
+        assert_eq!(
+            uninitialized_controls(initialized, initialized),
+            ControlRequirements::default()
+        );
     }
 
     #[test]

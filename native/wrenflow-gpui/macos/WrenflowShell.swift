@@ -538,14 +538,6 @@ private final class WrenflowShell: NSObject, NSMenuDelegate {
         }
         item.button?.toolTip = "Wrenflow"
         statusItem = item
-        updateTray(WrenflowTrayPresentation(
-            version: version,
-            status: "Ready",
-            launchAtLogin: launchAtLoginEnabled,
-            microphones: [],
-            selectedMicrophoneID: "default",
-            selectedHotkey: 63
-        ))
 
         guard setAccessoryPolicy() else {
             reportDiagnosticFailure(.shellInstall)
