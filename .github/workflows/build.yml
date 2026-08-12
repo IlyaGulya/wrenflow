@@ -48,6 +48,8 @@ jobs:
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
       - name: Install pinned Rust components before parallel tasks
         run: mise run setup-rust-components
+      - name: Fetch locked production app dependencies
+        run: mise run setup-app-dependencies
       - name: Verify current macOS support contract
         run: |
           mise exec -- scripts/verify-macos-support.sh ci current
@@ -75,6 +77,8 @@ jobs:
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
       - name: Install pinned Rust components before parallel tasks
         run: mise run setup-rust-components
+      - name: Fetch locked production app dependencies
+        run: mise run setup-app-dependencies
       - name: Verify minimum macOS support contract
         run: |
           mise exec -- scripts/verify-macos-support.sh ci minimum
@@ -131,6 +135,10 @@ jobs:
       - name: Install pinned Rust lint components
         if: steps.skip.outputs.skip != 'true'
         run: mise run setup-rust-components
+
+      - name: Fetch locked production app dependencies
+        if: steps.skip.outputs.skip != 'true'
+        run: mise run setup-app-dependencies
 
       - name: Verify current macOS support contract
         if: steps.skip.outputs.skip != 'true'

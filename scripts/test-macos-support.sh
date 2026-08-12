@@ -13,7 +13,15 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 "$VERIFY" source
 mise exec -- "$VERIFY" metal
-mise exec -- "$VERIFY_SHADERS"
+EMPTY_APP_CARGO_HOME="$TMP_DIR/empty-app-cargo-home"
+if WRENFLOW_APP_CARGO_HOME="$EMPTY_APP_CARGO_HOME" \
+    mise run verify-gpui-shader-contract >/dev/null 2>&1; then
+    echo "Offline shader verification accepted an unfetched production graph" >&2
+    exit 1
+fi
+WRENFLOW_APP_CARGO_HOME="$EMPTY_APP_CARGO_HOME" mise run setup-app-dependencies
+WRENFLOW_APP_CARGO_HOME="$EMPTY_APP_CARGO_HOME" mise run verify-gpui-shader-contract
+mise run verify-gpui-shader-contract
 mise exec -- "$VERIFY_SHADERS" --tree-file \
     "$REPO_DIR/scripts/fixtures/gpui-feature-tree-embedded.txt"
 if mise exec -- "$VERIFY_SHADERS" --tree-file \

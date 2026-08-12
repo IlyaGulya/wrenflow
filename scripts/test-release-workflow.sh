@@ -73,6 +73,21 @@ require_pattern "scripts/verify-macos-support.sh ci current" "$BUILD_WORKFLOW"
 require_pattern "scripts/verify-macos-support.sh bundle build/gpui/Wrenflow.app" "$BUILD_WORKFLOW"
 require_pattern '[tasks.verify-gpui-shader-contract]' "$REPO_DIR/mise.toml"
 require_pattern 'scripts/verify-gpui-shader-contract.sh' "$REPO_DIR/mise.toml"
+require_pattern '[tasks.setup-app-dependencies]' "$REPO_DIR/mise.toml"
+require_pattern 'depends = ["download-ort", "setup-app-dependencies"' "$REPO_DIR/mise.toml"
+if ! awk '
+    /^  [A-Za-z0-9_-]+:$/ { setup = 0 }
+    /mise run setup-app-dependencies/ { setup = 1 }
+    /scripts\/verify-macos-support\.sh ci (minimum|current)/ {
+        if (!setup) exit 1
+        setup = 0
+        verified += 1
+    }
+    END { if (verified != 3) exit 1 }
+' "$BUILD_WORKFLOW"; then
+    echo "Every macOS CI verifier must follow the locked app dependency setup in its job" >&2
+    exit 1
+fi
 require_pattern "build_release:" "$BUILD_WORKFLOW"
 require_pattern "performance_cold:" "$BUILD_WORKFLOW"
 require_pattern "shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]" "$BUILD_WORKFLOW"

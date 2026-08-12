@@ -114,6 +114,8 @@ verify_source_contract() {
     reject_literal 'Ok("x86_64") => "x86_64"' "$build_rs"
     require_literal 'features = ["font-kit"]' "$app_manifest"
     reject_literal '"runtime_shaders"' "$app_manifest"
+    require_literal '[tasks.setup-app-dependencies]' "$REPO_DIR/mise.toml"
+    require_literal 'mise run setup-app-dependencies' "$workflow"
     require_literal '"$REPO_DIR/scripts/verify-gpui-shader-contract.sh"' "$build_script"
     require_literal 'shaders.metallib' "$build_script"
     require_literal 'stitched_shaders.metal' "$build_script"
