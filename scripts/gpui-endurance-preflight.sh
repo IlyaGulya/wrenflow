@@ -362,12 +362,24 @@ candidate_identity() (
     ' >"$output"
 )
 
+require_candidate_payload_inputs() {
+    if [[ -z "${WRENFLOW_BASELINE_PAYLOAD:-}" ]]; then
+        echo "WRENFLOW_BASELINE_PAYLOAD must name the exact published baseline payload" >&2
+        return 64
+    fi
+    if [[ -z "${WRENFLOW_TARGET_PAYLOAD:-}" ]]; then
+        echo "WRENFLOW_TARGET_PAYLOAD must name the exact published target payload" >&2
+        return 64
+    fi
+}
+
 authenticate_candidate_plan() (
     local plan="$1"
     local temporary baseline_identity target_identity
     require_regular_input "$plan" "candidate plan"
-    : "${WRENFLOW_BASELINE_PAYLOAD:?set WRENFLOW_BASELINE_PAYLOAD to the exact published baseline payload}"
-    : "${WRENFLOW_TARGET_PAYLOAD:?set WRENFLOW_TARGET_PAYLOAD to the exact published target payload}"
+    if ! require_candidate_payload_inputs; then
+        return 64
+    fi
     mise exec -- python3 "$EVIDENCE_VERIFIER" validate-plan "$plan" >/dev/null
     temporary="$(mktemp -d "${TMPDIR:-/tmp}/wrenflow-plan-auth.XXXXXX")"
     cleanup_plan_authentication() { rm -rf -- "$temporary"; }
@@ -386,6 +398,9 @@ authenticate_candidate_plan() (
 
 candidate_plan() (
     local output temporary baseline_identity target_identity
+    if ! require_candidate_payload_inputs; then
+        return 64
+    fi
     output="$(require_output_directory "${1:-}")"
     require_new_output_file "$output/candidate-plan.json"
     temporary="$(mktemp -d "$output/.candidate-plan.XXXXXX")"
@@ -395,8 +410,6 @@ candidate_plan() (
     trap cleanup_candidate_plan EXIT
     baseline_identity="$temporary/baseline.json"
     target_identity="$temporary/target.json"
-    : "${WRENFLOW_BASELINE_PAYLOAD:?set WRENFLOW_BASELINE_PAYLOAD to the exact published baseline payload}"
-    : "${WRENFLOW_TARGET_PAYLOAD:?set WRENFLOW_TARGET_PAYLOAD to the exact published target payload}"
     candidate_identity "WRENFLOW_BASELINE" "$WRENFLOW_BASELINE_PAYLOAD" "$baseline_identity"
     candidate_identity "WRENFLOW_TARGET" "$WRENFLOW_TARGET_PAYLOAD" "$target_identity"
     jq -S -n \

@@ -60,12 +60,61 @@ rg -F "Evidence file must be a new absolute path" "$FIXTURE/overwrite.stderr" >/
 mise exec -- python3 "$REPO_DIR/scripts/gpui-endurance-evidence.py" source >/dev/null
 mise exec -- python3 "$REPO_DIR/scripts/gpui-endurance-evidence.py" test-fixtures >/dev/null
 
-if "$REPO_DIR/scripts/gpui-endurance-preflight.sh" candidate-plan "$FIXTURE/candidate" \
-    >"$FIXTURE/candidate.stdout" 2>"$FIXTURE/candidate.stderr"; then
-    echo "candidate-plan accepted missing exact payload inputs" >&2
+expect_missing_payload_rejected() {
+    local label="$1"
+    local missing_variable="$2"
+    local candidate_output="$3"
+    shift 3
+    if "$@" /bin/bash "$REPO_DIR/scripts/gpui-endurance-preflight.sh" \
+        candidate-plan "$candidate_output" \
+        >"$FIXTURE/$label.stdout" 2>"$FIXTURE/$label.stderr"; then
+        echo "candidate-plan accepted missing exact payload input: $missing_variable" >&2
+        exit 1
+    fi
+    rg -F "$missing_variable" "$FIXTURE/$label.stderr" >/dev/null
+    [[ ! -e "$candidate_output" ]]
+}
+
+expect_missing_payload_rejected \
+    candidate-missing-both WRENFLOW_BASELINE_PAYLOAD "$FIXTURE/candidate-missing-both" \
+    env -u WRENFLOW_BASELINE_PAYLOAD -u WRENFLOW_TARGET_PAYLOAD
+expect_missing_payload_rejected \
+    candidate-missing-baseline WRENFLOW_BASELINE_PAYLOAD "$FIXTURE/candidate-missing-baseline" \
+    env -u WRENFLOW_BASELINE_PAYLOAD \
+    WRENFLOW_TARGET_PAYLOAD="$FIXTURE/nonexistent-target-payload"
+expect_missing_payload_rejected \
+    candidate-missing-target WRENFLOW_TARGET_PAYLOAD "$FIXTURE/candidate-missing-target" \
+    env -u WRENFLOW_TARGET_PAYLOAD \
+    WRENFLOW_BASELINE_PAYLOAD="$FIXTURE/nonexistent-baseline-payload"
+
+AUTH_PLAN="$REPO_DIR/scripts/fixtures/endurance/candidate-plan-pass.json"
+AUTH_TEMP="$FIXTURE/auth-temp"
+mkdir "$AUTH_TEMP"
+if env -u WRENFLOW_BASELINE_PAYLOAD \
+    WRENFLOW_TARGET_PAYLOAD="$FIXTURE/nonexistent-target-payload" \
+    TMPDIR="$AUTH_TEMP" \
+    /bin/bash "$REPO_DIR/scripts/gpui-endurance-preflight.sh" verify-evidence \
+    "$FIXTURE/nonexistent-automated.json" "$AUTH_PLAN" "$FIXTURE/nonexistent-manifest.json" \
+    >"$FIXTURE/auth-missing-baseline.stdout" \
+    2>"$FIXTURE/auth-missing-baseline.stderr"; then
+    echo "verify-evidence accepted missing WRENFLOW_BASELINE_PAYLOAD" >&2
     exit 1
 fi
-rg -F "WRENFLOW_BASELINE_PAYLOAD" "$FIXTURE/candidate.stderr" >/dev/null
+rg -F "WRENFLOW_BASELINE_PAYLOAD" "$FIXTURE/auth-missing-baseline.stderr" >/dev/null
+[[ -z "$(find "$AUTH_TEMP" -mindepth 1 -print -quit)" ]]
+
+if env -u WRENFLOW_TARGET_PAYLOAD \
+    WRENFLOW_BASELINE_PAYLOAD="$FIXTURE/nonexistent-baseline-payload" \
+    TMPDIR="$AUTH_TEMP" \
+    /bin/bash "$REPO_DIR/scripts/gpui-endurance-preflight.sh" verify-post-promotion \
+    "$AUTH_PLAN" "$FIXTURE/nonexistent-observation.json" \
+    >"$FIXTURE/auth-missing-target.stdout" \
+    2>"$FIXTURE/auth-missing-target.stderr"; then
+    echo "verify-post-promotion accepted missing WRENFLOW_TARGET_PAYLOAD" >&2
+    exit 1
+fi
+rg -F "WRENFLOW_TARGET_PAYLOAD" "$FIXTURE/auth-missing-target.stderr" >/dev/null
+[[ -z "$(find "$AUTH_TEMP" -mindepth 1 -print -quit)" ]]
 
 if "$REPO_DIR/scripts/gpui-endurance-preflight.sh" kill-stage hostile "$$" \
     "$FIXTURE/kill.json" >"$FIXTURE/kill.stdout" 2>"$FIXTURE/kill.stderr"; then
