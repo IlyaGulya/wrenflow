@@ -68,6 +68,10 @@ live 20-cold plus constrained performance workflow. Both the automatic call
 and recovery pin the verifier checkout to reviewed commit
 `e233cc6db6b37307e9774db228ab11ecc4d0673c`; neither the old release source nor
 a later default-branch head may supply verifier bytes.
+All private-release REST tooling and the promotion metadata verifier are pinned
+independently to reviewed commit
+`aa025228f4f8d12e29c866b6be43eb2c0bf0834c`; neither the stable source commit,
+workflow caller SHA, nor a later default-branch head may supply those bytes.
 
 If that initial reusable call is interrupted before staging, recover the same
 untouched draft explicitly:
@@ -77,14 +81,16 @@ mise exec -- gh workflow run build.yml \
   --repo IlyaGulya/wrenflow \
   -f release_tag=v0.4.0 \
   -f release_id='<positive numeric private draft ID>' \
+  -f release_tool_source_commit=aa025228f4f8d12e29c866b6be43eb2c0bf0834c \
   -f release_source_commit='<40-character draft target commit>' \
   -f verifier_source_commit=e233cc6db6b37307e9774db228ab11ecc4d0673c \
   -f confirmation=STAGE_EXISTING_PRIVATE_DRAFT
 ```
 
 The owner later invokes **Promote Verified Stable Draft** with the immutable
-private draft release ID, canonical stable tag, exact approved lowercase DMG SHA-256, and
-`PROMOTE_VERIFIED_STABLE`.
+private draft release ID, canonical stable tag, exact approved lowercase DMG
+SHA-256, `PROMOTE_VERIFIED_STABLE`, and the same reviewed private-release
+tooling commit.
 
 The workflow:
 

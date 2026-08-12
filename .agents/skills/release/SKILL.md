@@ -117,6 +117,7 @@ same empty draft without recreating it:
 mise exec -- gh workflow run build.yml \
   -f release_tag=<tag> \
   -f release_id=<positive-numeric-private-draft-id> \
+  -f release_tool_source_commit=aa025228f4f8d12e29c866b6be43eb2c0bf0834c \
   -f release_source_commit=<targetCommitish> \
   -f verifier_source_commit=e233cc6db6b37307e9774db228ab11ecc4d0673c \
   -f confirmation=STAGE_EXISTING_PRIVATE_DRAFT
@@ -132,6 +133,7 @@ already-created stable tag, or verifier bytes other than reviewed commit
 mise exec -- gh workflow run promote-stable.yml \
   -f release_tag=<tag> \
   -f release_id=<positive-numeric-private-draft-id> \
+  -f release_tool_source_commit=aa025228f4f8d12e29c866b6be43eb2c0bf0834c \
   -f expected_dmg_sha256=<64-lowercase-hex> \
   -f confirmation=PROMOTE_VERIFIED_STABLE
 ```

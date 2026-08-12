@@ -19,6 +19,10 @@ on:
         description: Exact positive numeric GitHub Release ID of the private draft
         required: true
         type: string
+      release_tool_source_commit:
+        description: Exact reviewed commit containing private draft API tooling
+        required: true
+        type: string
       verifier_source_commit:
         description: Exact reviewed commit containing the frozen baseline verifier
         required: true
@@ -39,6 +43,10 @@ on:
         type: string
       release_id:
         description: Exact positive numeric GitHub Release ID emitted by release-please
+        required: true
+        type: string
+      release_tool_source_commit:
+        description: Exact reviewed commit containing private draft API tooling
         required: true
         type: string
       verifier_source_commit:
@@ -143,6 +151,7 @@ jobs:
       HAS_NOTARIZE: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
       RELEASE_TAG: ${{ inputs.release_tag }}
       RELEASE_ID: ${{ inputs.release_id }}
+      RELEASE_TOOL_SOURCE_COMMIT: ${{ inputs.release_tool_source_commit }}
       RELEASE_SOURCE_COMMIT: ${{ inputs.release_source_commit }}
       IS_RELEASE: ${{ inputs.release_tag != '' }}
       IS_BETA: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.release_tag == '' }}
@@ -156,11 +165,20 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         if: inputs.release_tag != ''
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.release_tool_source_commit }}
           path: .release-workflow
           sparse-checkout: scripts/private-release-api.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      - name: Require reviewed private draft tooling source
+        if: inputs.release_tag != ''
+        run: |
+          if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "aa025228f4f8d12e29c866b6be43eb2c0bf0834c" ] || \
+             [ "$(git -C .release-workflow rev-parse HEAD)" != "$RELEASE_TOOL_SOURCE_COMMIT" ]; then
+            echo "Private draft tooling does not match the reviewed immutable source" >&2
+            exit 1
+          fi
 
       - name: Check if release-please commit
         id: skip
@@ -814,6 +832,7 @@ jobs:
     env:
       RELEASE_TAG: ${{ inputs.release_tag }}
       RELEASE_ID: ${{ inputs.release_id }}
+      RELEASE_TOOL_SOURCE_COMMIT: ${{ inputs.release_tool_source_commit }}
       IS_RELEASE: ${{ inputs.release_tag != '' }}
       PUBLISH_TAG: ${{ needs.build_release.outputs.publish_tag }}
       SOURCE_COMMIT: ${{ needs.build_release.outputs.source_commit }}
@@ -828,11 +847,20 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         if: env.IS_RELEASE == 'true'
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.release_tool_source_commit }}
           path: .release-workflow
           sparse-checkout: scripts/private-release-api.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      - name: Require reviewed private draft tooling source
+        if: env.IS_RELEASE == 'true'
+        run: |
+          if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "aa025228f4f8d12e29c866b6be43eb2c0bf0834c" ] || \
+             [ "$(git -C .release-workflow rev-parse HEAD)" != "$RELEASE_TOOL_SOURCE_COMMIT" ]; then
+            echo "Private draft tooling does not match the reviewed immutable source" >&2
+            exit 1
+          fi
 
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
         if: env.IS_RELEASE == 'true'
@@ -933,6 +961,7 @@ jobs:
       contents: read
     env:
       RELEASE_ID: ${{ inputs.release_id }}
+      RELEASE_TOOL_SOURCE_COMMIT: ${{ inputs.release_tool_source_commit }}
       IS_RELEASE: ${{ inputs.release_tag != '' }}
       PUBLISH_TAG: ${{ needs.build_release.outputs.publish_tag }}
       SOURCE_COMMIT: ${{ needs.build_release.outputs.source_commit }}
@@ -944,11 +973,19 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         if: env.IS_RELEASE == 'true'
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.release_tool_source_commit }}
           path: .release-workflow
           sparse-checkout: scripts/private-release-api.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
+      - name: Require reviewed private draft tooling source
+        if: env.IS_RELEASE == 'true'
+        run: |
+          if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "aa025228f4f8d12e29c866b6be43eb2c0bf0834c" ] || \
+             [ "$(git -C .release-workflow rev-parse HEAD)" != "$RELEASE_TOOL_SOURCE_COMMIT" ]; then
+            echo "Private draft tooling does not match the reviewed immutable source" >&2
+            exit 1
+          fi
       - name: Select Xcode 26.3
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1

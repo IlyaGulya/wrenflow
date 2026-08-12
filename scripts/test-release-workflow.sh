@@ -160,6 +160,10 @@ if [[ "$(grep -Fxc -- '      verifier_source_commit:' "$BUILD_WORKFLOW")" -ne 2 
     echo "Build workflow must require the verifier source for recovery and reusable stable calls" >&2
     exit 1
 fi
+if [[ "$(grep -Fxc -- '      release_tool_source_commit:' "$BUILD_WORKFLOW")" -ne 2 ]]; then
+    echo "Build workflow must require the immutable release tooling source for recovery and reusable calls" >&2
+    exit 1
+fi
 require_pattern "STAGE_EXISTING_PRIVATE_DRAFT" "$BUILD_WORKFLOW"
 require_pattern "IS_RELEASE: \${{ inputs.release_tag != '' }}" "$BUILD_WORKFLOW"
 require_pattern 'RELEASE_SOURCE_COMMIT: ${{ inputs.release_source_commit }}' "$BUILD_WORKFLOW"
@@ -457,6 +461,7 @@ require_pattern "      actions: read" "$RELEASE_WORKFLOW"
 require_pattern "uses: ./.github/workflows/build.yml" "$RELEASE_WORKFLOW"
 require_pattern "release_tag: \${{ needs.release-please.outputs.tag_name }}" "$RELEASE_WORKFLOW"
 require_pattern "release_id: \${{ needs.release-please.outputs.release_id }}" "$RELEASE_WORKFLOW"
+require_pattern "release_tool_source_commit: aa025228f4f8d12e29c866b6be43eb2c0bf0834c" "$RELEASE_WORKFLOW"
 require_pattern 'steps.release.outputs.upload_url' "$RELEASE_WORKFLOW"
 require_pattern "source_commit: \${{ steps.release.outputs.sha }}" "$RELEASE_WORKFLOW"
 require_pattern "release_source_commit: \${{ needs.release-please.outputs.source_commit }}" "$RELEASE_WORKFLOW"
@@ -465,6 +470,7 @@ require_pattern "verifier_source_commit: e233cc6db6b37307e9774db228ab11ecc4d0673
 require_pattern "workflow_dispatch:" "$PROMOTION_WORKFLOW"
 require_pattern "release_tag:" "$PROMOTION_WORKFLOW"
 require_pattern "release_id:" "$PROMOTION_WORKFLOW"
+require_pattern "release_tool_source_commit:" "$PROMOTION_WORKFLOW"
 require_pattern "expected_dmg_sha256:" "$PROMOTION_WORKFLOW"
 require_pattern "PROMOTE_VERIFIED_STABLE" "$PROMOTION_WORKFLOW"
 reject_pattern "stable-production" "$PROMOTION_WORKFLOW"
@@ -483,6 +489,7 @@ require_pattern 'scripts/verify-release-artifact.sh' "$PROMOTION_WORKFLOW"
 require_pattern 'release-fingerprint-before.json' "$PROMOTION_WORKFLOW"
 require_pattern 'cmp release-fingerprint-before.json release-fingerprint-second.json' "$PROMOTION_WORKFLOW"
 require_pattern 'private-release-api.py publish' "$PROMOTION_WORKFLOW"
+require_pattern '--approved-fingerprint release-fingerprint-second.json' "$PROMOTION_WORKFLOW"
 require_pattern "Published stable tag does not resolve to the approved source commit" "$PROMOTION_WORKFLOW"
 require_pattern '([.[] | select(.ref == $tag)] |' "$PROMOTION_WORKFLOW"
 require_pattern 'length == 1 and .[0].object.type == "commit" and' "$PROMOTION_WORKFLOW"
@@ -510,6 +517,15 @@ require_repo_scoped_gh_release_commands "$PROMOTION_WORKFLOW"
 REPO_SCOPE_FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/wrenflow-release-repo-scope.XXXXXX")"
 cleanup_repo_scope_fixture() { rm -rf -- "$REPO_SCOPE_FIXTURE"; }
 trap cleanup_repo_scope_fixture EXIT
+
+PINNED_RELEASE_TOOL_SOURCE="aa025228f4f8d12e29c866b6be43eb2c0bf0834c"
+git cat-file -e "$PINNED_RELEASE_TOOL_SOURCE^{commit}"
+git show "$PINNED_RELEASE_TOOL_SOURCE:scripts/private-release-api.py" \
+    > "$REPO_SCOPE_FIXTURE/private-release-api.py"
+git show "$PINNED_RELEASE_TOOL_SOURCE:scripts/test-private-release-api.py" \
+    > "$REPO_SCOPE_FIXTURE/test-private-release-api.py"
+rg -F -- '--approved-fingerprint' "$REPO_SCOPE_FIXTURE/private-release-api.py" >/dev/null
+mise exec -- python3 "$REPO_SCOPE_FIXTURE/test-private-release-api.py" >/dev/null
 
 expect_frozen_contract_rejected() {
     local label="$1"
@@ -772,6 +788,9 @@ audit_tagless_source_contract() {
     require_pattern "STAGE_EXISTING_PRIVATE_DRAFT" "$build"
     require_pattern 'RELEASE_SOURCE_COMMIT: ${{ inputs.release_source_commit }}' "$build"
     require_pattern 'RELEASE_ID: ${{ inputs.release_id }}' "$build"
+    require_pattern 'RELEASE_TOOL_SOURCE_COMMIT: ${{ inputs.release_tool_source_commit }}' "$build"
+    require_pattern 'ref: ${{ inputs.release_tool_source_commit }}' "$build"
+    require_pattern 'aa025228f4f8d12e29c866b6be43eb2c0bf0834c' "$build"
     require_pattern "Require exact empty tagless private stable draft" "$build"
     require_pattern 'git/matching-refs/tags/$RELEASE_TAG' "$build"
     require_pattern '([.[] | select(.ref == $ref)] | length) == 0' "$build"
@@ -784,9 +803,14 @@ audit_tagless_source_contract() {
     require_pattern 'source_commit: ${{ steps.release.outputs.sha }}' "$release"
     require_pattern 'release_id: ${{ steps.release-id.outputs.release_id }}' "$release"
     require_pattern 'release_id: ${{ needs.release-please.outputs.release_id }}' "$release"
+    require_pattern 'release_tool_source_commit: aa025228f4f8d12e29c866b6be43eb2c0bf0834c' "$release"
+    require_pattern 'ref: aa025228f4f8d12e29c866b6be43eb2c0bf0834c' "$release"
     require_pattern 'RELEASE_UPLOAD_URL: ${{ steps.release.outputs.upload_url }}' "$release"
     require_pattern 'release_source_commit: ${{ needs.release-please.outputs.source_commit }}' "$release"
     require_pattern 'RELEASE_ID: ${{ inputs.release_id }}' "$promotion"
+    require_pattern 'RELEASE_TOOL_SOURCE_COMMIT: ${{ inputs.release_tool_source_commit }}' "$promotion"
+    require_pattern 'ref: ${{ inputs.release_tool_source_commit }}' "$promotion"
+    require_pattern 'aa025228f4f8d12e29c866b6be43eb2c0bf0834c' "$promotion"
     require_pattern 'ref: ${{ steps.inputs.outputs.source_commit }}' "$promotion"
     require_pattern 'private-release-api.py publish' "$promotion"
     require_pattern "Published stable tag does not resolve to the approved source commit" "$promotion"
@@ -872,6 +896,30 @@ PY
 expect_tagless_source_rejected missing-release-id \
     "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/release-missing-id.yml" \
     "$PROMOTION_WORKFLOW"
+
+cp "$RELEASE_WORKFLOW" "$REPO_SCOPE_FIXTURE/release-floating-tool.yml"
+sed 's/ref: aa025228f4f8d12e29c866b6be43eb2c0bf0834c/ref: ${{ github.sha }}/' \
+    "$REPO_SCOPE_FIXTURE/release-floating-tool.yml" \
+    > "$REPO_SCOPE_FIXTURE/release-floating-tool-mutated.yml"
+expect_tagless_source_rejected floating-release-tool-source \
+    "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/release-floating-tool-mutated.yml" \
+    "$PROMOTION_WORKFLOW"
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-floating-tool.yml"
+sed 's/ref: ${{ inputs.release_tool_source_commit }}/ref: ${{ github.sha }}/' \
+    "$REPO_SCOPE_FIXTURE/build-floating-tool.yml" \
+    > "$REPO_SCOPE_FIXTURE/build-floating-tool-mutated.yml"
+expect_tagless_source_rejected floating-build-tool-source \
+    "$REPO_SCOPE_FIXTURE/build-floating-tool-mutated.yml" "$RELEASE_WORKFLOW" \
+    "$PROMOTION_WORKFLOW"
+
+cp "$PROMOTION_WORKFLOW" "$REPO_SCOPE_FIXTURE/promote-floating-tool.yml"
+sed 's/ref: ${{ inputs.release_tool_source_commit }}/ref: ${{ github.sha }}/' \
+    "$REPO_SCOPE_FIXTURE/promote-floating-tool.yml" \
+    > "$REPO_SCOPE_FIXTURE/promote-floating-tool-mutated.yml"
+expect_tagless_source_rejected floating-promotion-tool-source \
+    "$BUILD_WORKFLOW" "$RELEASE_WORKFLOW" \
+    "$REPO_SCOPE_FIXTURE/promote-floating-tool-mutated.yml"
 
 cp "$PROMOTION_WORKFLOW" "$REPO_SCOPE_FIXTURE/promote-tag-checkout.yml"
 mise exec -- python3 - "$REPO_SCOPE_FIXTURE/promote-tag-checkout.yml" <<'PY'
