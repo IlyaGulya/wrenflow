@@ -1,13 +1,14 @@
 use std::ffi::{c_char, CStr, CString};
 use std::fmt;
 use std::path::Path;
-use std::sync::{mpsc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 use wrenflow_runtime::ThemePreference;
 
-static EVENT_SENDER: OnceLock<Mutex<Option<mpsc::Sender<ShellEvent>>>> = OnceLock::new();
+static EVENT_SENDER: OnceLock<Mutex<Option<mpsc::UnboundedSender<ShellEvent>>>> = OnceLock::new();
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ShellEvent {
@@ -129,10 +130,10 @@ impl MacShell {
     pub fn install(
         window_title: &str,
         version: &str,
-    ) -> Result<(Self, mpsc::Receiver<ShellEvent>), ShellError> {
+    ) -> Result<(Self, mpsc::UnboundedReceiver<ShellEvent>), ShellError> {
         let title = c_string(window_title, "window title")?;
         let version = c_string(version, "version")?;
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::unbounded_channel();
         let sender_slot = EVENT_SENDER.get_or_init(|| Mutex::new(None));
         let mut slot = sender_slot
             .lock()
@@ -456,16 +457,58 @@ unsafe extern "C" {
         action_label: *const c_char,
         action_id: *const c_char,
     ) -> i32;
+    fn wrenflow_shell_permission_confirmation_transition(
+        remaining: i32,
+        previous_all_granted: i32,
+        current_all_granted: i32,
+        force: i32,
+        detect_loss_transition: i32,
+    ) -> i32;
     fn wrenflow_shell_terminate();
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_event, AccessibilityActionRequest, AccessibilityPreferencesObservation,
-        LaunchAtLoginObservation, PermissionObservation, PermissionValue, ShellEvent,
+        decode_event, wrenflow_shell_permission_confirmation_transition,
+        AccessibilityActionRequest, AccessibilityPreferencesObservation, LaunchAtLoginObservation,
+        PermissionObservation, PermissionValue, ShellEvent,
     };
     use std::ffi::CString;
+
+    #[test]
+    fn permission_confirmation_budget_survives_intervening_refreshes() {
+        // A changed granted -> denied observation is the first emitted loss.
+        let mut emitted_losses = 1;
+        // SAFETY: the Swift function is a pure fixed-width numeric transition
+        // compiled into the shell dylib linked by this test target.
+        let mut remaining =
+            unsafe { wrenflow_shell_permission_confirmation_transition(0, 1, 0, 0, 1) };
+        assert_eq!(remaining, 2);
+
+        // App activation and menu-open refreshes query again, but unchanged
+        // deduplicated payloads neither emit nor consume a confirmation.
+        remaining =
+            unsafe { wrenflow_shell_permission_confirmation_transition(remaining, 0, 0, 0, 1) };
+        assert_eq!(remaining, 2);
+
+        remaining =
+            unsafe { wrenflow_shell_permission_confirmation_transition(remaining, 0, 0, 1, 0) };
+        emitted_losses += 1;
+        assert_eq!(remaining, 1);
+        remaining =
+            unsafe { wrenflow_shell_permission_confirmation_transition(remaining, 0, 0, 0, 1) };
+        assert_eq!(remaining, 1);
+        remaining =
+            unsafe { wrenflow_shell_permission_confirmation_transition(remaining, 0, 0, 1, 0) };
+        emitted_losses += 1;
+        assert_eq!(remaining, 0);
+        assert_eq!(emitted_losses, 3);
+
+        // A granted observation cancels an in-flight confirmation burst.
+        let granted = unsafe { wrenflow_shell_permission_confirmation_transition(2, 0, 1, 0, 1) };
+        assert_eq!(granted, 0);
+    }
 
     #[test]
     fn decodes_permission_event() {

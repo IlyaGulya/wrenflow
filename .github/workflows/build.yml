@@ -551,7 +551,8 @@ jobs:
             --idle-duration 1800 \
             --timeout 2400
 
-      - name: Sanitize, seal, and enforce constrained budgets
+      - name: Sanitize and seal constrained evidence
+        id: seal_constrained
         run: |
           COLD_SHARDS=("$RUNNER_TEMP"/cold-shards/*/constrained-cold-evidence.json)
           [[ ${#COLD_SHARDS[@]} -eq 5 ]]
@@ -569,15 +570,19 @@ jobs:
           mise exec -- python3 scripts/perf/gpui-performance.py seal \
             --result "$PERFORMANCE_RESULT" \
             --candidate-id "$PERFORMANCE_CANDIDATE_ID"
-          mise run performance-verify -- \
-            --profile constrained \
-            --result "$PERFORMANCE_RESULT" \
-            --report "$PERFORMANCE_REPORT"
           mise exec -- jq -e '
             .sanitized == true and .sealed == true and
             (.candidate | has("app_path") | not) and
             (.candidate | has("executable_path") | not)
           ' "$PERFORMANCE_RESULT" >/dev/null
+
+      - name: Enforce constrained performance budgets
+        id: verify_constrained
+        run: |
+          mise run performance-verify -- \
+            --profile constrained \
+            --result "$PERFORMANCE_RESULT" \
+            --report "$PERFORMANCE_REPORT"
           mise exec -- jq -e '.profile == "constrained" and .passed == true' \
             "$PERFORMANCE_REPORT" >/dev/null
 
@@ -591,6 +596,9 @@ jobs:
           retention-days: 7
 
       - name: Upload sanitized constrained evidence
+        if: >-
+          ${{ always() && steps.seal_constrained.outcome == 'success' &&
+              (steps.verify_constrained.outcome == 'success' || steps.verify_constrained.outcome == 'failure') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: constrained-performance-${{ needs.build_release.outputs.source_commit }}

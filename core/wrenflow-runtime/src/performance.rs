@@ -56,6 +56,7 @@ const HISTORY_COUNT: usize = 50;
 // cadence deadline is 37.5 minutes plus two seconds, so retain a fail-closed
 // margin without approaching the independent 90-minute workload deadline.
 const START_TIMEOUT: Duration = Duration::from_secs(45 * 60);
+const START_SIGNAL_RECHECK: Duration = Duration::from_secs(2);
 const MODEL_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(90 * 60);
 const CYCLE_SETTLE: Duration = Duration::from_secs(1);
@@ -710,7 +711,10 @@ async fn wait_for_start_signal(path: &Path) -> Result<(), PerformanceFailureCode
         if Instant::now() >= deadline {
             return Err(PerformanceFailureCode::StartTimeout);
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // This private gate remains absent for the complete 30-minute idle
+        // phase. A bounded low-rate recheck avoids manufacturing ten wakeups
+        // per second in the very residency measurement it controls.
+        tokio::time::sleep(START_SIGNAL_RECHECK).await;
     }
 }
 
@@ -1162,6 +1166,17 @@ mod tests {
         let idle_sampler_deadline = Duration::from_secs((1_800 * 5 / 4) + 2);
         assert!(START_TIMEOUT > idle_sampler_deadline);
         assert!(TOTAL_TIMEOUT > START_TIMEOUT);
+        assert!(START_SIGNAL_RECHECK <= Duration::from_secs(2));
+
+        let source = include_str!("performance.rs");
+        let Some((_, wait)) = source.split_once("async fn wait_for_start_signal") else {
+            panic!("performance start gate exists");
+        };
+        let Some((wait, _)) = wait.split_once("fn require_missing_observer_ack") else {
+            panic!("performance start gate has a bounded source region");
+        };
+        assert!(wait.contains("fs::symlink_metadata(path)"));
+        assert!(wait.contains("tokio::time::sleep(START_SIGNAL_RECHECK)"));
     }
 
     #[tokio::test]

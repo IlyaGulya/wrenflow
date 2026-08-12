@@ -1270,6 +1270,19 @@ module["set_metric"](result, "model.cold_load.p95_ms", 1000.0, 1)
 module["set_metric"](result, "history.rows.count", 50, 1)
 assert module["check_active_sampling"](result, "fixture") == []
 
+omitted_failure_code = copy.deepcopy(result)
+del omitted_failure_code["phases"]["cycles_20"]["self_test_report"]["failure_code"]
+assert module["check_active_sampling"](omitted_failure_code, "fixture") == []
+explicit_null_failure_code = copy.deepcopy(result)
+explicit_null_failure_code["phases"]["cycles_20"]["self_test_report"]["failure_code"] = None
+assert module["check_active_sampling"](explicit_null_failure_code, "fixture") == []
+explicit_none_failure_code = copy.deepcopy(result)
+explicit_none_failure_code["phases"]["cycles_20"]["self_test_report"]["failure_code"] = "none"
+assert module["check_active_sampling"](explicit_none_failure_code, "fixture") == []
+invalid_failure_code = copy.deepcopy(result)
+invalid_failure_code["phases"]["cycles_20"]["self_test_report"]["failure_code"] = "model_timeout"
+assert module["check_active_sampling"](invalid_failure_code, "fixture")
+
 tampered = copy.deepcopy(result)
 tampered["metrics"]["transcription.cpu.p95_percent"]["value"] += 1
 assert module["check_active_sampling"](tampered, "fixture")

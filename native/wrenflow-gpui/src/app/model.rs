@@ -3,7 +3,6 @@ use std::time::Duration;
 use gpui::{Context, Task};
 use tokio::runtime::Handle as AsyncRuntimeHandle;
 use tokio::sync::mpsc;
-use tokio::time::MissedTickBehavior;
 use wrenflow_runtime::{
     diagnostics::{
         emit_diagnostic, DiagnosticCategory, DiagnosticCode, DiagnosticEvent, DiagnosticLevel,
@@ -272,27 +271,25 @@ fn spawn_audio_level_sampler(
     let mut source = runtime.subscribe_audio_level();
     let (frames, receiver) = mpsc::unbounded_channel();
     drop(async_runtime.spawn(async move {
-        let mut interval = tokio::time::interval(AUDIO_PRESENTATION_INTERVAL);
-        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        // Tokio intervals tick immediately once. Consume that tick so every
-        // emitted frame is separated by the configured presentation interval.
-        interval.tick().await;
         let mut pending = PendingAudioLevel::default();
 
-        loop {
-            tokio::select! {
-                changed = source.changed() => {
-                    if changed.is_err() {
-                        break;
-                    }
-                    pending.observe(*source.borrow_and_update());
-                }
-                _ = interval.tick() => {
-                    if let Some(level) = pending.take_latest() {
-                        if frames.send(level).is_err() {
-                            break;
+        while source.changed().await.is_ok() {
+            pending.observe(*source.borrow_and_update());
+            let deadline = tokio::time::Instant::now() + AUDIO_PRESENTATION_INTERVAL;
+            loop {
+                tokio::select! {
+                    changed = source.changed() => {
+                        if changed.is_err() {
+                            return;
                         }
+                        pending.observe(*source.borrow_and_update());
                     }
+                    () = tokio::time::sleep_until(deadline) => break,
+                }
+            }
+            if let Some(level) = pending.take_latest() {
+                if frames.send(level).is_err() {
+                    break;
                 }
             }
         }
@@ -469,5 +466,16 @@ mod tests {
         assert_eq!(pending.take_latest(), Some(1.0));
         assert_eq!(pending.take_latest(), None);
         assert!(AUDIO_PRESENTATION_INTERVAL >= Duration::from_millis(33));
+
+        let source = include_str!("model.rs");
+        let Some((_, sampler)) = source.split_once("fn spawn_audio_level_sampler") else {
+            panic!("audio presentation sampler exists");
+        };
+        let Some((sampler, _)) = sampler.split_once("fn spawn_command_worker") else {
+            panic!("audio presentation sampler has a bounded source region");
+        };
+        assert!(sampler.contains("while source.changed().await.is_ok()"));
+        assert!(sampler.contains("tokio::time::sleep_until(deadline)"));
+        assert!(!sampler.contains("tokio::time::interval"));
     }
 }

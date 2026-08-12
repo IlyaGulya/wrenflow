@@ -5,7 +5,7 @@ use std::error::Error;
 use std::rc::Rc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    mpsc, Arc, Mutex,
+    Arc, Mutex,
 };
 use std::time::Duration;
 
@@ -19,6 +19,7 @@ use shell::{
     ShellEvent, TrayMicrophone, TrayPresentation, WindowLayout,
 };
 use tokio::runtime::{Builder, Runtime};
+use tokio::sync::{mpsc, watch};
 use wrenflow_gpui::{
     app::{AppAction, AppModel, NavigationTarget, ShellRequest, ShellRequestReceiver},
     screens::AppScreens,
@@ -93,6 +94,14 @@ type AppWindowSlot = Rc<RefCell<Option<AppWindowContext>>>;
 #[derive(Default)]
 struct InitialWindowPolicyReporter {
     reported: bool,
+}
+
+#[derive(Default)]
+struct WindowPolicyState {
+    started: bool,
+    last_route: Option<NavigationTarget>,
+    auto_visible: bool,
+    terminal_policy: InitialWindowPolicyReporter,
 }
 
 impl InitialWindowPolicyReporter {
@@ -193,8 +202,10 @@ fn run(
     let application = Application::new().with_assets(ui::WrenflowAssets);
     let reopen_model = Rc::new(RefCell::new(None::<gpui::Entity<AppModel>>));
     let app_window = Rc::new(RefCell::new(None::<AppWindowContext>));
+    let (window_lifecycle, accessibility_window_lifecycle) = watch::channel(0_u64);
     let reopen_model_for_handler = Rc::clone(&reopen_model);
     let app_window_for_handler = Rc::clone(&app_window);
+    let window_lifecycle_for_handler = window_lifecycle.clone();
     let reopen_shell = MacShell;
     application.on_reopen(move |cx| {
         let model = reopen_model_for_handler.borrow().clone();
@@ -202,7 +213,14 @@ fn run(
             model.update(cx, |model, cx| {
                 model.dispatch(AppAction::Navigate(NavigationTarget::Settings), cx);
             });
-            if ensure_app_window(cx, &model, &app_window_for_handler).is_err() {
+            if ensure_app_window(
+                cx,
+                &model,
+                &app_window_for_handler,
+                &window_lifecycle_for_handler,
+            )
+            .is_err()
+            {
                 report_diagnostic_failure(
                     DiagnosticCategory::Lifecycle,
                     DiagnosticCode::GpuiWindowCreateFailed,
@@ -291,10 +309,11 @@ fn run(
         let accessibility_self_test =
             std::env::args().any(|argument| argument == "--accessibility-self-test");
         let shell_self_test = std::env::args().any(|argument| argument == "--shell-self-test");
-        poll_window_policy(
+        observe_window_policy(
             cx,
             app_model.clone(),
             Rc::clone(&app_window),
+            window_lifecycle.clone(),
             shell,
             shell_self_test || accessibility_self_test,
             suppress_automatic_window,
@@ -313,7 +332,7 @@ fn run(
             runtime_handle.clone(),
             Arc::clone(&update_busy),
         );
-        let (runtime_shell_sender, runtime_shell_receiver) = mpsc::channel();
+        let (runtime_shell_sender, runtime_shell_receiver) = mpsc::unbounded_channel();
         spawn_runtime_shell_adapter(&async_runtime, &runtime_handle, runtime_shell_sender);
         poll_runtime_shell_updates(
             cx,
@@ -335,6 +354,7 @@ fn run(
             cx,
             app_model.clone(),
             Rc::clone(&app_window),
+            window_lifecycle,
             shell_events,
             ShellEnvironment {
                 shell,
@@ -342,7 +362,13 @@ fn run(
                 runtime_handle: runtime_handle.clone(),
             },
         );
-        poll_accessibility(cx, Rc::clone(&app_window), shell, accessibility_self_test);
+        poll_accessibility(
+            cx,
+            Rc::clone(&app_window),
+            accessibility_window_lifecycle,
+            shell,
+            accessibility_self_test,
+        );
 
         let shutdown_state = Arc::clone(&runtime_instance);
         cx.on_app_quit(move |_| {
@@ -390,6 +416,7 @@ fn ensure_app_window(
     cx: &mut App,
     app_model: &gpui::Entity<AppModel>,
     slot: &AppWindowSlot,
+    window_lifecycle: &watch::Sender<u64>,
 ) -> Result<(), String> {
     if slot.borrow().is_some() {
         return Ok(());
@@ -434,10 +461,11 @@ fn ensure_app_window(
         .clone()
         .ok_or_else(|| "GPUI window did not create AppScreens".to_string())?;
     slot.replace(Some(AppWindowContext { handle, screens }));
+    window_lifecycle.send_modify(|generation| *generation = generation.saturating_add(1));
     Ok(())
 }
 
-fn remove_app_window(cx: &mut App, slot: &AppWindowSlot) {
+fn remove_app_window(cx: &mut App, slot: &AppWindowSlot, window_lifecycle: &watch::Sender<u64>) {
     let Some(window_context) = slot.borrow_mut().take() else {
         return;
     };
@@ -451,119 +479,184 @@ fn remove_app_window(cx: &mut App, slot: &AppWindowSlot) {
             DiagnosticCode::GpuiWindowRemoveFailed,
         );
     }
+    window_lifecycle.send_modify(|generation| *generation = generation.saturating_add(1));
 }
 
-fn poll_window_policy(
+fn observe_window_policy(
     cx: &mut App,
     app_model: gpui::Entity<AppModel>,
     app_window: AppWindowSlot,
+    window_lifecycle: watch::Sender<u64>,
     shell: MacShell,
     force_visible: bool,
     suppress_automatic_window: bool,
 ) {
-    cx.spawn(async move |cx| {
-        let mut last_route = None;
-        let mut auto_visible = false;
-        let mut terminal_policy = InitialWindowPolicyReporter::default();
-        loop {
-            Timer::after(Duration::from_millis(40)).await;
-            let route = match cx.update(|cx| app_model.read(cx).presentation().active_route) {
-                Ok(route) => route,
-                Err(_) => return,
-            };
-            if last_route == Some(route) {
-                continue;
-            }
-            last_route = Some(route);
-
-            let wants_auto_window =
-                wants_automatic_window(route, force_visible, suppress_automatic_window);
-            let (policy_ready, foreground_ready) = if wants_auto_window {
-                if !auto_visible
-                    && cx
-                        .update(|cx| ensure_app_window(cx, &app_model, &app_window))
-                        .is_err()
-                {
-                    report_diagnostic_failure(
-                        DiagnosticCategory::Bridge,
-                        DiagnosticCode::GpuiAppAccessFailed,
-                    );
-                    continue;
-                }
-                if shell.apply_window_layout(window_layout(route)).is_err() {
-                    report_diagnostic_failure(
-                        DiagnosticCategory::Bridge,
-                        DiagnosticCode::GpuiWindowLayoutFailed,
-                    );
-                    continue;
-                }
-                match shell.show_main_window() {
-                    Ok(()) => {
-                        auto_visible = true;
-                        (true, true)
-                    }
-                    Err(_) => {
-                        report_diagnostic_failure(
-                            DiagnosticCategory::Bridge,
-                            DiagnosticCode::WindowPolicyApplyFailed,
-                        );
-                        (false, true)
-                    }
-                }
-            } else if auto_visible {
-                let _ = cx.update(|cx| remove_app_window(cx, &app_window));
-                auto_visible = false;
-                match shell.hide_main_window() {
-                    Ok(()) => (true, false),
-                    Err(_) => {
-                        report_diagnostic_failure(
-                            DiagnosticCategory::Bridge,
-                            DiagnosticCode::WindowPolicyApplyFailed,
-                        );
-                        (false, false)
-                    }
-                }
-            } else if app_window.borrow().is_some() {
-                if shell.apply_window_layout(window_layout(route)).is_err() {
-                    report_diagnostic_failure(
-                        DiagnosticCategory::Bridge,
-                        DiagnosticCode::GpuiWindowLayoutFailed,
-                    );
-                    continue;
-                }
-                match shell.show_main_window() {
-                    Ok(()) => (true, true),
-                    Err(_) => {
-                        report_diagnostic_failure(
-                            DiagnosticCategory::Bridge,
-                            DiagnosticCode::WindowPolicyApplyFailed,
-                        );
-                        (false, true)
-                    }
-                }
-            } else {
-                match shell.ensure_accessory_policy() {
-                    Ok(()) => (true, false),
-                    Err(_) => {
-                        report_diagnostic_failure(
-                            DiagnosticCategory::Bridge,
-                            DiagnosticCode::WindowPolicyApplyFailed,
-                        );
-                        (false, false)
-                    }
-                }
-            };
-
-            if let Some(code) = terminal_policy.ready(route, policy_ready, foreground_ready) {
-                emit_diagnostic(DiagnosticEvent::new(
-                    DiagnosticCategory::Lifecycle,
-                    DiagnosticLevel::Info,
-                    code,
-                ));
-            }
+    let state = Rc::new(RefCell::new(WindowPolicyState::default()));
+    let observed_state = Rc::clone(&state);
+    let observed_window = Rc::clone(&app_window);
+    let observed_lifecycle = window_lifecycle.clone();
+    cx.observe(&app_model, move |model, cx| {
+        let route = model.read(cx).presentation().active_route;
+        let mut state = observed_state.borrow_mut();
+        if state.started {
+            apply_window_policy(
+                cx,
+                &model,
+                &observed_window,
+                &observed_lifecycle,
+                shell,
+                force_visible,
+                suppress_automatic_window,
+                route,
+                &mut state,
+            );
         }
     })
     .detach();
+
+    cx.spawn(async move |cx| {
+        // Yield once past AppKit's restoration callback before any GPUI
+        // NSWindow can be created. Subsequent route changes are observed and
+        // applied synchronously without a permanent polling timer.
+        Timer::after(Duration::from_millis(1)).await;
+        let _ = cx.update(|cx| {
+            let route = app_model.read(cx).presentation().active_route;
+            let mut state = state.borrow_mut();
+            state.started = true;
+            apply_window_policy(
+                cx,
+                &app_model,
+                &app_window,
+                &window_lifecycle,
+                shell,
+                force_visible,
+                suppress_automatic_window,
+                route,
+                &mut state,
+            );
+        });
+    })
+    .detach();
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_window_policy(
+    cx: &mut App,
+    app_model: &gpui::Entity<AppModel>,
+    app_window: &AppWindowSlot,
+    window_lifecycle: &watch::Sender<u64>,
+    shell: MacShell,
+    force_visible: bool,
+    suppress_automatic_window: bool,
+    route: NavigationTarget,
+    state: &mut WindowPolicyState,
+) {
+    if state.last_route == Some(route) {
+        return;
+    }
+
+    let wants_auto_window = wants_automatic_window(route, force_visible, suppress_automatic_window);
+    let (policy_ready, foreground_ready) = if wants_auto_window {
+        if !state.auto_visible
+            && ensure_app_window(cx, app_model, app_window, window_lifecycle).is_err()
+        {
+            report_diagnostic_failure(
+                DiagnosticCategory::Bridge,
+                DiagnosticCode::GpuiAppAccessFailed,
+            );
+            return;
+        }
+        if shell.apply_window_layout(window_layout(route)).is_err() {
+            report_diagnostic_failure(
+                DiagnosticCategory::Bridge,
+                DiagnosticCode::GpuiWindowLayoutFailed,
+            );
+            return;
+        }
+        match shell.show_main_window() {
+            Ok(()) => {
+                state.auto_visible = true;
+                (true, true)
+            }
+            Err(_) => {
+                report_diagnostic_failure(
+                    DiagnosticCategory::Bridge,
+                    DiagnosticCode::WindowPolicyApplyFailed,
+                );
+                (false, true)
+            }
+        }
+    } else if state.auto_visible {
+        remove_app_window(cx, app_window, window_lifecycle);
+        match shell.hide_main_window() {
+            Ok(()) => {
+                state.auto_visible = false;
+                (true, false)
+            }
+            Err(_) => {
+                report_diagnostic_failure(
+                    DiagnosticCategory::Bridge,
+                    DiagnosticCode::WindowPolicyApplyFailed,
+                );
+                (false, false)
+            }
+        }
+    } else if app_window.borrow().is_some() {
+        if shell.apply_window_layout(window_layout(route)).is_err() {
+            report_diagnostic_failure(
+                DiagnosticCategory::Bridge,
+                DiagnosticCode::GpuiWindowLayoutFailed,
+            );
+            return;
+        }
+        match shell.show_main_window() {
+            Ok(()) => (true, true),
+            Err(_) => {
+                report_diagnostic_failure(
+                    DiagnosticCategory::Bridge,
+                    DiagnosticCode::WindowPolicyApplyFailed,
+                );
+                (false, true)
+            }
+        }
+    } else {
+        match shell.ensure_accessory_policy() {
+            Ok(()) => (true, false),
+            Err(_) => {
+                report_diagnostic_failure(
+                    DiagnosticCategory::Bridge,
+                    DiagnosticCode::WindowPolicyApplyFailed,
+                );
+                (false, false)
+            }
+        }
+    };
+
+    // A failed AppKit transition must remain retryable. AppModel observers can
+    // fire again for runtime or permission changes without changing routes;
+    // only remember a route after its requested policy was actually applied.
+    remember_applied_window_policy(state, route, policy_ready);
+
+    if let Some(code) = state
+        .terminal_policy
+        .ready(route, policy_ready, foreground_ready)
+    {
+        emit_diagnostic(DiagnosticEvent::new(
+            DiagnosticCategory::Lifecycle,
+            DiagnosticLevel::Info,
+            code,
+        ));
+    }
+}
+
+fn remember_applied_window_policy(
+    state: &mut WindowPolicyState,
+    route: NavigationTarget,
+    policy_ready: bool,
+) {
+    if policy_ready {
+        state.last_route = Some(route);
+    }
 }
 
 fn window_layout(route: NavigationTarget) -> WindowLayout {
@@ -597,17 +690,12 @@ fn poll_shell_events(
     cx: &mut App,
     app_model: gpui::Entity<AppModel>,
     app_window: AppWindowSlot,
-    receiver: mpsc::Receiver<ShellEvent>,
+    window_lifecycle: watch::Sender<u64>,
+    mut receiver: mpsc::UnboundedReceiver<ShellEvent>,
     environment: ShellEnvironment,
 ) {
-    cx.spawn(async move |cx| loop {
-        Timer::after(Duration::from_millis(40)).await;
-        loop {
-            let event = match receiver.try_recv() {
-                Ok(event) => event,
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => return,
-            };
+    cx.spawn(async move |cx| {
+        while let Some(event) = receiver.recv().await {
             if let Some(action) = shell_event_action(&event) {
                 let _ = cx.update(|cx| {
                     app_model.update(cx, |model, cx| model.dispatch(action, cx));
@@ -632,14 +720,17 @@ fn poll_shell_events(
                 });
             }
             if matches!(event, ShellEvent::MainWindowHidden) {
-                let _ = cx.update(|cx| remove_app_window(cx, &app_window));
+                let _ = cx.update(|cx| {
+                    remove_app_window(cx, &app_window, &window_lifecycle);
+                });
             }
             if shell_event_opens_window(&event) {
                 let app_model = app_model.clone();
                 let app_window = Rc::clone(&app_window);
+                let window_lifecycle = window_lifecycle.clone();
                 let route = cx
                     .update(|cx| {
-                        ensure_app_window(cx, &app_model, &app_window)?;
+                        ensure_app_window(cx, &app_model, &app_window, &window_lifecycle)?;
                         Ok::<_, String>(app_model.read(cx).presentation().active_route)
                     })
                     .ok()
@@ -731,7 +822,13 @@ fn poll_shell_events(
     .detach();
 }
 
-fn poll_accessibility(cx: &mut App, app_window: AppWindowSlot, shell: MacShell, self_test: bool) {
+fn poll_accessibility(
+    cx: &mut App,
+    app_window: AppWindowSlot,
+    mut window_lifecycle: watch::Receiver<u64>,
+    shell: MacShell,
+    self_test: bool,
+) {
     cx.spawn(async move |cx| {
         // Accessibility generations are local to each AppScreens entity. A
         // hidden settings window is destroyed and recreated, so generation 1
@@ -740,7 +837,22 @@ fn poll_accessibility(cx: &mut App, app_window: AppWindowSlot, shell: MacShell, 
         let mut last_publication = None::<(u64, u64, Option<String>)>;
         let mut attempts = 0_u16;
         loop {
-            Timer::after(Duration::from_millis(50)).await;
+            while app_window.borrow().is_none() {
+                last_publication = None;
+                attempts = 0;
+                if window_lifecycle.changed().await.is_err() {
+                    return;
+                }
+            }
+            tokio::select! {
+                changed = window_lifecycle.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                    continue;
+                }
+                _ = Timer::after(Duration::from_millis(50)) => {}
+            }
             attempts = attempts.saturating_add(1);
             let Some(window_context) = app_window.borrow().clone() else {
                 last_publication = None;
@@ -1272,7 +1384,7 @@ const fn menu_bar_ready_code(tray_projection_ready: bool) -> Option<DiagnosticCo
 fn spawn_runtime_shell_adapter(
     async_runtime: &Runtime,
     runtime_handle: &RuntimeHandle,
-    sender: mpsc::Sender<RuntimeShellUpdate>,
+    sender: mpsc::UnboundedSender<RuntimeShellUpdate>,
 ) {
     let _ = sender.send(RuntimeShellUpdate::Theme(
         runtime_handle.snapshot().settings.theme_preference,
@@ -1341,19 +1453,13 @@ fn spawn_runtime_shell_adapter(
 
 fn poll_runtime_shell_updates(
     cx: &mut App,
-    receiver: mpsc::Receiver<RuntimeShellUpdate>,
+    mut receiver: mpsc::UnboundedReceiver<RuntimeShellUpdate>,
     shell: MacShell,
     async_runtime: Arc<Runtime>,
     runtime_instance: Arc<Mutex<Option<RuntimeInstance>>>,
 ) {
-    cx.spawn(async move |cx| loop {
-        Timer::after(Duration::from_millis(16)).await;
-        loop {
-            let update = match receiver.try_recv() {
-                Ok(update) => update,
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => return,
-            };
+    cx.spawn(async move |cx| {
+        while let Some(update) = receiver.recv().await {
             match update {
                 RuntimeShellUpdate::Tray(presentation) => {
                     if shell.update_tray(&presentation).is_err() {
@@ -1480,10 +1586,10 @@ fn launch_at_login_snapshot(observation: LaunchAtLoginObservation) -> LaunchAtLo
 mod tests {
     use super::{
         accessibility_action, begin_update_operation, hotkey_keycode, menu_bar_ready_code,
-        route_opens_automatically, shell_event_action, shell_event_opens_window,
-        wants_automatic_window, window_layout, AppAction, DiagnosticCode,
+        remember_applied_window_policy, route_opens_automatically, shell_event_action,
+        shell_event_opens_window, wants_automatic_window, window_layout, AppAction, DiagnosticCode,
         InitialWindowPolicyReporter, NavigationTarget, RuntimeShellUpdate, ShellEvent,
-        WindowLayout,
+        WindowLayout, WindowPolicyState,
     };
     use wrenflow_gpui::ui::AccessibilityAction;
 
@@ -1610,6 +1716,15 @@ mod tests {
         assert!(adapter.contains("sender.send"));
         assert!(!adapter.contains("MacShell"));
         assert!(!adapter.contains("shell."));
+
+        let Some((_, poller)) = source.split_once("fn poll_runtime_shell_updates") else {
+            panic!("main-thread runtime shell receiver exists");
+        };
+        let Some((poller, _)) = poller.split_once("fn tray_presentation") else {
+            panic!("runtime shell receiver has a bounded source region");
+        };
+        assert!(poller.contains("receiver.recv().await"));
+        assert!(!poller.contains("Timer::after"));
     }
 
     #[test]
@@ -1639,7 +1754,7 @@ mod tests {
         };
         assert!(!did_finish_callback.contains("ensure_app_window"));
 
-        let Some((_, window_policy)) = source.split_once("fn poll_window_policy") else {
+        let Some((_, window_policy)) = source.split_once("fn observe_window_policy") else {
             panic!("state-restoration-safe window policy exists");
         };
         let Some((delayed_window, _)) = window_policy.split_once("fn window_layout") else {
@@ -1652,6 +1767,8 @@ mod tests {
             panic!("window is created after yielding");
         };
         assert!(timer < window);
+        assert!(delayed_window.contains("cx.observe(&app_model"));
+        assert!(!delayed_window.contains("Duration::from_millis(40)"));
 
         let swift = include_str!("../macos/WrenflowShell.swift");
         assert!(swift.contains("ApplePersistenceIgnoreState"));
@@ -1756,6 +1873,12 @@ mod tests {
             None
         );
 
+        let mut retryable = WindowPolicyState::default();
+        remember_applied_window_policy(&mut retryable, NavigationTarget::Onboarding, false);
+        assert_eq!(retryable.last_route, None);
+        remember_applied_window_policy(&mut retryable, NavigationTarget::Onboarding, true);
+        assert_eq!(retryable.last_route, Some(NavigationTarget::Onboarding));
+
         let source = include_str!("main.rs");
         assert!(source.contains("let suppress_automatic_window = performance_request.is_some();"));
         assert!(source.contains(
@@ -1767,6 +1890,58 @@ mod tests {
         assert!(swift.contains(
             "return NSApp.setActivationPolicy(policy) && NSApp.activationPolicy() == policy"
         ));
+    }
+
+    #[test]
+    fn windowless_idle_is_event_driven_and_permission_loss_is_confirmed() {
+        let main = include_str!("main.rs");
+        let shell = include_str!("shell.rs");
+        let model = include_str!("app/model.rs");
+        let pipeline = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../core/wrenflow-runtime/src/pipeline.rs"
+        ));
+        let swift = include_str!("../macos/WrenflowShell.swift");
+
+        assert!(main.contains("while let Some(update) = receiver.recv().await"));
+        assert!(main.contains("while let Some(event) = receiver.recv().await"));
+        assert!(main.contains("while app_window.borrow().is_none()"));
+        assert!(main.contains("window_lifecycle.changed().await"));
+        assert!(main.contains("cx.observe(&app_model"));
+        let Some((_, runtime_receiver)) = main.split_once("fn poll_runtime_shell_updates") else {
+            panic!("runtime receiver exists");
+        };
+        let Some((runtime_receiver, _)) = runtime_receiver.split_once("fn tray_presentation")
+        else {
+            panic!("runtime receiver has a bounded source region");
+        };
+        assert!(!runtime_receiver.contains("Timer::after"));
+        let Some((_, shell_receiver)) = main.split_once("fn poll_shell_events") else {
+            panic!("shell receiver exists");
+        };
+        let Some((shell_receiver, _)) = shell_receiver.split_once("fn poll_accessibility") else {
+            panic!("shell receiver has a bounded source region");
+        };
+        assert!(!shell_receiver.contains("Timer::after"));
+        assert!(shell.contains("mpsc::unbounded_channel()"));
+        assert!(model.contains("while source.changed().await.is_ok()"));
+        assert!(!model.contains("tokio::time::interval(AUDIO_PRESENTATION_INTERVAL)"));
+        assert!(pipeline.contains("wait_for_pipeline_deadline(deadline)"));
+        assert!(!pipeline.contains("const TIMER_TICK"));
+
+        assert!(swift.contains("permissionFallbackInterval: TimeInterval = 60"));
+        assert!(swift.contains("permissionConfirmationInterval: TimeInterval = 0.25"));
+        assert!(swift.contains("detectLossTransition && previousAllGranted == true"));
+        assert!(swift.contains("return remaining - 1"));
+        assert!(
+            swift.contains("permissionConfirmationsRemaining = permissionConfirmationTransition(")
+        );
+        assert!(!swift.contains("permissionConfirmationsRemaining -= 1"));
+        assert!(swift.contains("force: confirmation"));
+        assert!(swift.contains("detectLossTransition: !confirmation"));
+        assert!(swift.contains("NSApplication.didBecomeActiveNotification"));
+        assert!(swift.contains("func menuWillOpen(_ menu: NSMenu)"));
+        assert!(!swift.contains("withTimeInterval: 1, repeats: true"));
     }
 
     #[test]

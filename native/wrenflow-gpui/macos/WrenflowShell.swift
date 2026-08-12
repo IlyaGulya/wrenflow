@@ -66,6 +66,54 @@ private struct WrenflowTrayPresentation: Decodable {
 private struct WrenflowPermissionsPayload: Encodable, Equatable {
     let microphone: String
     let accessibility: String
+
+    var allGranted: Bool {
+        microphone == "granted" && accessibility == "granted"
+    }
+}
+
+private func permissionConfirmationTransition(
+    remaining: Int,
+    previousAllGranted: Bool?,
+    currentAllGranted: Bool,
+    force: Bool,
+    detectLossTransition: Bool
+) -> Int {
+    if currentAllGranted {
+        return 0
+    }
+    if detectLossTransition && previousAllGranted == true {
+        return 2
+    }
+    if force && remaining > 0 {
+        return remaining - 1
+    }
+    return remaining
+}
+
+// Fixed numeric test seam for the permission confirmation state machine. It
+// exposes no permission payload or user data and production uses the same pure
+// transition below.
+@_cdecl("wrenflow_shell_permission_confirmation_transition")
+public func wrenflowShellPermissionConfirmationTransition(
+    _ remaining: Int32,
+    _ previousAllGranted: Int32,
+    _ currentAllGranted: Int32,
+    _ force: Int32,
+    _ detectLossTransition: Int32
+) -> Int32 {
+    let previous: Bool? = switch previousAllGranted {
+    case 0: false
+    case 1: true
+    default: nil
+    }
+    return Int32(permissionConfirmationTransition(
+        remaining: max(0, Int(remaining)),
+        previousAllGranted: previous,
+        currentAllGranted: currentAllGranted == 1,
+        force: force == 1,
+        detectLossTransition: detectLossTransition == 1
+    ))
 }
 
 private struct WrenflowLaunchAtLoginPayload: Encodable {
@@ -405,14 +453,18 @@ private final class WrenflowPerformanceInteractionDriver {
     }
 }
 
-private final class WrenflowShell: NSObject {
+private final class WrenflowShell: NSObject, NSMenuDelegate {
     static let shared = WrenflowShell()
+
+    private static let permissionFallbackInterval: TimeInterval = 60
+    private static let permissionConfirmationInterval: TimeInterval = 0.25
 
     private var callback: WrenflowEventCallback?
     private var windowTitle = "Wrenflow"
     private var version = ""
     private var statusItem: NSStatusItem?
     private var permissionTimer: Timer?
+    private var permissionConfirmationsRemaining = 0
     private var lastPermissions: WrenflowPermissionsPayload?
     private var lastAccessibilityPreferences: WrenflowAccessibilityPreferencesPayload?
     private var observesWorkspace = false
@@ -470,6 +522,12 @@ private final class WrenflowShell: NSObject {
             object: nil
         )
         observesWorkspace = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationDidBecomeActive(_:)),
+            name: NSApplication.didBecomeActiveNotification,
+            object: NSApp
+        )
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Wrenflow") {
@@ -496,15 +554,9 @@ private final class WrenflowShell: NSObject {
         }
         attachCloseButton()
         accessibility.attach(to: settingsWindow)
-        emitPermissions(force: true)
+        refreshPermissions(force: true, detectLossTransition: true)
         emitAccessibilityPreferences(force: true)
         emitLaunchAtLogin(errorMessage: nil)
-        permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            if self?.hotkey.isRunning == false {
-                _ = self?.hotkey.start()
-            }
-            self?.emitPermissions(force: false)
-        }
         if pendingReopen {
             pendingReopen = false
             emit(.openSettings)
@@ -522,6 +574,12 @@ private final class WrenflowShell: NSObject {
         performanceInteraction = nil
         permissionTimer?.invalidate()
         permissionTimer = nil
+        permissionConfirmationsRemaining = 0
+        NotificationCenter.default.removeObserver(
+            self,
+            name: NSApplication.didBecomeActiveNotification,
+            object: NSApp
+        )
         if observesWorkspace {
             NSWorkspace.shared.notificationCenter.removeObserver(self)
             observesWorkspace = false
@@ -642,6 +700,7 @@ private final class WrenflowShell: NSObject {
         accessibility.attach(to: settingsWindow)
         settingsWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        refreshPermissions(force: false, detectLossTransition: true)
         return true
     }
 
@@ -698,7 +757,9 @@ private final class WrenflowShell: NSObject {
     func requestMicrophonePermission() {
         dispatchPrecondition(condition: .onQueue(.main))
         AVCaptureDevice.requestAccess(for: .audio) { [weak self] _ in
-            DispatchQueue.main.async { self?.emitPermissions(force: true) }
+            DispatchQueue.main.async {
+                self?.refreshPermissions(force: true, detectLossTransition: true)
+            }
         }
     }
 
@@ -706,7 +767,7 @@ private final class WrenflowShell: NSObject {
         dispatchPrecondition(condition: .onQueue(.main))
         let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
         _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
-        emitPermissions(force: true)
+        refreshPermissions(force: true, detectLossTransition: true)
     }
 
     func openPermissionSettings(kind: Int32) {
@@ -957,6 +1018,7 @@ private final class WrenflowShell: NSObject {
         addMenuItem(menu, title: "About Wrenflow", action: #selector(openAbout), keyEquivalent: "")
         menu.addItem(.separator())
         addMenuItem(menu, title: "Quit Wrenflow", action: #selector(quit), keyEquivalent: "q")
+        menu.delegate = self
         statusItem?.menu = menu
     }
 
@@ -983,7 +1045,7 @@ private final class WrenflowShell: NSObject {
         emit(.hotkeyReleased, payload: String(duration * 1_000))
     }
 
-    private func emitPermissions(force: Bool) {
+    private func permissionsPayload() -> WrenflowPermissionsPayload {
         let microphone: String
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: microphone = "granted"
@@ -992,13 +1054,54 @@ private final class WrenflowShell: NSObject {
         case .notDetermined: microphone = "unknown"
         @unknown default: microphone = "unknown"
         }
-        let payload = WrenflowPermissionsPayload(
+        return WrenflowPermissionsPayload(
             microphone: microphone,
             accessibility: AXIsProcessTrusted() ? "granted" : "denied"
         )
-        guard force || payload != lastPermissions else { return }
-        lastPermissions = payload
-        emitJSON(.permissionsChanged, value: payload)
+    }
+
+    private func refreshPermissions(force: Bool, detectLossTransition: Bool) {
+        if hotkey.isRunning == false {
+            _ = hotkey.start()
+        }
+        let payload = permissionsPayload()
+        let previous = lastPermissions
+        // Runtime recovery deliberately requires three consecutive loss
+        // observations. The first changed payload plus exactly two fresh,
+        // forced queries confirms stable revocation without a permanent
+        // high-frequency timer. The budget is consumed only after a forced
+        // query executes, so intervening lifecycle refreshes cannot lose one.
+        permissionConfirmationsRemaining = permissionConfirmationTransition(
+            remaining: permissionConfirmationsRemaining,
+            previousAllGranted: previous?.allGranted,
+            currentAllGranted: payload.allGranted,
+            force: force,
+            detectLossTransition: detectLossTransition
+        )
+        if force || payload != lastPermissions {
+            lastPermissions = payload
+            emitJSON(.permissionsChanged, value: payload)
+        }
+        schedulePermissionRefresh()
+    }
+
+    private func schedulePermissionRefresh() {
+        permissionTimer?.invalidate()
+        let confirmation = permissionConfirmationsRemaining > 0
+        let interval = confirmation
+            ? Self.permissionConfirmationInterval
+            : Self.permissionFallbackInterval
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) {
+            [weak self] _ in
+            self?.refreshPermissions(
+                force: confirmation,
+                detectLossTransition: !confirmation
+            )
+        }
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        refreshPermissions(force: false, detectLossTransition: true)
     }
 
     private func emitLaunchAtLogin(errorMessage: String?) {
@@ -1038,10 +1141,13 @@ private final class WrenflowShell: NSObject {
 
     @objc private func workspaceDidWake(_ notification: Notification) {
         hotkey.stop()
-        _ = hotkey.start()
-        emitPermissions(force: true)
+        refreshPermissions(force: true, detectLossTransition: true)
         emitLaunchAtLogin(errorMessage: nil)
         emitAccessibilityPreferences(force: true)
+    }
+
+    @objc private func applicationDidBecomeActive(_ notification: Notification) {
+        refreshPermissions(force: false, detectLossTransition: true)
     }
 
     @objc private func accessibilityDisplayOptionsDidChange(_ notification: Notification) {

@@ -3356,7 +3356,7 @@ def check_active_sampling(result: dict[str, Any], label: str) -> list[str]:
             "downloaded": True,
         }
         expected_workload = {"cycles": 20, "history_rows": 50}
-        expected_report_keys = {
+        allowed_report_keys = {
             "schema_version",
             "contract",
             "fixture",
@@ -3371,6 +3371,7 @@ def check_active_sampling(result: dict[str, Any], label: str) -> list[str]:
             "passed",
             "failure_code",
         }
+        required_report_keys = allowed_report_keys - {"failure_code"}
         expected_timing_keys = {
             *SELF_TEST_ABSOLUTE_TIMING_KEYS,
             "model_download_ms",
@@ -3379,7 +3380,8 @@ def check_active_sampling(result: dict[str, Any], label: str) -> list[str]:
             "cycles_ms",
         }
         if (
-            set(report) != expected_report_keys
+            not required_report_keys.issubset(report)
+            or not set(report).issubset(allowed_report_keys)
             or report.get("schema_version") != 1
             or report.get("contract") != SELF_TEST_CONTRACT
             or report.get("fixture") != expected_fixture

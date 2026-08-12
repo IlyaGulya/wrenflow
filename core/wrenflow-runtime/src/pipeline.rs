@@ -26,7 +26,6 @@ use crate::{ErrorAction, RuntimeEvent, RuntimeSnapshot};
 
 const INIT_TIMEOUT: Duration = Duration::from_millis(500);
 const INDICATOR_TIMEOUT: Duration = Duration::from_secs(1);
-const TIMER_TICK: Duration = Duration::from_millis(50);
 static RECORDING_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static PERFORMANCE_SYNTHETIC_RECORDING: OnceLock<Arc<Vec<f32>>> = OnceLock::new();
 
@@ -288,6 +287,21 @@ impl PipelineController {
             self.engine.on_indicator_timeout(&self.listener);
         }
     }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        match (self.init_deadline, self.indicator_deadline) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+            (None, None) => None,
+        }
+    }
+}
+
+async fn wait_for_pipeline_deadline(deadline: Option<Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending::<()>().await,
+    }
 }
 
 pub(crate) fn start(
@@ -318,9 +332,9 @@ async fn run(
     let mut snapshots = store.subscribe_snapshots();
     let mut controller =
         PipelineController::new(store.snapshot().settings.clone(), store.clone(), history);
-    let mut timer = tokio::time::interval(TIMER_TICK);
 
     loop {
+        let deadline = controller.next_deadline();
         tokio::select! {
             command = commands.recv() => {
                 if matches!(command, Some(PipelineCommand::Shutdown) | None) {
@@ -405,7 +419,7 @@ async fn run(
                 let config = snapshots.borrow().settings.clone();
                 controller.update_config(config);
             }
-            _ = timer.tick() => controller.check_timers(),
+            () = wait_for_pipeline_deadline(deadline) => controller.check_timers(),
         }
     }
 }
@@ -543,6 +557,16 @@ mod tests {
     #[test]
     fn ordinary_runtime_has_no_synthetic_recording_source() {
         assert!(performance_synthetic_recording().is_none());
+
+        let source = include_str!("pipeline.rs");
+        let Some((_, run)) = source.split_once("async fn run(") else {
+            panic!("pipeline actor exists");
+        };
+        let Some((run, _)) = run.split_once("fn effective_device_id") else {
+            panic!("pipeline actor has a bounded source region");
+        };
+        assert!(run.contains("wait_for_pipeline_deadline(deadline)"));
+        assert!(!run.contains("tokio::time::interval"));
     }
 
     #[test]

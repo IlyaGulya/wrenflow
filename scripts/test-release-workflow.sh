@@ -119,6 +119,110 @@ reject_pattern 'path: ${{ env.PERFORMANCE_DATA_ROOT }}' "$BUILD_WORKFLOW"
 reject_pattern 'path: ${{ env.PERFORMANCE_FIXTURE }}' "$BUILD_WORKFLOW"
 reject_pattern 'path: ${{ env.PERFORMANCE_APP }}' "$BUILD_WORKFLOW"
 
+SEAL_BLOCK="$(awk '
+    $0 == "      - name: Sanitize and seal constrained evidence" { capture = 1 }
+    capture && $0 == "      - name: Enforce constrained performance budgets" { exit }
+    capture { print }
+' "$BUILD_WORKFLOW")"
+if [[ -z "$SEAL_BLOCK" ]]; then
+    echo "Constrained sanitize-and-seal block is missing" >&2
+    exit 1
+fi
+for pattern in \
+    '      - name: Sanitize and seal constrained evidence' \
+    '        id: seal_constrained' \
+    '          mise exec -- python3 scripts/perf/gpui-performance.py sanitize \' \
+    '          mise exec -- python3 scripts/perf/gpui-performance.py seal \' \
+    '            .sanitized == true and .sealed == true and' \
+    '            (.candidate | has("app_path") | not) and' \
+    '            (.candidate | has("executable_path") | not)'; do
+    if ! grep -Fqx -- "$pattern" <<< "$SEAL_BLOCK"; then
+        echo "Constrained sanitize-and-seal invariant is missing: $pattern" >&2
+        exit 1
+    fi
+done
+for forbidden in \
+    'performance-verify' \
+    'PERFORMANCE_REPORT'; do
+    if grep -Fq -- "$forbidden" <<< "$SEAL_BLOCK"; then
+        echo "Constrained sanitize-and-seal block contains verifier concern: $forbidden" >&2
+        exit 1
+    fi
+done
+
+VERIFY_BLOCK="$(awk '
+    $0 == "      - name: Enforce constrained performance budgets" { capture = 1 }
+    capture && $0 == "      - name: Upload sanitized constrained failure summary" { exit }
+    capture { print }
+' "$BUILD_WORKFLOW")"
+if [[ -z "$VERIFY_BLOCK" ]]; then
+    echo "Constrained budget-verification block is missing" >&2
+    exit 1
+fi
+for pattern in \
+    '      - name: Enforce constrained performance budgets' \
+    '        id: verify_constrained' \
+    '          mise run performance-verify -- \' \
+    '            --profile constrained \' \
+    '            --result "$PERFORMANCE_RESULT" \' \
+    '            --report "$PERFORMANCE_REPORT"' \
+    '          mise exec -- jq -e '\''.profile == "constrained" and .passed == true'\'' \' \
+    '            "$PERFORMANCE_REPORT" >/dev/null'; do
+    if ! grep -Fqx -- "$pattern" <<< "$VERIFY_BLOCK"; then
+        echo "Constrained budget-verification invariant is missing: $pattern" >&2
+        exit 1
+    fi
+done
+for forbidden in \
+    'gpui-performance.py sanitize' \
+    'gpui-performance.py seal' \
+    'continue-on-error: true'; do
+    if grep -Fq -- "$forbidden" <<< "$VERIFY_BLOCK"; then
+        echo "Constrained budget-verification block contains sealing concern: $forbidden" >&2
+        exit 1
+    fi
+done
+
+EVIDENCE_UPLOAD_BLOCK="$(awk '
+    $0 == "      - name: Upload sanitized constrained evidence" { capture = 1 }
+    capture && $0 == "  publish:" { exit }
+    capture { print }
+' "$BUILD_WORKFLOW")"
+if [[ -z "$EVIDENCE_UPLOAD_BLOCK" ]]; then
+    echo "Constrained evidence upload block is missing" >&2
+    exit 1
+fi
+for pattern in \
+    '      - name: Upload sanitized constrained evidence' \
+    '        if: >-' \
+    '          ${{ always() && steps.seal_constrained.outcome == '\''success'\'' &&' \
+    '              (steps.verify_constrained.outcome == '\''success'\'' || steps.verify_constrained.outcome == '\''failure'\'') }}' \
+    '          path: |' \
+    '            ${{ env.PERFORMANCE_RESULT }}' \
+    '            ${{ env.PERFORMANCE_REPORT }}' \
+    '          if-no-files-found: error' \
+    '          retention-days: 21'; do
+    if ! grep -Fqx -- "$pattern" <<< "$EVIDENCE_UPLOAD_BLOCK"; then
+        echo "Constrained evidence upload invariant is missing: $pattern" >&2
+        exit 1
+    fi
+done
+if [[ "$(grep -c '^            \${{ env\.PERFORMANCE_' <<< "$EVIDENCE_UPLOAD_BLOCK")" -ne 2 ]]; then
+    echo "Constrained evidence artifact must upload exactly the sealed result and verifier report" >&2
+    exit 1
+fi
+for forbidden in \
+    'PERFORMANCE_ROOT' \
+    'PERFORMANCE_APP' \
+    'PERFORMANCE_FIXTURE' \
+    'PERFORMANCE_DATA_ROOT' \
+    'PERFORMANCE_FAILURE_SUMMARY'; do
+    if grep -Fq -- "$forbidden" <<< "$EVIDENCE_UPLOAD_BLOCK"; then
+        echo "Constrained evidence artifact contains forbidden raw or pathful source: $forbidden" >&2
+        exit 1
+    fi
+done
+
 FAILURE_UPLOAD_BLOCK="$(awk '
     $0 == "      - name: Upload sanitized constrained failure summary" { capture = 1 }
     capture && $0 == "      - name: Upload sanitized constrained evidence" { exit }
