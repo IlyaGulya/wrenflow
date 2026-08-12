@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "contract": "wrenflow.gpui.endurance.update-evidence.v1",
+  "identity": {
+    "release_line": "gpui-v1",
+    "bundle_id": "me.gulya.wrenflow",
+    "team_id": "T4LV8K9BGV",
+    "decision_owner": "Ilya Gulya"
+  },
+  "automated_update_fixtures": {
+    "source_path": "core/wrenflow-runtime/src/update.rs",
+    "verifier_path": "scripts/gpui-endurance-evidence.py",
+    "cycles": 20,
+    "other_cases": [
+      {
+        "id": "current_line_relaunch",
+        "source_path": "core/wrenflow-runtime/src/data_paths.rs",
+        "test": "data_paths::tests::twenty_current_line_relaunches_preserve_only_gpui_v1_state"
+      },
+      {
+        "id": "interrupted_write_cleanup",
+        "source_path": "core/wrenflow-runtime/src/recovery.rs",
+        "test": "recovery::tests::twenty_interrupted_launches_clean_only_bounded_temporary_state"
+      }
+    ],
+    "cases": [
+      {
+        "id": "stable_beta_channel_selection",
+        "test": "update::tests::stable_and_beta_channels_are_strictly_isolated"
+      },
+      {
+        "id": "offline",
+        "test": "update::tests::offline_and_rate_limit_failures_are_actionable_and_bounded"
+      },
+      {
+        "id": "rate_limit",
+        "test": "update::tests::offline_and_rate_limit_failures_are_actionable_and_bounded"
+      },
+      {
+        "id": "malformed_metadata",
+        "test": "update::tests::duplicate_malformed_and_unexpected_host_metadata_are_rejected"
+      },
+      {
+        "id": "duplicate_release",
+        "test": "update::tests::duplicate_malformed_and_unexpected_host_metadata_are_rejected"
+      },
+      {
+        "id": "partial_transfer",
+        "test": "update::tests::partial_download_is_removed_and_never_published"
+      },
+      {
+        "id": "transaction_recovery_cycles",
+        "test": "update::tests::twenty_channel_download_and_transaction_fault_cycles_fail_closed"
+      }
+    ]
+  },
+  "manual_m13_pre_promotion": {
+    "feed_url": "https://api.github.com/repos/IlyaGulya/wrenflow/releases?per_page=20",
+    "target_selected": false,
+    "target_operations": [
+      "authenticated_target_artifact",
+      "target_install"
+    ],
+    "beta_outcomes": [
+      "available",
+      "up_to_date"
+    ]
+  },
+  "post_promotion_stable": {
+    "feed_url": "https://api.github.com/repos/IlyaGulya/wrenflow/releases?per_page=20",
+    "operations": [
+      "discovery",
+      "authenticated_download"
+    ]
+  },
+  "manual_m22": {
+    "stages": [
+      {
+        "id": "update_staging",
+        "journal_phase": "staging",
+        "installed_result": "baseline_launchable"
+      },
+      {
+        "id": "update_prepared",
+        "journal_phase": "prepared",
+        "installed_result": "baseline_launchable"
+      },
+      {
+        "id": "update_swapped",
+        "journal_phase": "swapped",
+        "installed_result": "target_launchable"
+      },
+      {
+        "id": "before_ready_finalization",
+        "journal_phase": "swapped",
+        "installed_result": "target_launchable"
+      }
+    ]
+  }
+}

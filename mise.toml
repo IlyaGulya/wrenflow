@@ -92,6 +92,14 @@ run = "scripts/gpui-endurance-preflight.sh automated"
 description = "Test fail-closed GPUI endurance and candidate-evidence harness behavior"
 run = "scripts/gpui-endurance-preflight-test.sh"
 
+[tasks.human-acceptance]
+description = "Create or verify immutable-candidate M01-M12/M17-M20 evidence manifests"
+run = "mise exec -- python3 scripts/gpui-human-acceptance.py"
+
+[tasks.test-human-acceptance]
+description = "Test fail-closed human acceptance manifest and evidence verification"
+run = "scripts/test-gpui-human-acceptance.sh"
+
 [tasks.performance-preflight]
 description = "Capture sanitized macOS, hardware, power, xctrace and signed-candidate inventory"
 run = "mise exec -- python3 scripts/perf/gpui-performance.py preflight"
@@ -196,7 +204,7 @@ scripts/test-release-workflow.sh
 
 [tasks.test]
 description = "Run core/runtime and production app tests"
-depends = ["test-rust", "test-app", "test-lifecycle-contract", "test-macos-support", "test-supply-chain", "test-endurance-preflight", "test-release-runbook", "test-performance-harness"]
+depends = ["test-rust", "test-app", "test-lifecycle-contract", "test-macos-support", "test-supply-chain", "test-endurance-preflight", "test-human-acceptance", "test-release-runbook", "test-performance-harness"]
 run = "true"
 
 [tasks.test-rust]

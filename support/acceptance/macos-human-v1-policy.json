@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "schema_id": "wrenflow-macos-human-acceptance-v1",
+  "candidate_identity": {
+    "bundle_id": "me.gulya.wrenflow",
+    "team_id": "T4LV8K9BGV"
+  },
+  "candidate_artifacts": [
+    "Wrenflow.dmg",
+    "Wrenflow.cdx.json",
+    "RustThirdPartyLicenses.txt",
+    "pins.json",
+    "exceptions.json",
+    "provenance.json",
+    "artifact-provenance.json",
+    "release-evidence.json",
+    "SHA256SUMS"
+  ],
+  "rows": {
+    "M01": {
+      "issue": "wrenflow-duh.9.9",
+      "title": "Gatekeeper installation and first open",
+      "automation": "supporting_required",
+      "required_evidence_groups": [
+        ["result-sheet"],
+        ["artifact-verification"],
+        ["screen-recording", "screenshots"]
+      ]
+    },
+    "M02": {
+      "issue": "wrenflow-duh.9.9",
+      "title": "Fresh launch with unknown TCC state",
+      "automation": "supporting_optional",
+      "required_evidence_groups": [
+        ["result-sheet"],
+        ["screen-recording", "screenshots"],
+        ["unified-log"]
+      ]
+    },
+    "M03": {
+      "issue": "wrenflow-duh.9.9",
+      "title": "First microphone grant and real recording",
+      "automation": "supporting_optional",
+      "required_evidence_groups": [
+        ["result-sheet"],
+        ["screen-recording"],
+        ["unified-log"]
+      ]
+    },
+    "M04": {
+      "issue": "wrenflow-duh.9.9",
+      "title": "Microphone denial and recovery",
+      "automation": "supporting_optional",
+      "required_evidence_groups": [
+        ["result-sheet"],
+        ["screen-recording"],
+        ["unified-log"]
+      ]
+    },
+    "M05": {
+      "issue": "wrenflow-duh.9.9",
+      "title": "Accessibility denial, grant and revocation",
+      "automation": "supporting_optional",
+      "required_evidence_groups": [
+        ["result-sheet"],
+        ["screen-recording"],
+        ["unified-log"]
+      ]
+    },
+    "M06": {
+      "issue": "wrenflow-duh.9.9",
+      "title": "Physical global hotkey behavior",
+      "automation": "supporting_required",
+      "required_evidence_groups": [
+        ["result-sheet"],
+        ["screen-recording"],
+        ["unified-log"]
+      ]
+    },
+    "M07": {
+      "issue": "wrenflow-duh.9.9",
+      "title": "Paste into TextEdit, Chromium and Electron",
+      "automation": "supporting_optional",
+      "required_evidence_groups": [
+        ["result-sheet"],
+        ["screen-recording"]
+      ]
+    },
+    "M08": {
+      "issue": "wrenflow-duh.9.9",
+      "title": "Native overlay lifecycle and focus",
+      "automation": "supporting_required",
+      "required_evidence_groups": [
+        ["result-sheet"],
+        ["screen-recording"],
+        ["unified-log"]
+      ]
+    },
+    "M09": {
+      "issue": "wrenflow-duh.9.9",
+      "title": "Displays, Spaces, full screen and hot plug",
+      "automation": "supporting_required",
+      "required_evidence_groups": [
+        ["result-sheet"],
+        ["screen-recording"],
+        ["display-metadata"]
+      ]
+    },
+    "M10": {
+      "issue": "wrenflow-duh.9.9",
+      "title": "Model lifecycle",
+      "automation": "supporting_optional",
+      "required_evidence_groups": [
+        ["result-sheet"],
+        ["screen-recording"],
+        ["unified-log"]
+      ]
+    },
+    "M11": {
+      "issue": "wrenflow-duh.9.9",
+      "title": "History, destructive dialogs and current-store errors",
+      "automation": "supporting_required",
+      "required_evidence_groups": [
+        ["result-sheet"],
+        ["screen-recording"],
+        ["store-integrity"]
+      ]
+    },
+    "M12": {
+      "issue": "wrenflow-duh.9.9",
+      "title": "Settings persistence and login item",
+      "automation": "supporting_optional",
+      "required_evidence_groups": [
+        ["result-sheet"],
+        ["screen-recording"],
+        ["lifecycle-log"]
+      ]
+    },
+    "M17": {
+      "issue": "wrenflow-duh.9.10",
+      "title": "Keyboard-only product traversal",
+      "automation": "supporting_required",
+      "required_evidence_groups": [
+        ["result-sheet"],
+        ["screen-recording"],
+        ["focus-order"]
+      ]
+    },
+    "M18": {
+      "issue": "wrenflow-duh.9.10",
+      "title": "VoiceOver and Accessibility Inspector",
+      "automation": "supporting_required",
+      "required_evidence_groups": [
+        ["result-sheet"],
+        ["screen-recording"],
+        ["accessibility-inspector"]
+      ]
+    },
+    "M19": {
+      "issue": "wrenflow-duh.9.10",
+      "title": "Appearance and accessibility display preferences",
+      "automation": "supporting_required",
+      "required_evidence_groups": [
+        ["result-sheet"],
+        ["screen-recording", "screenshots"],
+        ["appearance-matrix"]
+      ]
+    },
+    "M20": {
+      "issue": "wrenflow-duh.9.10",
+      "title": "Window-size and effective-scale matrix",
+      "automation": "supporting_required",
+      "required_evidence_groups": [
+        ["result-sheet"],
+        ["screen-recording", "screenshots"],
+        ["size-scale-matrix"]
+      ]
+    }
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "contract": "wrenflow.gpui.endurance.update-evidence.v1",
+  "source": {
+    "commit": "4444444444444444444444444444444444444444",
+    "update_source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "verifier_source_sha256": "abababababababababababababababababababababababababababababababab",
+    "policy_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "automated_evidence_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "candidate_plan_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "M13": {
+    "status": "passed_pre_promotion",
+    "target_artifact": {
+      "file": "m13-target-Wrenflow.dmg",
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+    },
+    "target_install": {
+      "file": "m13-target-install.json",
+      "sha256": "0303030303030303030303030303030303030303030303030303030303030303"
+    },
+    "beta_selector": {
+      "file": "m13-beta-selector.json",
+      "sha256": "0404040404040404040404040404040404040404040404040404040404040404"
+    },
+    "result": "conditional_pass_pending_post_promotion_stable"
+  },
+  "M22": {
+    "status": "passed",
+    "stages": [
+      {
+        "stage": "update_staging",
+        "journal_phase": "staging",
+        "journal": {"file": "m22-staging-journal.json", "sha256": "1010101010101010101010101010101010101010101010101010101010101010"},
+        "sigkill": {"file": "m22-staging-sigkill.json", "sha256": "1110111011101110111011101110111011101110111011101110111011101110"},
+        "recovery": {"file": "m22-staging-recovery.json", "sha256": "1212121212121212121212121212121212121212121212121212121212121212"},
+        "installed_identity": {"file": "m22-staging-installed.json", "sha256": "1313131313131313131313131313131313131313131313131313131313131313"},
+        "installed_version": "0.3.0",
+        "result": "baseline_launchable"
+      },
+      {
+        "stage": "update_prepared",
+        "journal_phase": "prepared",
+        "journal": {"file": "m22-prepared-journal.json", "sha256": "2020202020202020202020202020202020202020202020202020202020202020"},
+        "sigkill": {"file": "m22-prepared-sigkill.json", "sha256": "2121212121212121212121212121212121212121212121212121212121212121"},
+        "recovery": {"file": "m22-prepared-recovery.json", "sha256": "2221222122212221222122212221222122212221222122212221222122212221"},
+        "installed_identity": {"file": "m22-prepared-installed.json", "sha256": "2323232323232323232323232323232323232323232323232323232323232323"},
+        "installed_version": "0.3.0",
+        "result": "baseline_launchable"
+      },
+      {
+        "stage": "update_swapped",
+        "journal_phase": "swapped",
+        "journal": {"file": "m22-swapped-journal.json", "sha256": "3030303030303030303030303030303030303030303030303030303030303030"},
+        "sigkill": {"file": "m22-swapped-sigkill.json", "sha256": "3131313131313131313131313131313131313131313131313131313131313131"},
+        "recovery": {"file": "m22-swapped-recovery.json", "sha256": "3232323232323232323232323232323232323232323232323232323232323232"},
+        "installed_identity": {"file": "m22-swapped-installed.json", "sha256": "3332333233323332333233323332333233323332333233323332333233323332"},
+        "installed_version": "0.4.0",
+        "result": "target_launchable"
+      },
+      {
+        "stage": "before_ready_finalization",
+        "journal_phase": "swapped",
+        "journal": {"file": "m22-before-ready-journal.json", "sha256": "4040404040404040404040404040404040404040404040404040404040404040"},
+        "sigkill": {"file": "m22-before-ready-sigkill.json", "sha256": "4141414141414141414141414141414141414141414141414141414141414141"},
+        "recovery": {"file": "m22-before-ready-recovery.json", "sha256": "4242424242424242424242424242424242424242424242424242424242424242"},
+        "installed_identity": {"file": "m22-before-ready-installed.json", "sha256": "4343434343434343434343434343434343434343434343434343434343434343"},
+        "installed_version": "0.4.0",
+        "result": "target_launchable"
+      }
+    ]
+  },
+  "decision": {
+    "status": "passed",
+    "owner": "Ilya Gulya",
+    "signed_at_utc": "2026-08-11T12:00:00Z"
+  }
+}

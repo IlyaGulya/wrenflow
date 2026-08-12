@@ -1,0 +1,248 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wrenflow.local/schemas/macos-human-acceptance-v1.json",
+  "title": "Wrenflow macOS immutable-candidate human acceptance manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "schema_id", "generated_at", "candidate", "rows"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "schema_id": {"const": "wrenflow-macos-human-acceptance-v1"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "candidate": {"$ref": "#/$defs/candidate"},
+    "rows": {
+      "type": "array",
+      "minItems": 16,
+      "maxItems": 16,
+      "items": {"$ref": "#/$defs/row"}
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sourceCommit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "tag": {
+      "type": "string",
+      "pattern": "^v(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sha256"],
+      "properties": {
+        "name": {
+          "enum": [
+            "Wrenflow.dmg",
+            "Wrenflow.cdx.json",
+            "RustThirdPartyLicenses.txt",
+            "pins.json",
+            "exceptions.json",
+            "provenance.json",
+            "artifact-provenance.json",
+            "release-evidence.json",
+            "SHA256SUMS"
+          ]
+        },
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tag",
+        "version",
+        "build_number",
+        "source_commit",
+        "dmg_sha256",
+        "team_id",
+        "bundle_id",
+        "artifact_url",
+        "workflow_url",
+        "apple_submission_id",
+        "artifacts"
+      ],
+      "properties": {
+        "tag": {"$ref": "#/$defs/tag"},
+        "version": {
+          "type": "string",
+          "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$"
+        },
+        "build_number": {"type": "string", "pattern": "^[0-9]+$"},
+        "source_commit": {"$ref": "#/$defs/sourceCommit"},
+        "dmg_sha256": {"$ref": "#/$defs/sha256"},
+        "team_id": {"const": "T4LV8K9BGV"},
+        "bundle_id": {"const": "me.gulya.wrenflow"},
+        "artifact_url": {
+          "type": "string",
+          "pattern": "^https://github\\.com/IlyaGulya/wrenflow/"
+        },
+        "workflow_url": {
+          "type": "string",
+          "pattern": "^https://github\\.com/IlyaGulya/wrenflow/actions/runs/[0-9]+/attempts/[0-9]+$"
+        },
+        "apple_submission_id": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 9,
+          "maxItems": 9,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/artifact"}
+        }
+      }
+    },
+    "candidateBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tag", "source_commit", "dmg_sha256", "team_id", "bundle_id"],
+      "properties": {
+        "tag": {"$ref": "#/$defs/tag"},
+        "source_commit": {"$ref": "#/$defs/sourceCommit"},
+        "dmg_sha256": {"$ref": "#/$defs/sha256"},
+        "team_id": {"const": "T4LV8K9BGV"},
+        "bundle_id": {"const": "me.gulya.wrenflow"}
+      }
+    },
+    "tester": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "role"],
+      "properties": {
+        "name": {"type": "string", "minLength": 2},
+        "role": {"type": "string", "minLength": 2}
+      }
+    },
+    "machine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "chip", "memory_gib"],
+      "properties": {
+        "model": {"type": "string", "minLength": 2},
+        "chip": {"type": "string", "minLength": 2},
+        "memory_gib": {"type": "integer", "minimum": 1}
+      }
+    },
+    "macos": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "build"],
+      "properties": {
+        "version": {"type": "string", "minLength": 2},
+        "build": {"type": "string", "minLength": 2}
+      }
+    },
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "pixel_resolution", "logical_resolution", "scale"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "pixel_resolution": {"type": "string", "pattern": "^[0-9]+x[0-9]+$"},
+        "logical_resolution": {"type": "string", "pattern": "^[0-9]+x[0-9]+$"},
+        "scale": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "relative_path", "sha256"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "accessibility-inspector",
+            "appearance-matrix",
+            "artifact-verification",
+            "automated-gate",
+            "display-metadata",
+            "focus-order",
+            "lifecycle-log",
+            "result-sheet",
+            "screen-recording",
+            "screenshots",
+            "size-scale-matrix",
+            "store-integrity",
+            "unified-log"
+          ]
+        },
+        "relative_path": {
+          "type": "string",
+          "pattern": "^[^/].*$"
+        },
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "classification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["acceptance", "automation"],
+      "properties": {
+        "acceptance": {"const": "named_human_required"},
+        "automation": {"enum": ["supporting_required", "supporting_optional"]}
+      }
+    },
+    "row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "issue",
+        "title",
+        "candidate_binding",
+        "classification",
+        "result",
+        "tester",
+        "executed_at",
+        "machine",
+        "macos",
+        "displays",
+        "evidence",
+        "automated_evidence",
+        "notes"
+      ],
+      "properties": {
+        "id": {
+          "enum": [
+            "M01", "M02", "M03", "M04", "M05", "M06", "M07", "M08",
+            "M09", "M10", "M11", "M12", "M17", "M18", "M19", "M20"
+          ]
+        },
+        "issue": {"enum": ["wrenflow-duh.9.9", "wrenflow-duh.9.10"]},
+        "title": {"type": "string", "minLength": 2},
+        "candidate_binding": {"$ref": "#/$defs/candidateBinding"},
+        "classification": {"$ref": "#/$defs/classification"},
+        "result": {"enum": ["pending", "pass", "fail", "blocked"]},
+        "tester": {"$ref": "#/$defs/tester"},
+        "executed_at": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "string", "format": "date-time"}
+          ]
+        },
+        "machine": {"$ref": "#/$defs/machine"},
+        "macos": {"$ref": "#/$defs/macos"},
+        "displays": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/display"}
+        },
+        "evidence": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/evidence"}
+        },
+        "automated_evidence": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/evidence"}
+        },
+        "notes": {"type": "string"}
+      }
+    }
+  }
+}

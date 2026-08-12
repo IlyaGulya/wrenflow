@@ -1,8 +1,11 @@
 # GPUI beta and stable production release runbook
 
-Status: preflight. Do not execute promotion or call this runbook complete until
-`wrenflow-duh.9.9`, `wrenflow-duh.9.10` and `wrenflow-duh.9.11` are closed
-against one immutable notarized candidate (or a fully revalidated successor).
+Status: preflight. Do not execute promotion until `wrenflow-duh.9.9`,
+`wrenflow-duh.9.10` and every pre-promotion `wrenflow-duh.9.11` row pass against one
+immutable notarized candidate (or a fully revalidated successor). `.9.11`
+remains open solely for the explicitly named M13 live stable-feed condition
+until the immediate post-promotion observation passes; no other open row is an
+allowed promotion condition. Do not call this runbook complete before then.
 The numeric source of truth is
 [`support/release-runbook-policy.json`](../support/release-runbook-policy.json).
 
@@ -23,8 +26,10 @@ must sign its own row in the retained release record.
 ## Entry gate
 
 The release manager creates a private release record and copies, without
-editing, the exact `.9.8` payload from the release-please stable draft:
-`Wrenflow.dmg`, `SHA256SUMS`, SBOM, provenance and `release-evidence.json`.
+editing, the exact nine-file `.9.8` payload from the release-please stable draft:
+`Wrenflow.dmg`, `Wrenflow.cdx.json`, `RustThirdPartyLicenses.txt`, `pins.json`,
+`exceptions.json`, `provenance.json`, `artifact-provenance.json`,
+`release-evidence.json` and `SHA256SUMS`.
 The signed workflow payload is retained for 21 days and the draft release
 retains the staged assets until an explicit decision. Record the authenticated
 draft download, source commit, release tag/version/build, workflow run/attempt,
@@ -89,6 +94,67 @@ full paths or credentials.
    SemVer beta and rerun every affected gate; security/privacy/signature/update
    changes force full `.9.9`–`.9.11` revalidation.
 
+### M13/M22 update evidence boundary
+
+M13 and M22 use the separate closed policy at
+`support/acceptance/endurance-v1-policy.json`. Start with a lower signed GPUI
+baseline and the exact target, each retaining its published checksum set,
+release source SHA, Apple submission UUID, DMG SHA-256 and app CDHash. The
+candidate-plan verifier rejects an equal/newer baseline, a mixed major line or
+any identity mismatch. It re-verifies the exact nine-file payload, mounts each
+DMG read-only and derives the app identity from that mounted DMG; an independently
+supplied extracted app is not accepted.
+
+Offline, rate-limit, malformed metadata, duplicate release and partial-transfer
+cases are automated Rust unit/fixture evidence. Their record is bound to the
+exact source commit, `update.rs` SHA-256, test IDs and test-log SHA-256. The
+current-line relaunch and interrupted-cleanup rows are likewise bound to their
+exact `data_paths.rs`/`recovery.rs` SHA-256 values, test IDs and the same retained
+log; every claimed test must appear as passing in that log. These
+cases do not count as manual M13. The policy/verifier SHA-256 values are also
+retained, and the source commit must equal the target release source.
+
+Pre-promotion signed/manual M13 retains the authenticated exact-target draft
+DMG, its installed signed identity, and the actual public beta-selector result
+from the lower baseline. Beta records the release it really selects (or
+up-to-date), but it must not select the exact private stable target. Such a
+selection contradicts the draft/private premise and is an immediate STOP. The
+exact-target stable feed cannot be observed while that target is a private draft. Therefore the
+pre-promotion result is explicitly conditional, and exact-target stable-feed
+discovery/download is a mandatory immediate post-promotion observation.
+Signed/manual M22 consists of one real SIGKILL run at each of Staging, Prepared,
+Swapped and before ready-finalization. Every M22 stage retains the pre-kill
+journal, SIGKILL record, post-launch recovery evidence and installed-identity
+evidence with recomputed SHA-256 values. Each exact PID is externally SIGSTOPed;
+the verifier distinguishes the plain baseline app, exact update helper and plain
+target app roles. A hidden application argument or alternate test behavior
+invalidates the run.
+
+The release record retains the passing output of:
+
+```bash
+export WRENFLOW_BASELINE_PAYLOAD=/absolute/baseline-payload
+export WRENFLOW_TARGET_PAYLOAD=/absolute/target-payload
+mise exec -- scripts/gpui-endurance-preflight.sh verify-evidence \
+  /absolute/evidence/automated-preflight.json \
+  /absolute/evidence/candidate-plan.json \
+  /absolute/evidence/m13-m22-manifest.json
+```
+
+Unknown fields, missing stages, duplicate retained filenames, source drift or
+a missing/exact-owner timestamp decision are NO-GO. Immediately after promotion,
+retain and pass:
+
+```bash
+mise exec -- scripts/gpui-endurance-preflight.sh verify-post-promotion \
+  /absolute/evidence/candidate-plan.json \
+  /absolute/evidence/m13-post-promotion-stable.json
+```
+
+Until this passes, promotion is conditional, `.9.11` remains open and cohort
+rollout is frozen. Failure invokes immediate STOP and a higher current-line
+successor; the pre-promotion M13 record cannot waive it.
+
 ## Numeric go/no-go
 
 Calculate percentages from the frozen denominators, preserve raw integer
@@ -103,8 +169,10 @@ numerator/denominator, and round only for display. GO requires all conditions:
 - at least 95% current-GPUI-line update success across at least 20 attempts;
 - at least 95% TCC onboarding and core workflow success;
 - at least 99% successful transcriptions across the required 20 per installer;
-- `.9.5` resource/latency budgets pass, `.9.9`–`.9.11` are closed, all response
-  coverage/window requirements pass, and every variance has an owner/rationale.
+- `.9.5` resource/latency budgets pass, `.9.9` and `.9.10` are closed, every
+  pre-promotion `.9.11` row passes, only the named post-promotion M13 condition
+  remains, all response coverage/window requirements pass, and every variance
+  has an owner/rationale.
 
 Any security/privacy/data-loss, signature/notary/Gatekeeper, unlaunchable
 update or crash-loop event is an immediate stop; percentages cannot waive it.
@@ -155,7 +223,9 @@ that beta DMG is not eligible for byte-identical stable promotion. The stable
 draft is instead the final-version `.9.8` candidate: the build signs,
 notarizes, uploads and re-download-verifies it once while the GitHub release
 remains private draft. The exact stable draft hash/source then passes `.9.9`,
-`.9.10` and `.9.11` before manual promotion.
+`.9.10` and every pre-promotion `.9.11` row before manual promotion. The sole
+named `.9.11` condition remains the immediate post-promotion M13 stable-feed
+observation; it cannot truthfully pass while the exact target is private.
 
 If a staged stable candidate changes for any reason, it is a successor. Its
 exact hash/source must pass the affected gates (all three for code, packaging,
@@ -211,19 +281,25 @@ stable link resolves to the approved stable tag and never to a beta.
    for `build-staged-stable-release`: it builds from that exact tag, uploads to
    the empty draft without `--clobber`, and re-download-verifies the retained
    final-version payload. This draft is `.9.8`; it is not public/latest.
-3. Run `.9.9`–`.9.11` against those exact draft bytes. After recorded GO,
-   manually dispatch `Promote Verified Stable Draft` with the exact tag, DMG
-   SHA-256 and `PROMOTE_VERIFIED_STABLE`. If `stable-production` has required
-   reviewers, record their approval; do not claim it when not configured.
+3. Run `.9.9`, `.9.10` and every pre-promotion `.9.11` row against those exact
+   draft bytes. The retained GO record must name the sole conditional item:
+   post-promotion exact-target stable-feed observation. Then manually dispatch
+   `Promote Verified Stable Draft` with the exact tag, DMG SHA-256 and
+   `PROMOTE_VERIFIED_STABLE`. If `stable-production` has required reviewers,
+   record their approval; do not claim it when not configured.
 4. The promotion workflow verifies the untouched draft/tag/assets a second
    time and only changes draft/latest metadata. Verify the stable
    tag resolves to `release-evidence.source.commit`, assets were not replaced,
    `releases/latest` resolves to that non-prerelease tag, SHA-256 matches the
-   retained decision and the in-app stable channel selects it.
+   retained decision, then immediately run the closed M13 post-promotion
+   verifier proving the in-app stable channel selects and downloads it. Keep
+   rollout frozen until it passes; on failure declare STOP and prepare a
+   successor.
 5. Observe for 48 hours. Keep the frozen denominator and stop conditions live;
    monitor only opt-in/manual support evidence. A blocker invokes the rehearsed
    higher-current-line successor/reinstall communication, never rollback.
-6. At 48 hours record latest-link/update checks, open findings, support counts,
+6. Close `.9.11` only after the post-promotion M13 observation passes. At 48
+   hours record latest-link/update checks, open findings, support counts,
    artifact availability and final decision. Delete release-local participant
    mappings at the documented 30-day deadline, retaining only aggregate closed
    outcomes and non-sensitive release evidence.

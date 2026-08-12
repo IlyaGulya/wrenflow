@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "contract": "wrenflow.gpui.endurance.update-evidence.v1",
+  "source": {
+    "commit": "4444444444444444444444444444444444444444",
+    "tree_state": "clean",
+    "update_source_path": "core/wrenflow-runtime/src/update.rs",
+    "update_source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "verifier_source_path": "scripts/gpui-endurance-evidence.py",
+    "verifier_source_sha256": "abababababababababababababababababababababababababababababababab",
+    "policy_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "cycles": 20,
+  "automated_update_fixtures": {
+    "status": "passed",
+    "log": {
+      "file": "runtime-twenty-cycles.log",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "cases": [
+      {
+        "id": "stable_beta_channel_selection",
+        "test": "update::tests::stable_and_beta_channels_are_strictly_isolated",
+        "status": "passed",
+        "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "log_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      {
+        "id": "offline",
+        "test": "update::tests::offline_and_rate_limit_failures_are_actionable_and_bounded",
+        "status": "passed",
+        "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "log_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      {
+        "id": "rate_limit",
+        "test": "update::tests::offline_and_rate_limit_failures_are_actionable_and_bounded",
+        "status": "passed",
+        "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "log_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      {
+        "id": "malformed_metadata",
+        "test": "update::tests::duplicate_malformed_and_unexpected_host_metadata_are_rejected",
+        "status": "passed",
+        "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "log_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      {
+        "id": "duplicate_release",
+        "test": "update::tests::duplicate_malformed_and_unexpected_host_metadata_are_rejected",
+        "status": "passed",
+        "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "log_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      {
+        "id": "partial_transfer",
+        "test": "update::tests::partial_download_is_removed_and_never_published",
+        "status": "passed",
+        "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "log_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      {
+        "id": "transaction_recovery_cycles",
+        "test": "update::tests::twenty_channel_download_and_transaction_fault_cycles_fail_closed",
+        "status": "passed",
+        "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "log_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    ]
+  },
+  "other_automated": {
+    "current_line_relaunch": {
+      "id": "current_line_relaunch",
+      "test": "data_paths::tests::twenty_current_line_relaunches_preserve_only_gpui_v1_state",
+      "source_path": "core/wrenflow-runtime/src/data_paths.rs",
+      "source_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "status": "passed",
+      "log_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "interrupted_write_cleanup": {
+      "id": "interrupted_write_cleanup",
+      "test": "recovery::tests::twenty_interrupted_launches_clean_only_bounded_temporary_state",
+      "source_path": "core/wrenflow-runtime/src/recovery.rs",
+      "source_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "status": "passed",
+      "log_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  },
+  "candidate": "blocked_pending_immutable_notarized_artifacts",
+  "manual_candidate_rows": {
+    "M13": "pending_signed_manual",
+    "M14": "pending",
+    "M15": "pending",
+    "M16": "pending",
+    "M21": "pending_instruments_budget",
+    "M22": "pending_signed_manual"
+  }
+}
