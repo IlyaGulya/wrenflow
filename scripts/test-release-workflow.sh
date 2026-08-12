@@ -271,6 +271,20 @@ require_pattern 'ripgrep = "14.1.1"' "$REPO_DIR/mise.toml"
 require_pattern "rg --version" "$REPO_DIR/mise.toml"
 require_pattern "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" "$BUILD_WORKFLOW"
 require_pattern "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" "$BUILD_WORKFLOW"
+require_pattern '          fetch-depth: 0' "$LINT_WORKFLOW"
+if [[ "$(grep -Fxc -- '          fetch-depth: 0' "$LINT_WORKFLOW")" -ne 1 ]]; then
+    echo "Workflow lint must fetch full history exactly once for pinned-tool byte tests" >&2
+    exit 1
+fi
+if ! awk '
+    $0 == "  lint:" { capture = 1 }
+    capture && $0 == "        run: mise run lint-workflows" { saw_test = 1 }
+    capture && $0 == "          fetch-depth: 0" { saw_history = 1 }
+    END { exit !(saw_test && saw_history) }
+' "$LINT_WORKFLOW"; then
+    echo "Workflow lint history is not bound to the job that executes pinned-tool tests" >&2
+    exit 1
+fi
 require_pattern "retention-days: 21" "$BUILD_WORKFLOW"
 require_pattern "scripts/notarize-release.sh build/Wrenflow.dmg" "$BUILD_WORKFLOW"
 require_pattern "scripts/verify-release-artifact.sh build/gpui/Wrenflow.app build/Wrenflow.dmg --require-notarized" "$BUILD_WORKFLOW"
@@ -517,6 +531,23 @@ require_repo_scoped_gh_release_commands "$PROMOTION_WORKFLOW"
 REPO_SCOPE_FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/wrenflow-release-repo-scope.XXXXXX")"
 cleanup_repo_scope_fixture() { rm -rf -- "$REPO_SCOPE_FIXTURE"; }
 trap cleanup_repo_scope_fixture EXIT
+
+cp "$LINT_WORKFLOW" "$REPO_SCOPE_FIXTURE/lint-shallow.yml"
+sed '/^          fetch-depth: 0$/d' "$REPO_SCOPE_FIXTURE/lint-shallow.yml" \
+    > "$REPO_SCOPE_FIXTURE/lint-shallow-mutated.yml"
+if grep -Fqx -- '          fetch-depth: 0' "$REPO_SCOPE_FIXTURE/lint-shallow-mutated.yml"; then
+    echo "Workflow lint shallow-history negative fixture drifted" >&2
+    exit 1
+fi
+if awk '
+    $0 == "  lint:" { capture = 1 }
+    capture && $0 == "        run: mise run lint-workflows" { saw_test = 1 }
+    capture && $0 == "          fetch-depth: 0" { saw_history = 1 }
+    END { exit !(saw_test && saw_history) }
+' "$REPO_SCOPE_FIXTURE/lint-shallow-mutated.yml"; then
+    echo "Workflow lint audit accepted missing pinned-tool history" >&2
+    exit 1
+fi
 
 PINNED_RELEASE_TOOL_SOURCE="aa025228f4f8d12e29c866b6be43eb2c0bf0834c"
 git cat-file -e "$PINNED_RELEASE_TOOL_SOURCE^{commit}"
