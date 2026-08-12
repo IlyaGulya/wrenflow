@@ -8547,7 +8547,7 @@ checksum = "beffa227304dbaea3ad6a06ac674f9bc83a3dec3b7f63eeb442de37e7cb6bb01"
 
 [[package]]
 name = "wrenflow-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cpal",
  "log",
@@ -8571,7 +8571,7 @@ dependencies = [
 
 [[package]]
 name = "wrenflow-domain"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "log",
  "serde",
@@ -8581,7 +8581,7 @@ dependencies = [
 
 [[package]]
 name = "wrenflow-gpui"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "gpui",
  "gpui-component",
@@ -8595,7 +8595,7 @@ dependencies = [
 
 [[package]]
 name = "wrenflow-runtime"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arboard",
  "cc",

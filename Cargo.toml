@@ -8,7 +8,7 @@ members = [
 exclude = ["native/wrenflow-gpui"]
 
 [workspace.package]
-version = "0.3.0" # x-release-please-version
+version = "0.4.0" # x-release-please-version
 edition = "2021"
 license = "MIT"
 
