@@ -117,7 +117,7 @@ description = "Attach macOS leaks to the exact running signed GPUI candidate"
 run = "mise exec -- python3 scripts/perf/gpui-performance.py leaks"
 
 [tasks.performance-merge-cold]
-description = "Merge five sealed fresh-runner cold-launch evidence shards"
+description = "Merge twenty sealed fresh-runner cold-launch evidence shards"
 run = "mise exec -- python3 scripts/perf/gpui-performance.py merge-cold"
 
 [tasks.performance-verify]

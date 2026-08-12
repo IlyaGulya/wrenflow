@@ -26,11 +26,11 @@ pub use api::{
     CommandOutcome, RuntimeCommand, RuntimeError, RuntimeEvent, RuntimeEventEnvelope, SettingsPatch,
 };
 pub use state::{
-    AppSessionState, AudioDevicesSnapshot, ErrorAction, HistorySnapshot, LaunchAtLoginSnapshot,
-    LocalModelRuntimeState, LocalModelsSnapshot, ModelInventoryState, ModelOperationState,
-    OnboardingStep, PermissionStatus, PermissionsSnapshot, RuntimeCapabilities, RuntimePhase,
-    RuntimeSnapshot, ShellCapabilities, ShellFacts, SupportBundleStatus, TranscriptDisposition,
-    UpdateStatus,
+    AppSessionState, AudioDevicesSnapshot, ErrorAction, HistoryLoadState, HistorySnapshot,
+    LaunchAtLoginSnapshot, LocalModelRuntimeState, LocalModelsSnapshot, ModelInventoryState,
+    ModelOperationState, OnboardingStep, PermissionStatus, PermissionsSnapshot,
+    RuntimeCapabilities, RuntimePhase, RuntimeSnapshot, ShellCapabilities, ShellFacts,
+    SupportBundleStatus, TranscriptDisposition, UpdateStatus,
 };
 pub use supervisor::{
     start_production_runtime, start_runtime, RuntimeBootstrap, RuntimeHandle, RuntimeInstance,

@@ -18,6 +18,8 @@ mise exec -- jq -e '
   .schema_version == 1 and
   .budget_version == "gpui-performance-v1" and
   .workload.idle_seconds == 1800 and
+  .workload.launch_samples.cold == 20 and
+  ([.budgets[] | select(.metric == "launch.cold.p95_ms") | .min_samples] == [20]) and
   (.required_instruments_templates | length) == 7 and
   .supporting_instruments_templates == ["Power Profiler"] and
   ((.required_instruments_templates - .supporting_instruments_templates) | length) == 7 and
@@ -242,30 +244,32 @@ records = [
     {"timestamp_unix_ms": 1001, "session_id": "s-other0000000000", "code": "menu_bar_ready"},
 ]
 diagnostics.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
-startup, ready, terminal = module["launch_diagnostic_state"](diagnostics, 1000)
-assert startup["timestamp_unix_ms"] == 1000 and ready is None and terminal is None
+startup, ready, terminal, stages = module["launch_diagnostic_state"](diagnostics, 1000)
+assert startup["timestamp_unix_ms"] == 1000 and ready is None and terminal is None and stages == {}
 records.append(
     {"timestamp_unix_ms": 1002, "session_id": "s-0123456789abcdef", "code": "menu_bar_ready"}
 )
 diagnostics.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
-startup, ready, terminal = module["launch_diagnostic_state"](diagnostics, 1000)
+startup, ready, terminal, stages = module["launch_diagnostic_state"](diagnostics, 1000)
 assert startup["timestamp_unix_ms"] == 1000 and ready["timestamp_unix_ms"] == 1002 and terminal is None
+assert stages == {"menu_bar_ready": 1002}
 records.extend((
     {"timestamp_unix_ms": 1003, "session_id": "s-other0000000000", "code": "window_policy_accessory_ready"},
     {"timestamp_unix_ms": 1004, "session_id": "s-0123456789abcdef", "code": "window_policy_foreground_ready"},
 ))
 diagnostics.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
-startup, ready, terminal = module["launch_diagnostic_state"](diagnostics, 1000)
+startup, ready, terminal, stages = module["launch_diagnostic_state"](diagnostics, 1000)
 assert startup["timestamp_unix_ms"] == 1000 and ready["timestamp_unix_ms"] == 1002
 assert terminal["timestamp_unix_ms"] == 1004
 assert terminal["code"] == "window_policy_foreground_ready"
+assert stages == {"menu_bar_ready": 1002}
 
 old_records = [
     {"timestamp_unix_ms": 998, "session_id": "s-old000000000000", "code": "startup"},
     {"timestamp_unix_ms": 999, "session_id": "s-old000000000000", "code": "menu_bar_ready"},
 ]
 diagnostics.write_text("".join(json.dumps(record) + "\n" for record in old_records), encoding="utf-8")
-assert module["launch_diagnostic_state"](diagnostics, 1000) == (None, None, None)
+assert module["launch_diagnostic_state"](diagnostics, 1000) == (None, None, None, {})
 ' "$HARNESS" "$TEST_ROOT/launch-diagnostics.ndjson"
 
 mise exec -- python3 -c '
@@ -273,9 +277,10 @@ import pathlib, runpy, subprocess, sys
 module = runpy.run_path(sys.argv[1])
 observer = module["wait_for_route_aware_launch"]
 globals_ = observer.__globals__
-ready = {"timestamp_unix_ms": 1001, "session_id": "s-0123456789abcdef", "code": "menu_bar_ready"}
-terminal = {"timestamp_unix_ms": 1002, "session_id": "s-0123456789abcdef", "code": "window_policy_foreground_ready"}
-diagnostic_states = iter(((True, ready, None), (True, ready, terminal), (True, ready, terminal)))
+stage_times = {code: 1001 + index for index, code in enumerate(module["LAUNCH_DIAGNOSTIC_STAGE_CODES"])}
+ready = {"timestamp_unix_ms": stage_times["menu_bar_ready"], "session_id": "s-0123456789abcdef", "code": "menu_bar_ready"}
+terminal = {"timestamp_unix_ms": stage_times["gpui_window_shown"] + 1, "session_id": "s-0123456789abcdef", "code": "window_policy_foreground_ready"}
+diagnostic_states = iter(((True, ready, None, stage_times), (True, ready, terminal, stage_times), (True, ready, terminal, stage_times)))
 app_info = iter((
     "\n".join((
         "\"LSBundlePath\"=\"/private/candidate/Wrenflow.app\"",
@@ -341,7 +346,7 @@ def fake_query(*, app, pid):
     )
 globals_["exact_pid"] = lambda identity, required=False: 4242
 startup_record = {"timestamp_unix_ms": 1000, "session_id": "s-0123456789abcdef", "code": "startup"}
-diagnostic_states = iter(((startup_record, ready, None), (startup_record, ready, terminal), (startup_record, ready, terminal)))
+diagnostic_states = iter(((startup_record, ready, None, stage_times), (startup_record, ready, terminal, stage_times), (startup_record, ready, terminal, stage_times)))
 globals_["launch_diagnostic_state"] = lambda diagnostics, started_ms: next(diagnostic_states)
 globals_["query_launch_services_state"] = fake_query
 observation = observer(
@@ -374,6 +379,18 @@ def sample(index, latency=40, shutdown=True):
         "terminal_application_type": "Foreground",
         "latency_ms": latency,
         "session_id": f"s-{index:016x}",
+        "diagnostic_stages_at_unix_ms": {
+            "runtime_bootstrap_started": started + 11,
+            "runtime_bootstrap_ready": started + 12,
+            "app_callback_entered": started + 13,
+            "app_model_ready": started + 14,
+            "swift_shell_installed": started + 15,
+            "tray_projection_ready": started + 16,
+            "menu_bar_ready": started + 20,
+            "gpui_window_created": started + 21,
+            "window_policy_route_observed": started + 22,
+            "gpui_window_shown": started + 23,
+        },
     }
     value["stages_ms"] = module["launch_stage_durations"](value)
     if shutdown:
@@ -410,6 +427,8 @@ for mutate in (
     lambda value: value["phases"]["launch_warm"]["samples"][1].update(session_id=value["phases"]["launch_warm"]["samples"][0]["session_id"]),
     lambda value: value["phases"]["launch_warm"]["samples"][0].update(started_at_unix_ms=100),
     lambda value: value["phases"]["launch_warm"]["samples"][0]["stages_ms"].update(total_ms=999),
+    lambda value: value["phases"]["launch_warm"]["samples"][0]["diagnostic_stages_at_unix_ms"].pop("app_model_ready"),
+    lambda value: value["phases"]["launch_warm"]["samples"][0]["diagnostic_stages_at_unix_ms"].update(runtime_bootstrap_ready=999999),
     lambda value: value["metrics"]["launch.warm.p95_ms"].update(value=439),
 ):
     broken = copy.deepcopy(result)
@@ -835,13 +854,26 @@ base = {
     "sealed": False,
 }
 shard_paths = []
-for index in range(5):
+for index in range(20):
     latency = 100 + index
     shard = {
         "schema_version": 1,
         "budget_version": "gpui-performance-v1",
         "source": {"commit": "a" * 40, "dirty": False},
         "host": {
+            "os_version": "14.8.7",
+            "architecture": "arm64",
+            "chip": "Apple M1",
+            "machine_model": "VirtualMac2,1",
+            "memory_bytes": 7516192768,
+            "logical_cpu_count": 3,
+            "xcode_version": "Xcode 16.2",
+            "github": {
+                "actions": True,
+                "runner_os": "macOS",
+                "runner_arch": "ARM64",
+                "runner_environment": "github-hosted",
+            },
             "missing_required_templates": [],
             "evidence_eligibility": {
                 "github_m1_7gb_constrained_preflight": True,
@@ -862,10 +894,22 @@ for index in range(5):
                 "menu_bar_ready_at_unix_ms": 1000 + index + latency - 2,
                 "terminal_policy_ready_at_unix_ms": 1000 + index + latency - 1,
                 "launch_services_observed_at_unix_ms": 1000 + index + latency,
-                "terminal_application_type": "UIElement",
+                "terminal_application_type": "Foreground",
                 "latency_ms": latency,
                 "session_id": f"s-{index:016x}",
                 "fresh_runner_id": f"gh-12345-1-cold-{index + 1}",
+                "diagnostic_stages_at_unix_ms": {
+                    "runtime_bootstrap_started": 1001 + index,
+                    "runtime_bootstrap_ready": 1001 + index,
+                    "app_callback_entered": 1001 + index,
+                    "app_model_ready": 1001 + index,
+                    "swift_shell_installed": 1001 + index,
+                    "tray_projection_ready": 1001 + index,
+                    "menu_bar_ready": 1000 + index + latency - 2,
+                    "gpui_window_created": 1000 + index + latency - 2,
+                    "window_policy_route_observed": 1000 + index + latency - 1,
+                    "gpui_window_shown": 1000 + index + latency - 1,
+                },
                 "stages_ms": {
                     "external_open_to_startup_ms": 1,
                     "startup_to_menu_bar_ms": latency - 3,
@@ -888,9 +932,18 @@ merge(argparse.Namespace(
     app="/tmp/Wrenflow.app", result=str(base_path), candidate_id="candidate-fixture", shard=shard_paths,
 ))
 merged = json.loads(base_path.read_text(encoding="utf-8"))
-assert merged["metrics"]["launch.cold.p95_ms"]["value"] == 104
-assert merged["metrics"]["launch.cold.p95_ms"]["sample_count"] == 5
-assert len(merged["aggregations"]["launch_cold"]["sealed_shard_sha256"]) == 5
+assert merged["metrics"]["launch.cold.p95_ms"]["value"] == 118
+assert merged["metrics"]["launch.cold.p95_ms"]["sample_count"] == 20
+assert len(merged["aggregations"]["launch_cold"]["sealed_shard_sha256"]) == 20
+assert merged["aggregations"]["launch_cold"]["contract"] == module["AGGREGATED_COLD_CONTRACT"]
+assert merged["aggregations"]["launch_cold"]["raw_max_ms"] == 119
+assert module["check_launch_sampling"](merged, "merged") == []
+tampered_metric_evidence = copy.deepcopy(merged)
+tampered_metric_evidence["metrics"]["launch.cold.p95_ms"]["evidence"].pop()
+assert module["check_launch_sampling"](tampered_metric_evidence, "tampered")
+tampered_raw_max = copy.deepcopy(merged)
+tampered_raw_max["aggregations"]["launch_cold"]["raw_max_ms"] = 118
+assert module["check_launch_sampling"](tampered_raw_max, "tampered")
 
 invalid_type = copy.deepcopy(json.loads(pathlib.Path(shard_paths[0]).read_text(encoding="utf-8")))
 invalid_type["phases"]["launch_cold"]["samples"][0]["terminal_application_type"] = "Background"
@@ -911,12 +964,77 @@ else:
 
 try:
     merge(argparse.Namespace(
-        app="/tmp/Wrenflow.app", result=str(base_path), candidate_id="candidate-fixture", shard=shard_paths[:4],
+        app="/tmp/Wrenflow.app", result=str(base_path), candidate_id="candidate-fixture", shard=shard_paths[:19],
     ))
 except module["EvidenceError"]:
     pass
 else:
-    raise SystemExit("cold merge accepted fewer than five fresh-runner shards")
+    raise SystemExit("cold merge accepted nineteen fresh-runner shards")
+
+try:
+    merge(argparse.Namespace(
+        app="/tmp/Wrenflow.app", result=str(base_path), candidate_id="candidate-fixture", shard=[*shard_paths, shard_paths[-1]],
+    ))
+except module["EvidenceError"]:
+    pass
+else:
+    raise SystemExit("cold merge accepted twenty-one fresh-runner shards")
+
+duplicate_runner = copy.deepcopy(json.loads(pathlib.Path(shard_paths[-1]).read_text(encoding="utf-8")))
+duplicate_runner["phases"]["launch_cold"]["samples"][0]["fresh_runner_id"] = "gh-12345-1-cold-1"
+duplicate_runner["evidence_sha256"] = module["canonical_hash"](duplicate_runner)
+duplicate_path = root / "cold-duplicate-runner.json"
+duplicate_path.write_text(json.dumps(duplicate_runner), encoding="utf-8")
+try:
+    merge(argparse.Namespace(
+        app="/tmp/Wrenflow.app", result=str(base_path), candidate_id="candidate-fixture", shard=[*shard_paths[:-1], str(duplicate_path)],
+    ))
+except module["EvidenceError"]:
+    pass
+else:
+    raise SystemExit("cold merge accepted a duplicate fresh-runner identity")
+
+duplicate_session = copy.deepcopy(json.loads(pathlib.Path(shard_paths[-1]).read_text(encoding="utf-8")))
+duplicate_session["phases"]["launch_cold"]["samples"][0]["session_id"] = "s-0000000000000000"
+duplicate_session["evidence_sha256"] = module["canonical_hash"](duplicate_session)
+duplicate_session_path = root / "cold-duplicate-session.json"
+duplicate_session_path.write_text(json.dumps(duplicate_session), encoding="utf-8")
+try:
+    merge(argparse.Namespace(
+        app="/tmp/Wrenflow.app", result=str(base_path), candidate_id="candidate-fixture", shard=[*shard_paths[:-1], str(duplicate_session_path)],
+    ))
+except module["EvidenceError"]:
+    pass
+else:
+    raise SystemExit("cold merge accepted a duplicate diagnostic session")
+
+mixed = copy.deepcopy(json.loads(pathlib.Path(shard_paths[-1]).read_text(encoding="utf-8")))
+mixed["source"]["commit"] = "e" * 40
+mixed["evidence_sha256"] = module["canonical_hash"](mixed)
+mixed_path = root / "cold-mixed-source.json"
+mixed_path.write_text(json.dumps(mixed), encoding="utf-8")
+try:
+    merge(argparse.Namespace(
+        app="/tmp/Wrenflow.app", result=str(base_path), candidate_id="candidate-fixture", shard=[*shard_paths[:-1], str(mixed_path)],
+    ))
+except module["EvidenceError"]:
+    pass
+else:
+    raise SystemExit("cold merge accepted mixed-source evidence")
+
+tampered_host = copy.deepcopy(json.loads(pathlib.Path(shard_paths[-1]).read_text(encoding="utf-8")))
+tampered_host["host"]["os_version"] = "26.5"
+tampered_host["evidence_sha256"] = module["canonical_hash"](tampered_host)
+tampered_host_path = root / "cold-tampered-host.json"
+tampered_host_path.write_text(json.dumps(tampered_host), encoding="utf-8")
+try:
+    merge(argparse.Namespace(
+        app="/tmp/Wrenflow.app", result=str(base_path), candidate_id="candidate-fixture", shard=[*shard_paths[:-1], str(tampered_host_path)],
+    ))
+except module["EvidenceError"]:
+    pass
+else:
+    raise SystemExit("cold merge accepted re-sealed non-macOS-14 host evidence")
 ' "$HARNESS" "$TEST_ROOT"
 
 mise exec -- python3 -c '

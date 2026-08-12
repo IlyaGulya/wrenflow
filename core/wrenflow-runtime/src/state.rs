@@ -133,8 +133,21 @@ pub struct AudioDevicesSnapshot {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct HistorySnapshot {
+    pub load_state: HistoryLoadState,
+    /// Compatibility signal for consumers that have not yet adopted
+    /// [`HistoryLoadState`]. It is true if and only if `load_state` is Ready.
     pub has_snapshot: bool,
     pub entries: Vec<HistoryEntry>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum HistoryLoadState {
+    #[default]
+    Loading,
+    Ready,
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

@@ -346,7 +346,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     env:
       SOURCE_COMMIT: ${{ needs.build_release.outputs.source_commit }}
     steps:
@@ -429,8 +429,21 @@ jobs:
             (.phases.launch_cold.samples | length) == 1 and
             (.phases.launch_cold.definition == "machine-verified exact signed LaunchServices launch on one fresh GitHub-hosted macos-14 runner") and
             (.phases.launch_cold.samples[0] as $sample |
-              ($sample | keys) == ["fresh_runner_id", "latency_ms", "launch_services_observed_at_unix_ms", "menu_bar_ready_at_unix_ms", "ready_at_unix_ms", "session_id", "stages_ms", "started_at_unix_ms", "startup_diagnostic_at_unix_ms", "terminal_application_type", "terminal_policy_ready_at_unix_ms"] and
-              ($sample.terminal_application_type == "UIElement" or $sample.terminal_application_type == "Foreground") and
+              ($sample | keys) == ["diagnostic_stages_at_unix_ms", "fresh_runner_id", "latency_ms", "launch_services_observed_at_unix_ms", "menu_bar_ready_at_unix_ms", "ready_at_unix_ms", "session_id", "stages_ms", "started_at_unix_ms", "startup_diagnostic_at_unix_ms", "terminal_application_type", "terminal_policy_ready_at_unix_ms"] and
+              ($sample.diagnostic_stages_at_unix_ms as $diagnostic |
+                ($diagnostic | keys) == ["app_callback_entered", "app_model_ready", "gpui_window_created", "gpui_window_shown", "menu_bar_ready", "runtime_bootstrap_ready", "runtime_bootstrap_started", "swift_shell_installed", "tray_projection_ready", "window_policy_route_observed"] and
+                $sample.startup_diagnostic_at_unix_ms <= $diagnostic.runtime_bootstrap_started and
+                $diagnostic.runtime_bootstrap_started <= $diagnostic.runtime_bootstrap_ready and
+                $diagnostic.runtime_bootstrap_ready <= $diagnostic.app_callback_entered and
+                $diagnostic.app_callback_entered <= $diagnostic.app_model_ready and
+                $diagnostic.app_model_ready <= $diagnostic.swift_shell_installed and
+                $diagnostic.swift_shell_installed <= $diagnostic.tray_projection_ready and
+                $diagnostic.tray_projection_ready <= $diagnostic.menu_bar_ready and
+                $diagnostic.menu_bar_ready <= $diagnostic.gpui_window_created and
+                $diagnostic.gpui_window_created <= $diagnostic.window_policy_route_observed and
+                $diagnostic.window_policy_route_observed <= $diagnostic.gpui_window_shown and
+                $diagnostic.gpui_window_shown <= $sample.terminal_policy_ready_at_unix_ms) and
+              $sample.terminal_application_type == "Foreground" and
               $sample.started_at_unix_ms <= $sample.startup_diagnostic_at_unix_ms and
               $sample.startup_diagnostic_at_unix_ms <= $sample.menu_bar_ready_at_unix_ms and
               $sample.menu_bar_ready_at_unix_ms <= $sample.terminal_policy_ready_at_unix_ms and
@@ -574,16 +587,15 @@ jobs:
         id: seal_constrained
         run: |
           COLD_SHARDS=("$RUNNER_TEMP"/cold-shards/*/constrained-cold-evidence.json)
-          [[ ${#COLD_SHARDS[@]} -eq 5 ]]
-          mise exec -- python3 scripts/perf/gpui-performance.py merge-cold \
+          [[ ${#COLD_SHARDS[@]} -eq 20 ]]
+          MERGE_ARGS=(scripts/perf/gpui-performance.py merge-cold \
             --app "$PERFORMANCE_APP" \
             --result "$PERFORMANCE_RESULT" \
-            --candidate-id "$PERFORMANCE_CANDIDATE_ID" \
-            --shard "${COLD_SHARDS[0]}" \
-            --shard "${COLD_SHARDS[1]}" \
-            --shard "${COLD_SHARDS[2]}" \
-            --shard "${COLD_SHARDS[3]}" \
-            --shard "${COLD_SHARDS[4]}"
+            --candidate-id "$PERFORMANCE_CANDIDATE_ID")
+          for shard in "${COLD_SHARDS[@]}"; do
+            MERGE_ARGS+=(--shard "$shard")
+          done
+          mise exec -- python3 "${MERGE_ARGS[@]}"
           mise exec -- python3 scripts/perf/gpui-performance.py sanitize \
             --result "$PERFORMANCE_RESULT"
           mise exec -- python3 scripts/perf/gpui-performance.py seal \

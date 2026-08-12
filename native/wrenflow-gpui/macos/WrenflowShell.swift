@@ -468,6 +468,7 @@ private final class WrenflowShell: NSObject, NSMenuDelegate {
     private var lastPermissions: WrenflowPermissionsPayload?
     private var lastAccessibilityPreferences: WrenflowAccessibilityPreferencesPayload?
     private var observesWorkspace = false
+    private var postMenuBootstrapInstalled = false
     private var pendingReopen = false
     private var pendingQuit = false
     private var showSettingsSignal: DispatchSourceSignal?
@@ -502,6 +503,42 @@ private final class WrenflowShell: NSObject, NSMenuDelegate {
             return 0
         }
 
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Wrenflow") {
+            image.isTemplate = true
+            item.button?.image = image
+        } else {
+            item.button?.title = "W"
+        }
+        item.button?.toolTip = "Wrenflow"
+        statusItem = item
+
+        guard setAccessoryPolicy() else {
+            reportDiagnosticFailure(.shellInstall)
+            shutdown(removeReopenObservation: false)
+            return -3
+        }
+        // The runtime cannot resolve its truthful initial route until this
+        // exact permission snapshot reaches the typed event boundary. Keep
+        // the query synchronous, but leave every non-route observer and probe
+        // behind the explicit post-menu bootstrap signal from Rust.
+        refreshPermissions(force: true, detectLossTransition: true, monitor: false)
+        if pendingReopen {
+            pendingReopen = false
+            emit(.openSettings)
+        }
+        if pendingQuit {
+            pendingQuit = false
+            emit(.quitRequested)
+        }
+        return 0
+    }
+
+    func installPostMenuBootstrap() -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard callback != nil, statusItem != nil else { return false }
+        guard !postMenuBootstrapInstalled else { return true }
+
         let workspaceNotifications = NSWorkspace.shared.notificationCenter
         workspaceNotifications.addObserver(
             self,
@@ -528,36 +565,17 @@ private final class WrenflowShell: NSObject, NSMenuDelegate {
             name: NSApplication.didBecomeActiveNotification,
             object: NSApp
         )
+        postMenuBootstrapInstalled = true
 
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Wrenflow") {
-            image.isTemplate = true
-            item.button?.image = image
-        } else {
-            item.button?.title = "W"
-        }
-        item.button?.toolTip = "Wrenflow"
-        statusItem = item
-
-        guard setAccessoryPolicy() else {
-            reportDiagnosticFailure(.shellInstall)
-            shutdown(removeReopenObservation: false)
-            return -3
-        }
         attachCloseButton()
         accessibility.attach(to: settingsWindow)
-        refreshPermissions(force: true, detectLossTransition: true)
+        // Re-observe after the menu is ready so a permission change during
+        // startup is not lost. This also starts the hotkey and the bounded
+        // fallback/confirmation timer without duplicating an unchanged event.
+        refreshPermissions(force: false, detectLossTransition: true)
         emitAccessibilityPreferences(force: true)
         emitLaunchAtLogin(errorMessage: nil)
-        if pendingReopen {
-            pendingReopen = false
-            emit(.openSettings)
-        }
-        if pendingQuit {
-            pendingQuit = false
-            emit(.quitRequested)
-        }
-        return 0
+        return true
     }
 
     func shutdown(removeReopenObservation: Bool = true) {
@@ -576,6 +594,7 @@ private final class WrenflowShell: NSObject, NSMenuDelegate {
             NSWorkspace.shared.notificationCenter.removeObserver(self)
             observesWorkspace = false
         }
+        postMenuBootstrapInstalled = false
         if removeReopenObservation {
             pendingReopen = false
             pendingQuit = false
@@ -1052,8 +1071,12 @@ private final class WrenflowShell: NSObject, NSMenuDelegate {
         )
     }
 
-    private func refreshPermissions(force: Bool, detectLossTransition: Bool) {
-        if hotkey.isRunning == false {
+    private func refreshPermissions(
+        force: Bool,
+        detectLossTransition: Bool,
+        monitor: Bool = true
+    ) {
+        if monitor && hotkey.isRunning == false {
             _ = hotkey.start()
         }
         let payload = permissionsPayload()
@@ -1074,7 +1097,9 @@ private final class WrenflowShell: NSObject, NSMenuDelegate {
             lastPermissions = payload
             emitJSON(.permissionsChanged, value: payload)
         }
-        schedulePermissionRefresh()
+        if monitor {
+            schedulePermissionRefresh()
+        }
     }
 
     private func schedulePermissionRefresh() {
@@ -1236,6 +1261,11 @@ public func wrenflowShellClaimSingleInstance() -> Int32 {
 @_cdecl("wrenflow_shell_shutdown")
 public func wrenflowShellShutdown() {
     onMain { WrenflowShell.shared.shutdown() }
+}
+
+@_cdecl("wrenflow_shell_install_post_menu_bootstrap")
+public func wrenflowShellInstallPostMenuBootstrap() -> Int32 {
+    onMain { WrenflowShell.shared.installPostMenuBootstrap() ? 0 : -1 }
 }
 
 @_cdecl("wrenflow_shell_show_main_window")

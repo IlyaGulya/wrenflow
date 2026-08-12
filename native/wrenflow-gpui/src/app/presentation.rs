@@ -2,8 +2,9 @@ use wrenflow_runtime::{
     recovery::RecoveryMode,
     support::SupportBundleFailureCode,
     update::{UpdateChannel, UpdateFailureCode},
-    AppSessionState, HistoryEntry, LocalModelsSnapshot, ModelInventoryState, ModelOperationState,
-    OnboardingStep, PermissionStatus, PipelineState, RuntimeSnapshot, ThemePreference, UpdateStatus,
+    AppSessionState, HistoryEntry, HistoryLoadState, LocalModelsSnapshot, ModelInventoryState,
+    ModelOperationState, OnboardingStep, PermissionStatus, PipelineState, RuntimeSnapshot,
+    ThemePreference, UpdateStatus,
 };
 
 const SYSTEM_DEFAULT_MICROPHONE_ID: &str = "default";
@@ -554,31 +555,37 @@ fn history(
     selected_entry_id: Option<&str>,
     mutation: CommandStatus,
 ) -> HistoryPresentation {
-    let entries = if !snapshot.history.has_snapshot {
-        ContentState::Loading
-    } else if snapshot.history.entries.is_empty() {
-        ContentState::Empty {
+    let entries = match &snapshot.history.load_state {
+        HistoryLoadState::Loading => ContentState::Loading,
+        HistoryLoadState::Error { .. } => ContentState::Error {
+            title: "History is unavailable".to_string(),
+            detail: "Quit and reopen Wrenflow to retry verified local history discovery."
+                .to_string(),
+        },
+        HistoryLoadState::Ready if snapshot.history.entries.is_empty() => ContentState::Empty {
             title: "No transcriptions yet".to_string(),
             detail: "Your completed dictations will appear here.".to_string(),
-        }
-    } else {
-        ContentState::Ready(
+        },
+        HistoryLoadState::Ready => ContentState::Ready(
             snapshot
                 .history
                 .entries
                 .iter()
                 .map(HistoryItemPresentation::from)
                 .collect(),
-        )
+        ),
     };
-    let selected_entry = selected_entry_id.and_then(|id| {
-        snapshot
-            .history
-            .entries
-            .iter()
-            .find(|entry| entry.id == id)
-            .map(HistoryItemPresentation::from)
-    });
+    let selected_entry = matches!(&snapshot.history.load_state, HistoryLoadState::Ready)
+        .then_some(selected_entry_id)
+        .flatten()
+        .and_then(|id| {
+            snapshot
+                .history
+                .entries
+                .iter()
+                .find(|entry| entry.id == id)
+                .map(HistoryItemPresentation::from)
+        });
     HistoryPresentation {
         entries,
         selected_entry,
@@ -981,6 +988,7 @@ mod tests {
 
         let mut snapshot = (*instance.handle.snapshot()).clone();
         snapshot.revision = 1;
+        snapshot.history.load_state = HistoryLoadState::Ready;
         snapshot.history.has_snapshot = true;
         snapshot.audio_devices.has_snapshot = true;
         reducer.reduce(AppMutation::Snapshot(Arc::new(snapshot)));
@@ -991,6 +999,20 @@ mod tests {
         };
         assert_eq!(microphones.len(), 1);
         assert_eq!(microphones[0].id, SYSTEM_DEFAULT_MICROPHONE_ID);
+
+        let mut snapshot = (*instance.handle.snapshot()).clone();
+        snapshot.revision = 2;
+        snapshot.history.load_state = HistoryLoadState::Error {
+            message: "private database path".to_string(),
+        };
+        snapshot.history.has_snapshot = false;
+        reducer.reduce(AppMutation::Snapshot(Arc::new(snapshot)));
+        let failed = AppPresentation::from_reducer(&reducer);
+        let ContentState::Error { detail, .. } = failed.history.entries else {
+            panic!("failed history discovery is projected as an error");
+        };
+        assert!(detail.contains("Quit and reopen Wrenflow"));
+        assert!(!detail.contains("private database path"));
         instance.shutdown().await?;
         Ok(())
     }

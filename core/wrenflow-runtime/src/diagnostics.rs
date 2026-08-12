@@ -95,7 +95,16 @@ impl DiagnosticLevel {
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticCode {
     Startup,
+    RuntimeBootstrapStarted,
+    RuntimeBootstrapReady,
+    AppCallbackEntered,
+    AppModelReady,
+    SwiftShellInstalled,
+    TrayProjectionReady,
     MenuBarReady,
+    WindowPolicyRouteObserved,
+    GpuiWindowCreated,
+    GpuiWindowShown,
     WindowPolicyAccessoryReady,
     WindowPolicyForegroundReady,
     WindowPolicyApplyFailed,

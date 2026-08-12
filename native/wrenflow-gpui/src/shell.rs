@@ -169,6 +169,13 @@ impl MacShell {
         clear_event_sender();
     }
 
+    pub fn install_post_menu_bootstrap(self) -> Result<(), ShellError> {
+        // SAFETY: no arguments cross the FFI boundary; Swift synchronously
+        // installs the idempotent post-menu observers and probes on main.
+        let result = unsafe { wrenflow_shell_install_post_menu_bootstrap() };
+        status_result(result, "install post-menu bootstrap")
+    }
+
     pub fn show_main_window(self) -> Result<(), ShellError> {
         // SAFETY: no arguments cross the FFI boundary; Swift returns a closed
         // status only after verifying AppKit accepted the regular policy.
@@ -431,6 +438,7 @@ unsafe extern "C" {
         callback: extern "C" fn(i32, *const c_char),
     ) -> i32;
     fn wrenflow_shell_shutdown();
+    fn wrenflow_shell_install_post_menu_bootstrap() -> i32;
     fn wrenflow_shell_show_main_window() -> i32;
     fn wrenflow_shell_hide_main_window() -> i32;
     fn wrenflow_shell_ensure_accessory_policy() -> i32;
@@ -475,6 +483,38 @@ mod tests {
         PermissionObservation, PermissionValue, ShellEvent,
     };
     use std::ffi::CString;
+
+    #[test]
+    fn swift_install_defers_non_route_bootstrap_behind_typed_ffi() {
+        let swift = include_str!("../macos/WrenflowShell.swift");
+        let Some((_, install)) = swift.split_once("func install(") else {
+            panic!("Swift shell install exists");
+        };
+        let Some((install, post_menu)) = install.split_once("func installPostMenuBootstrap()")
+        else {
+            panic!("post-menu bootstrap follows Swift shell install");
+        };
+        let Some((post_menu, _)) = post_menu.split_once("func shutdown(") else {
+            panic!("post-menu bootstrap has a bounded source region");
+        };
+
+        assert!(install.contains(
+            "refreshPermissions(force: true, detectLossTransition: true, monitor: false)"
+        ));
+        for deferred in [
+            "NSWorkspace.willSleepNotification",
+            "NSApplication.didBecomeActiveNotification",
+            "accessibility.attach(to: settingsWindow)",
+            "emitAccessibilityPreferences(force: true)",
+            "emitLaunchAtLogin(errorMessage: nil)",
+        ] {
+            assert!(!install.contains(deferred), "install retained {deferred}");
+            assert!(post_menu.contains(deferred), "post-menu omitted {deferred}");
+        }
+        assert!(post_menu.contains("guard !postMenuBootstrapInstalled else { return true }"));
+        assert!(post_menu.contains("refreshPermissions(force: false, detectLossTransition: true)"));
+        assert!(swift.contains("@_cdecl(\"wrenflow_shell_install_post_menu_bootstrap\")"));
+    }
 
     #[test]
     fn permission_confirmation_budget_survives_intervening_refreshes() {

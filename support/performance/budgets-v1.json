@@ -18,7 +18,7 @@
     "transcription_cycles": 20,
     "history_rows": 50,
     "launch_samples": {
-      "cold": 5,
+      "cold": 20,
       "warm": 10
     },
     "latency_samples": 20
@@ -85,7 +85,7 @@
       "comparison": "<=",
       "threshold": 2000,
       "unit": "ms",
-      "min_samples": 5,
+      "min_samples": 20,
       "owner": "GPUI lifecycle",
       "rationale": "Cold LaunchServices startup must become a usable menu-bar process within two seconds on the support floor."
     },

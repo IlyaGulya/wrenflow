@@ -147,10 +147,13 @@ evidence rather than being mislabeled as menu-bar residency.
 
 Transfer the byte-identical signed app and clean checkout to the constrained
 runner without rebuilding. Its preflight must pass
-`--expect-github-macos14`. Collect five cold samples across fresh-runner or
-at-least-60-second-quiesced starts. The explicit assertion appends one sample;
-it is forbidden with multiple automatic iterations. Preserve the result as a
-sealed, sanitized workflow artifact from each fresh job.
+`--expect-github-macos14`. Collect exactly twenty cold samples on twenty
+distinct fresh GitHub-hosted macOS 14 runners. This cohort reports the
+nearest-rank p95 (the nineteenth ordered sample); its raw maximum remains
+informational and cannot replace or relax the p95 budget. The explicit
+assertion appends one sample and is forbidden with multiple automatic
+iterations. Preserve the result as a sealed, sanitized workflow artifact from
+each fresh job.
 
 ```bash
 mise exec -- python3 scripts/perf/gpui-performance.py launch \
@@ -159,21 +162,19 @@ mise exec -- python3 scripts/perf/gpui-performance.py launch \
   --output "$WRENFLOW_PERF_CONSTRAINED"
 ```
 
-The primary constrained job imports exactly five such shards through the
+Every sample also retains a closed ordered diagnostic-stage map from runtime
+bootstrap through AppModel, Swift shell, tray projection and truthful window
+policy. The primary constrained job imports exactly twenty such shards through the
 harness—not an ad-hoc JSON rewrite. `performance-merge-cold` rejects unsealed,
 pathful, wrong-host, duplicate, mixed-candidate, mixed-source, multi-sample or
-unexpected-metric shards and recomputes the five-sample p95:
+unexpected-metric shards and recomputes the twenty-sample p95:
 
 ```bash
 mise run performance-merge-cold -- \
   --app "$WRENFLOW_PERF_APP" \
   --result "$WRENFLOW_PERF_CONSTRAINED" \
   --candidate-id "$WRENFLOW_PERF_CANDIDATE_ID" \
-  --shard "$WRENFLOW_PERF_DIR/cold-1.json" \
-  --shard "$WRENFLOW_PERF_DIR/cold-2.json" \
-  --shard "$WRENFLOW_PERF_DIR/cold-3.json" \
-  --shard "$WRENFLOW_PERF_DIR/cold-4.json" \
-  --shard "$WRENFLOW_PERF_DIR/cold-5.json"
+  $(for shard in $(seq 1 20); do printf '%s ' --shard "$WRENFLOW_PERF_DIR/cold-$shard.json"; done)
 ```
 
 Then collect ten warm LaunchServices restarts. The harness sends the shell's

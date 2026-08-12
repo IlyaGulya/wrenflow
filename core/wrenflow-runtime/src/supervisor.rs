@@ -13,10 +13,10 @@ use crate::api::{
 };
 use crate::capabilities;
 use crate::state::{
-    AppSessionState, AudioDevicesSnapshot, HistorySnapshot, LaunchAtLoginSnapshot,
-    LocalModelsSnapshot, ModelInventoryState, OnboardingStep, PermissionStatus,
-    PermissionsSnapshot, RuntimeCapabilities, RuntimePhase, RuntimeSnapshot, ShellCapabilities,
-    ShellFacts, TranscriptDisposition, UpdateStatus,
+    AppSessionState, AudioDevicesSnapshot, HistoryLoadState, HistorySnapshot,
+    LaunchAtLoginSnapshot, LocalModelsSnapshot, ModelInventoryState, OnboardingStep,
+    PermissionStatus, PermissionsSnapshot, RuntimeCapabilities, RuntimePhase, RuntimeSnapshot,
+    ShellCapabilities, ShellFacts, TranscriptDisposition, UpdateStatus,
 };
 use crate::store::RuntimeStore;
 use crate::{
@@ -199,6 +199,7 @@ pub fn start_production_runtime() -> Result<RuntimeInstance, RuntimeError> {
         ProductionOptions {
             settings_store: Some(settings_store),
             history_path: Some(paths.history),
+            history_loader: None,
             platform_services: true,
             audio_device_probe: None,
         },
@@ -216,6 +217,7 @@ fn settings_startup_error(message: String) -> RuntimeError {
 struct ProductionOptions {
     settings_store: Option<Arc<ConfigStore>>,
     history_path: Option<std::path::PathBuf>,
+    history_loader: Option<history::HistoryLoader>,
     platform_services: bool,
     audio_device_probe: Option<capabilities::AudioDeviceProbe>,
 }
@@ -259,7 +261,10 @@ fn start_runtime_inner(
     }
     let history_runtime = options
         .history_path
-        .map(|path| history::start(path, store.clone()))
+        .map(|path| match options.history_loader {
+            Some(loader) => history::start_with_loader(path, store.clone(), loader),
+            None => history::start(path, store.clone()),
+        })
         .transpose()?;
     let history_handle = history_runtime
         .as_ref()
@@ -340,6 +345,7 @@ pub(crate) fn initial_snapshot(bootstrap: &RuntimeBootstrap) -> RuntimeSnapshot 
         },
         permissions: PermissionsSnapshot::default(),
         history: HistorySnapshot {
+            load_state: HistoryLoadState::Loading,
             has_snapshot: false,
             entries: Vec::new(),
         },
@@ -416,7 +422,7 @@ impl RuntimeSupervisor {
             history.shutdown();
         }
         if let Some(join) = self.history_join.take() {
-            if join.join().is_err() {
+            if join.is_finished() && join.join().is_err() {
                 log::error!("History runtime thread panicked during shutdown");
             }
         }
@@ -940,6 +946,7 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
+    use wrenflow_core::HistoryStore;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn startup_and_shell_commands_do_not_wait_for_audio_device_enumeration() {
@@ -964,6 +971,7 @@ mod tests {
             ProductionOptions {
                 settings_store: None,
                 history_path: None,
+                history_loader: None,
                 platform_services: false,
                 audio_device_probe: Some(probe),
             },
@@ -1019,6 +1027,7 @@ mod tests {
             ProductionOptions {
                 settings_store: None,
                 history_path: None,
+                history_loader: None,
                 platform_services: false,
                 audio_device_probe: Some(probe),
             },
@@ -1031,6 +1040,66 @@ mod tests {
             .expect("runtime shutdown must not join a stuck CoreAudio probe")
             .unwrap();
         release_tx.send(()).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stuck_history_loader_does_not_delay_start_or_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
+        let loader: history::HistoryLoader = Arc::new(move |_| {
+            entered_tx.send(()).unwrap();
+            release_rx.lock().unwrap().recv().unwrap();
+            Ok((HistoryStore::open_in_memory().unwrap(), Vec::new()))
+        });
+
+        let started = Instant::now();
+        let runtime = start_runtime_inner(
+            RuntimeBootstrap::default(),
+            ProductionOptions {
+                settings_store: None,
+                history_path: Some(dir.path().join("history.sqlite")),
+                history_loader: Some(loader),
+                platform_services: false,
+                audio_device_probe: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "runtime startup synchronously waited for history"
+        );
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            &runtime.handle.snapshot().history.load_state,
+            HistoryLoadState::Loading
+        ));
+        assert!(matches!(
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                runtime.handle.request(RuntimeCommand::ClearHistory)
+            )
+            .await
+            .expect("history mutation must fail closed instead of awaiting the loader"),
+            Err(RuntimeError::ServiceFailed {
+                service: "history",
+                message,
+            }) if message == "history is still loading"
+        ));
+        let snapshots = runtime.handle.subscribe_snapshots();
+
+        tokio::time::timeout(Duration::from_millis(500), runtime.shutdown())
+            .await
+            .expect("runtime shutdown must not join a stuck history loader")
+            .unwrap();
+        release_tx.send(()).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(matches!(
+            &snapshots.borrow().history.load_state,
+            HistoryLoadState::Loading
+        ));
+        assert!(!snapshots.borrow().history.has_snapshot);
     }
 
     #[test]
@@ -1118,6 +1187,7 @@ mod tests {
             ProductionOptions {
                 settings_store: Some(settings_store),
                 history_path: None,
+                history_loader: None,
                 platform_services: false,
                 audio_device_probe: None,
             },
@@ -1158,6 +1228,7 @@ mod tests {
             ProductionOptions {
                 settings_store: Some(settings_store),
                 history_path: None,
+                history_loader: None,
                 platform_services: false,
                 audio_device_probe: None,
             },

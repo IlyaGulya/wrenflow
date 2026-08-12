@@ -88,7 +88,20 @@ WARM_LAUNCH_DEFINITION = (
 WARM_PRIMING_CONTRACT = "unmeasured-route-aware-exact-candidate-v1"
 MALLOC_LAUNCH_DEFINITION = "retained MallocStackLogging LaunchServices launch"
 AGGREGATED_COLD_DEFINITION = (
-    "one exact signed LaunchServices launch on each of five fresh GitHub-hosted macos-14 runners"
+    "one exact signed LaunchServices launch on each of twenty fresh GitHub-hosted macos-14 runners"
+)
+AGGREGATED_COLD_CONTRACT = "twenty-fresh-macos14-runners-v1"
+LAUNCH_DIAGNOSTIC_STAGE_CODES = (
+    "runtime_bootstrap_started",
+    "runtime_bootstrap_ready",
+    "app_callback_entered",
+    "app_model_ready",
+    "swift_shell_installed",
+    "tray_projection_ready",
+    "menu_bar_ready",
+    "gpui_window_created",
+    "window_policy_route_observed",
+    "gpui_window_shown",
 )
 PHASES = {
     "idle",
@@ -2415,6 +2428,7 @@ def launch_diagnostic_state(
     dict[str, Any] | None,
     dict[str, Any] | None,
     dict[str, Any] | None,
+    dict[str, int],
 ]:
     records = read_diagnostics(path, after_ms)
     startups = [
@@ -2446,8 +2460,22 @@ def launch_diagnostic_state(
             ),
             None,
         )
-        return startup, ready, terminal
-    return (startups[-1] if startups else None), None, None
+        stages: dict[str, int] = {}
+        for code in LAUNCH_DIAGNOSTIC_STAGE_CODES:
+            stage = next(
+                (
+                    record
+                    for record in records
+                    if record.get("session_id") == startup.get("session_id")
+                    and record.get("code") == code
+                    and record["timestamp_unix_ms"] >= startup["timestamp_unix_ms"]
+                ),
+                None,
+            )
+            if stage is not None:
+                stages[code] = stage["timestamp_unix_ms"]
+        return startup, ready, terminal, stages
+    return (startups[-1] if startups else None), None, None, {}
 
 
 def sanitized_launch_services_state(
@@ -2764,6 +2792,7 @@ LAUNCH_SAMPLE_KEYS = {
     "latency_ms",
     "session_id",
     "stages_ms",
+    "diagnostic_stages_at_unix_ms",
 }
 LAUNCH_SHUTDOWN_KEYS = {
     "typed_shutdown_requested_at_unix_ms",
@@ -2810,8 +2839,8 @@ def validate_launch_sample(
         or latency != ready - started
     ):
         raise EvidenceError("launch sample timestamps are inconsistent")
-    if sample.get("terminal_application_type") not in WINDOW_POLICY_APPLICATION_TYPES.values():
-        raise EvidenceError("launch sample has an invalid terminal ApplicationType")
+    if sample.get("terminal_application_type") != "Foreground":
+        raise EvidenceError("retained launch sample is not a truthful Foreground window launch")
     if not re.fullmatch(r"s-[0-9a-f]{16}", sample.get("session_id", "")):
         raise EvidenceError("launch sample has an invalid session ID")
     stages = sample.get("stages_ms")
@@ -2819,6 +2848,26 @@ def validate_launch_sample(
         raise EvidenceError("launch sample stages have an unexpected closed shape")
     if stages != launch_stage_durations(sample):
         raise EvidenceError("launch sample stages differ from their timestamps")
+    diagnostic_stages = sample.get("diagnostic_stages_at_unix_ms")
+    if not isinstance(diagnostic_stages, dict) or set(diagnostic_stages) != set(
+        LAUNCH_DIAGNOSTIC_STAGE_CODES
+    ):
+        raise EvidenceError("launch diagnostic stages have an unexpected closed shape")
+    diagnostic_values = [diagnostic_stages[code] for code in LAUNCH_DIAGNOSTIC_STAGE_CODES]
+    if not all(
+        isinstance(value, int) and not isinstance(value, bool)
+        for value in diagnostic_values
+    ):
+        raise EvidenceError("launch diagnostic stage timestamps are not exact integers")
+    if diagnostic_values != sorted(diagnostic_values):
+        raise EvidenceError("launch diagnostic stage timestamps are not ordered")
+    if not (
+        startup <= diagnostic_values[0]
+        and diagnostic_stages["menu_bar_ready"] == menu
+        and diagnostic_stages["window_policy_route_observed"] <= terminal
+        and diagnostic_stages["gpui_window_shown"] <= terminal
+    ):
+        raise EvidenceError("launch diagnostic stages differ from launch readiness timestamps")
     if require_shutdown:
         shutdown_values = [
             sample.get("typed_shutdown_requested_at_unix_ms"),
@@ -2934,7 +2983,7 @@ def check_launch_sampling(result: dict[str, Any], label: str) -> list[str]:
                 expected_count = 1
                 extra_keys = {"fresh_runner_id"}
             elif definition == AGGREGATED_COLD_DEFINITION:
-                expected_count = 5
+                expected_count = 20
                 extra_keys = {"fresh_runner_id", "shard_evidence_sha256"}
             elif definition == HUMAN_COLD_DEFINITION:
                 expected_count = 1
@@ -2944,6 +2993,7 @@ def check_launch_sampling(result: dict[str, Any], label: str) -> list[str]:
             if len(samples) != expected_count:
                 raise EvidenceError("cold launch sample count differs from its definition")
             runner_ids: set[str] = set()
+            session_ids: set[str] = set()
             for sample in samples:
                 validate_launch_sample(
                     sample,
@@ -2952,7 +3002,9 @@ def check_launch_sampling(result: dict[str, Any], label: str) -> list[str]:
                 )
                 if "fresh_runner_id" in extra_keys:
                     runner_id = sample.get("fresh_runner_id", "")
-                    if not re.fullmatch(r"gh-[0-9]+-[0-9]+-cold-[1-5]", runner_id):
+                    if not re.fullmatch(
+                        r"gh-[0-9]+-[0-9]+-cold-(?:[1-9]|1[0-9]|20)", runner_id
+                    ):
                         raise EvidenceError("cold launch has an invalid fresh runner ID")
                     if runner_id in runner_ids:
                         raise EvidenceError("cold launch reuses a fresh runner ID")
@@ -2961,6 +3013,9 @@ def check_launch_sampling(result: dict[str, Any], label: str) -> list[str]:
                     r"[0-9a-f]{64}", sample.get("shard_evidence_sha256", "")
                 ):
                     raise EvidenceError("aggregated cold launch has an invalid shard digest")
+                if sample["session_id"] in session_ids:
+                    raise EvidenceError("cold launch reuses a diagnostic session")
+                session_ids.add(sample["session_id"])
             metric = metrics.get("launch.cold.p95_ms")
             expected_value = percentile(sample["latency_ms"] for sample in samples)
             if (
@@ -2969,6 +3024,36 @@ def check_launch_sampling(result: dict[str, Any], label: str) -> list[str]:
                 or float(metric.get("value", -1)) != float(expected_value)
             ):
                 raise EvidenceError("cold launch metric differs from its raw samples")
+            if definition == AGGREGATED_COLD_DEFINITION:
+                aggregation = result.get("aggregations", {}).get("launch_cold")
+                expected_digests = sorted(
+                    sample["shard_evidence_sha256"] for sample in samples
+                )
+                if (
+                    not isinstance(aggregation, dict)
+                    or set(aggregation)
+                    != {"contract", "sealed_shard_sha256", "raw_max_ms"}
+                    or aggregation.get("contract") != AGGREGATED_COLD_CONTRACT
+                    or aggregation.get("sealed_shard_sha256") != expected_digests
+                    or len(set(expected_digests)) != 20
+                    or aggregation.get("raw_max_ms")
+                    != max(sample["latency_ms"] for sample in samples)
+                ):
+                    raise EvidenceError(
+                        "cold launch aggregation differs from its twenty sealed shards"
+                    )
+                expected_evidence = [
+                    {
+                        "kind": "sealed_cold_runner_shard",
+                        "name": "cold-shard-v1",
+                        "sha256": digest,
+                    }
+                    for digest in expected_digests
+                ]
+                if metric.get("evidence") != expected_evidence:
+                    raise EvidenceError(
+                        "cold launch metric evidence differs from its twenty sealed shards"
+                    )
     except (EvidenceError, KeyError, TypeError, ValueError) as error:
         return [f"{label}: {error}"]
     return []
@@ -2998,6 +3083,10 @@ def observe_launch_sample(
     startup = observation["startup"]
     ready = observation["ready"]
     terminal = observation["terminal"]
+    if terminal.get("code") != "window_policy_foreground_ready":
+        raise EvidenceError(
+            "retained launch measurement requires a truthful Foreground window policy"
+        )
     launch_services_observed_ms = observation["launch_services_observed_at_unix_ms"]
     ready_at_ms = launch_ready_at_ms(
         terminal["timestamp_unix_ms"], launch_services_observed_ms
@@ -3015,6 +3104,7 @@ def observe_launch_sample(
         "terminal_application_type": WINDOW_POLICY_APPLICATION_TYPES[terminal["code"]],
         "latency_ms": latency,
         "session_id": ready.get("session_id"),
+        "diagnostic_stages_at_unix_ms": observation["diagnostic_stages"],
     }
     sample["stages_ms"] = launch_stage_durations(sample)
     return sample, observation["pid"]
@@ -3065,9 +3155,17 @@ def wait_for_route_aware_launch(
                         f"{shutdown_error}"
                     ) from shutdown_error
                 raise EvidenceError("exact candidate PID changed during launch readiness observation")
-        current_startup, ready, terminal = launch_diagnostic_state(diagnostics, started_ms)
+        current_startup, ready, terminal, diagnostic_stages = launch_diagnostic_state(
+            diagnostics, started_ms
+        )
         startup_observed |= current_startup is not None
         if pid is not None and ready is not None and terminal is not None:
+            required_stages = set(LAUNCH_DIAGNOSTIC_STAGE_CODES)
+            if terminal.get("code") == "window_policy_accessory_ready":
+                required_stages -= {"gpui_window_created", "gpui_window_shown"}
+            if not required_stages.issubset(diagnostic_stages):
+                time.sleep(0.01)
+                continue
             last_launch_services_state = query_launch_services_state(app=app, pid=pid)
             launch_services_observation_count += 1
             if first_launch_services_state is None:
@@ -3079,6 +3177,7 @@ def wait_for_route_aware_launch(
                     "startup": current_startup,
                     "ready": ready,
                     "terminal": terminal,
+                    "diagnostic_stages": diagnostic_stages,
                     "launch_services_state": last_launch_services_state,
                     "launch_services_observed_at_unix_ms": observed_at_ms,
                 }
@@ -3151,7 +3250,7 @@ def measure_launch(args: argparse.Namespace) -> None:
         .get("github_m1_7gb_constrained_preflight")
     )
     if constrained_cold and not re.fullmatch(
-        r"gh-[0-9]+-[0-9]+-cold-[1-5]", args.fresh_runner_id or ""
+        r"gh-[0-9]+-[0-9]+-cold-(?:[1-9]|1[0-9]|20)", args.fresh_runner_id or ""
     ):
         raise EvidenceError(
             "constrained cold evidence requires bounded run-attempt-shard fresh runner identity"
@@ -3419,8 +3518,8 @@ def merge_cold_launch(args: argparse.Namespace) -> None:
         if path.is_symlink() or not path.is_file():
             raise EvidenceError(f"cold shard must be a regular non-symlink file: {path}")
         shards.append((path.name, read_json(path)))
-    if len(shards) != 5:
-        raise EvidenceError("cold launch aggregation requires exactly five fresh-runner shards")
+    if len(shards) != 20:
+        raise EvidenceError("cold launch aggregation requires exactly twenty fresh-runner shards")
     if not re.fullmatch(r"[A-Za-z0-9._+-]{1,160}", args.candidate_id):
         raise EvidenceError("candidate ID must be a bounded path-free artifact identifier")
 
@@ -3433,6 +3532,7 @@ def merge_cold_launch(args: argparse.Namespace) -> None:
     )
     evidence_hashes: set[str] = set()
     runner_ids: set[str] = set()
+    session_ids: set[str] = set()
     samples: list[dict[str, Any]] = []
     for label, shard in shards:
         failures = check_provenance(shard, label)
@@ -3466,11 +3566,16 @@ def merge_cold_launch(args: argparse.Namespace) -> None:
         )
         latency = sample["latency_ms"]
         runner_id = sample.get("fresh_runner_id", "")
-        if not re.fullmatch(r"gh-[0-9]+-[0-9]+-cold-[1-5]", runner_id):
+        if not re.fullmatch(
+            r"gh-[0-9]+-[0-9]+-cold-(?:[1-9]|1[0-9]|20)", runner_id
+        ):
             raise EvidenceError(f"cold shard sample has an invalid fresh runner ID: {label}")
         if runner_id in runner_ids:
             raise EvidenceError("cold shards reuse one fresh runner identity")
         runner_ids.add(runner_id)
+        if sample["session_id"] in session_ids:
+            raise EvidenceError("cold shards reuse one diagnostic session")
+        session_ids.add(sample["session_id"])
         if float(metric.get("value", -1)) != float(latency):
             raise EvidenceError(f"cold shard metric differs from its sole sample: {label}")
         evidence_hash = shard.get("evidence_sha256")
@@ -3491,12 +3596,13 @@ def merge_cold_launch(args: argparse.Namespace) -> None:
     ]
     set_metric(result, "launch.cold.p95_ms", percentile(latencies), len(latencies), evidence)
     result.setdefault("aggregations", {})["launch_cold"] = {
-        "contract": "five-fresh-macos14-runners-v1",
+        "contract": AGGREGATED_COLD_CONTRACT,
         "sealed_shard_sha256": sorted(evidence_hashes),
+        "raw_max_ms": max(latencies),
     }
     result["updated_at"] = now_iso()
     write_json(result_path, result)
-    print(f"merged five fresh-runner cold launch samples: {result_path}")
+    print(f"merged twenty fresh-runner cold launch samples: {result_path}")
 
 
 def canonical_hash(result: dict[str, Any]) -> str:
@@ -3546,12 +3652,46 @@ def seal_result(args: argparse.Namespace) -> None:
 
 
 def evidence_role(result: dict[str, Any]) -> str | None:
-    eligibility = result.get("host", {}).get("evidence_eligibility", {})
-    if eligibility.get("github_m1_7gb_constrained_preflight"):
+    host = result.get("host", {})
+    eligibility = host.get("evidence_eligibility", {})
+    if (
+        eligibility.get("github_m1_7gb_constrained_preflight") is True
+        and constrained_host_facts_valid(host)
+    ):
         return "constrained_noninteractive"
     if eligibility.get("physical_supported_interactive"):
         return "physical_interactive"
     return None
+
+
+def constrained_host_facts_valid(host: dict[str, Any]) -> bool:
+    gib = 1024**3
+    github = host.get("github")
+    memory_bytes = host.get("memory_bytes")
+    logical_cpu_count = host.get("logical_cpu_count")
+    return (
+        isinstance(host.get("os_version"), str)
+        and re.fullmatch(r"14(?:\.[0-9]+){1,2}", host["os_version"]) is not None
+        and host.get("architecture") == "arm64"
+        and isinstance(host.get("chip"), str)
+        and host["chip"].startswith("Apple M1")
+        and host.get("machine_model") == "VirtualMac2,1"
+        and isinstance(memory_bytes, int)
+        and not isinstance(memory_bytes, bool)
+        and 6.5 * gib <= memory_bytes <= 7.5 * gib
+        and isinstance(logical_cpu_count, int)
+        and not isinstance(logical_cpu_count, bool)
+        and logical_cpu_count == 3
+        and host.get("xcode_version") == "Xcode 16.2"
+        and isinstance(github, dict)
+        and github
+        == {
+            "actions": True,
+            "runner_os": "macOS",
+            "runner_arch": "ARM64",
+            "runner_environment": "github-hosted",
+        }
+    )
 
 
 def metric_evidence_role(result: dict[str, Any], key: str, metric: dict[str, Any]) -> str | None:
@@ -4163,7 +4303,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     command = subparsers.add_parser(
         "merge-cold",
-        help="merge exactly five sealed fresh-runner cold-launch shards into one primary result",
+        help="merge exactly twenty sealed fresh-runner cold-launch shards into one primary result",
     )
     command.add_argument("--app", required=True)
     command.add_argument("--result", required=True)

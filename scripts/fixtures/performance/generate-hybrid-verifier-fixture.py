@@ -76,6 +76,18 @@ def launch_sample(index, latency, *, shutdown=False, fresh_runner_id=None, shard
         "terminal_application_type": "Foreground",
         "latency_ms": latency,
         "session_id": f"s-{index:016x}",
+        "diagnostic_stages_at_unix_ms": {
+            "runtime_bootstrap_started": started + 110,
+            "runtime_bootstrap_ready": started + 120,
+            "app_callback_entered": started + 130,
+            "app_model_ready": started + 140,
+            "swift_shell_installed": started + 150,
+            "tray_projection_ready": started + 160,
+            "menu_bar_ready": started + 300,
+            "gpui_window_created": started + 310,
+            "window_policy_route_observed": started + 320,
+            "gpui_window_shown": started + 330,
+        },
         "stages_ms": {
             "external_open_to_startup_ms": 100,
             "startup_to_menu_bar_ms": 200,
@@ -120,7 +132,7 @@ def launch_phases_and_metrics():
             fresh_runner_id=f"gh-12345-1-cold-{index + 1}",
             shard_digest=f"{index + 1:064x}",
         )
-        for index in range(5)
+        for index in range(20)
     ]
     phases = {
         "launch_warm": {
@@ -131,13 +143,24 @@ def launch_phases_and_metrics():
         },
         "launch_cold": {
             "phase": "launch_cold",
-            "definition": "one exact signed LaunchServices launch on each of five fresh GitHub-hosted macos-14 runners",
+            "definition": "one exact signed LaunchServices launch on each of twenty fresh GitHub-hosted macos-14 runners",
             "samples": cold,
         },
     }
     metrics = {
         "launch.warm.p95_ms": {"value": 500.0, "sample_count": 10, "evidence": []},
-        "launch.cold.p95_ms": {"value": 1_000.0, "sample_count": 5, "evidence": []},
+        "launch.cold.p95_ms": {
+            "value": 1_000.0,
+            "sample_count": 20,
+            "evidence": [
+                {
+                    "kind": "sealed_cold_runner_shard",
+                    "name": "cold-shard-v1",
+                    "sha256": f"{index + 1:064x}",
+                }
+                for index in range(20)
+            ],
+        },
     }
     return phases, metrics
 
@@ -183,6 +206,19 @@ def make_result(role, budgets):
         "budget_version": budgets["budget_version"],
         "source": {"commit": "a" * 40, "dirty": False},
         "host": {
+            "os_version": "14.8.7",
+            "architecture": "arm64",
+            "chip": "Apple M1",
+            "machine_model": "VirtualMac2,1",
+            "memory_bytes": 7_516_192_768,
+            "logical_cpu_count": 3,
+            "xcode_version": "Xcode 16.2",
+            "github": {
+                "actions": role == "constrained_noninteractive",
+                "runner_os": "macOS" if role == "constrained_noninteractive" else None,
+                "runner_arch": "ARM64" if role == "constrained_noninteractive" else None,
+                "runner_environment": "github-hosted" if role == "constrained_noninteractive" else None,
+            },
             "evidence_eligibility": eligibility,
             "missing_required_templates": [],
             "power": {
@@ -210,6 +246,13 @@ def make_result(role, budgets):
                 "tcc_or_microphone_evidence": False,
             }
         } if synthetic else phases),
+        "aggregations": ({
+            "launch_cold": {
+                "contract": "twenty-fresh-macos14-runners-v1",
+                "sealed_shard_sha256": [f"{index + 1:064x}" for index in range(20)],
+                "raw_max_ms": 1_000,
+            }
+        } if role == "constrained_noninteractive" else {}),
         "sanitized": True,
         "sealed": True,
     }
