@@ -500,6 +500,20 @@ mod tests {
         }
     }
 
+    fn assert_shutdown_does_not_wait_for_loader(
+        handle: HistoryHandle,
+    ) -> std::thread::JoinHandle<()> {
+        let (finished_tx, finished_rx) = mpsc::sync_channel(1);
+        let shutdown = std::thread::spawn(move || {
+            handle.shutdown();
+            finished_tx.send(()).unwrap();
+        });
+        finished_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("history shutdown waited for the blocked loader");
+        shutdown
+    }
+
     async fn wait_for_history(
         store: &RuntimeStore,
         predicate: impl Fn(&crate::HistorySnapshot) -> bool,
@@ -646,10 +660,9 @@ mod tests {
             }) if message == "history command queue is full"
         ));
 
-        let started = Instant::now();
-        history.handle.shutdown();
-        assert!(started.elapsed() < Duration::from_millis(250));
+        let shutdown = assert_shutdown_does_not_wait_for_loader(history.handle.clone());
         release_tx.send(()).unwrap();
+        shutdown.join().unwrap();
         history.join.join().unwrap();
     }
 
@@ -669,13 +682,9 @@ mod tests {
             start_with_loader(dir.path().join("history.sqlite"), store.clone(), loader).unwrap();
         entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
 
-        let started = Instant::now();
-        history.handle.shutdown();
-        assert!(
-            started.elapsed() < Duration::from_millis(250),
-            "history shutdown waited for the blocked loader"
-        );
+        let shutdown = assert_shutdown_does_not_wait_for_loader(history.handle.clone());
         release_tx.send(()).unwrap();
+        shutdown.join().unwrap();
         history.join.join().unwrap();
 
         let snapshot = store.snapshot();
