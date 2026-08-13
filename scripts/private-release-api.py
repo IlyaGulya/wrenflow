@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,47 @@ ASSET_NAMES = (
 RELEASE_ID_RE = re.compile(r"[1-9][0-9]*\Z")
 TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
+KNOWN_INVALID_RELEASE_FINGERPRINT = (
+    "086ec8d47f3582eb73b8c90eb8836676afbfaffd649bf14ea19a20ef3f65c558"
+)
+KNOWN_INVALID_ASSETS = {
+    "RustThirdPartyLicenses.txt": (
+        512243798,
+        "sha256:6327d2c20456ce2e00d8783db3ab07329e68393e6dfa1486fe70da7ca96df0a2",
+    ),
+    "SHA256SUMS": (
+        512243799,
+        "sha256:0bde0034e1bd8e2463ded09454ea66d21a67b3792ec46d3c84dbd264f3546ad6",
+    ),
+    "Wrenflow.cdx.json": (
+        512243802,
+        "sha256:4f2921969154b5e57cb7e5427dd6e701100752514bacd0489ac03aa74712e74b",
+    ),
+    "Wrenflow.dmg": (
+        512243810,
+        "sha256:4a6fb5f1e23b8e39a51681d2658357028fe2e4c1668be8db43313cc6ed867e12",
+    ),
+    "artifact-provenance.json": (
+        512243823,
+        "sha256:c5c18b4630e7ae87e000b7e97f7b88c17c37abdf21fb6867f5a464bd921675a1",
+    ),
+    "exceptions.json": (
+        512243826,
+        "sha256:0333c150d3b2eb72f2a0bfa15ddbbf1ec3784a516ce1c95cae7fc7b79483db93",
+    ),
+    "pins.json": (
+        512243831,
+        "sha256:e5a998d951cb01d0d4ac2d27b42792f57719043c6c279ec39c72b0764f897dde",
+    ),
+    "provenance.json": (
+        512243837,
+        "sha256:3f72dc555397252461f1239bbd713377c51d05fe8168b01044b52940ab9ac26d",
+    ),
+    "release-evidence.json": (
+        512243847,
+        "sha256:26928282bae24b5ab237f6d4da5f347750bb3dc36e1ec81a5fa2b37c452a39be",
+    ),
+}
 
 
 class ReleaseError(RuntimeError):
@@ -72,6 +114,17 @@ def run_gh_json(gh: str, args: list[str]) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ReleaseError("GitHub API response must be one release object")
     return value
+
+
+def run_gh_empty(gh: str, args: list[str]) -> None:
+    result = subprocess.run(
+        [gh, *args], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    if result.returncode != 0:
+        category = "not_found" if b"HTTP 404" in result.stderr else "api_error"
+        raise ReleaseError(f"GitHub API mutation failed ({category})")
+    if result.stdout.strip():
+        raise ReleaseError("GitHub API deletion unexpectedly returned a response body")
 
 
 def canonical_asset(asset: Any, repo: str) -> dict[str, Any]:
@@ -232,6 +285,11 @@ def command_derive_source(args: argparse.Namespace) -> None:
 def command_upload(args: argparse.Namespace) -> None:
     payload = require_payload(args.payload)
     fetch_release(args, "empty")
+    upload_payload(args, payload)
+    write_json(args.output, fetch_release(args, "staged"))
+
+
+def upload_payload(args: argparse.Namespace, payload: Path) -> None:
     for name in ASSET_NAMES:
         endpoint = (
             f"https://uploads.github.com/repos/{args.repo}/releases/{args.release_id_int}/assets"
@@ -257,6 +315,60 @@ def command_upload(args: argparse.Namespace) -> None:
         canonical = canonical_asset(uploaded, args.repo)
         if canonical["name"] != name or canonical["size"] != (payload / name).stat().st_size:
             raise ReleaseError("uploaded asset response does not match the exact local file")
+
+
+def release_fingerprint(release: dict[str, Any]) -> str:
+    value = {
+        "id": release["id"],
+        "tag_name": release["tagName"],
+        "target_commitish": release["targetCommitish"],
+        "draft": release["isDraft"],
+        "prerelease": release["isPrerelease"],
+        "assets": [
+            {
+                "id": asset["id"],
+                "name": asset["name"],
+                "size": asset["size"],
+                "digest": asset["digest"],
+                "state": asset["state"],
+            }
+            for asset in release["assets"]
+        ],
+    }
+    encoded = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def require_known_invalid_release(
+    release: dict[str, Any], expected_fingerprint: str
+) -> None:
+    if expected_fingerprint != KNOWN_INVALID_RELEASE_FINGERPRINT:
+        raise ReleaseError("repair fingerprint does not match the reviewed invalid draft")
+    actual_assets = {
+        asset["name"]: (asset["id"], asset["digest"]) for asset in release["assets"]
+    }
+    if actual_assets != KNOWN_INVALID_ASSETS:
+        raise ReleaseError("private draft is not the reviewed invalid nine-asset payload")
+    if release_fingerprint(release) != KNOWN_INVALID_RELEASE_FINGERPRINT:
+        raise ReleaseError("private draft canonical fingerprint changed before repair")
+
+
+def command_replace_known_invalid(args: argparse.Namespace) -> None:
+    payload = require_payload(args.payload)
+    staged = fetch_release(args, "staged")
+    require_known_invalid_release(staged, args.expected_fingerprint)
+    for asset in staged["assets"]:
+        run_gh_empty(
+            args.gh,
+            [
+                "api",
+                "-X",
+                "DELETE",
+                f"repos/{args.repo}/releases/assets/{asset['id']}",
+            ],
+        )
+    fetch_release(args, "empty")
+    upload_payload(args, payload)
     write_json(args.output, fetch_release(args, "staged"))
 
 
@@ -363,6 +475,12 @@ def parse_args() -> argparse.Namespace:
     upload.add_argument("--payload", type=Path, required=True)
     upload.add_argument("--output", type=Path, required=True)
 
+    replace = subparsers.add_parser("replace-known-invalid")
+    add_release_arguments(replace)
+    replace.add_argument("--expected-fingerprint", required=True)
+    replace.add_argument("--payload", type=Path, required=True)
+    replace.add_argument("--output", type=Path, required=True)
+
     download = subparsers.add_parser("download")
     add_release_arguments(download)
     download.add_argument("--state", choices=("staged", "public"), required=True)
@@ -394,6 +512,7 @@ def main() -> int:
             "derive-source": command_derive_source,
             "inspect": command_inspect,
             "upload": command_upload,
+            "replace-known-invalid": command_replace_known_invalid,
             "download": command_download,
             "publish": command_publish,
         }[args.command](args)

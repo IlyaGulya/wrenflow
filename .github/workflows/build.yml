@@ -422,6 +422,7 @@ jobs:
       - name: Finalize provenance and release payload
         if: steps.skip.outputs.skip != 'true'
         env:
+          WRENFLOW_RELEASE_SOURCE_COMMIT: ${{ steps.version.outputs.source_commit }}
           WRENFLOW_RELEASE_TAG: ${{ steps.version.outputs.tag }}
           WRENFLOW_RELEASE_VERSION: ${{ steps.version.outputs.version }}
           WRENFLOW_RELEASE_BUILD_NUMBER: ${{ steps.version.outputs.build_number }}

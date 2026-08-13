@@ -127,7 +127,7 @@ printf '{"id":"12345678-1234-1234-1234-123456789abc","status":"Invalid"}\n' \
     >"$FIXTURES/notary-invalid.json"
 BAD_FINAL="$FIXTURES/bad-final"
 cp -R "$SECOND" "$BAD_FINAL"
-if GITHUB_SHA="$(git -C "$REPO_DIR" rev-parse HEAD)" \
+if WRENFLOW_RELEASE_SOURCE_COMMIT="$(git -C "$REPO_DIR" rev-parse HEAD)" \
     GITHUB_REPOSITORY="IlyaGulya/wrenflow" GITHUB_RUN_ID="31306126055" \
     GITHUB_RUN_ATTEMPT="1" GITHUB_SERVER_URL="https://github.com" \
     WRENFLOW_RELEASE_TAG="v0.4.0-beta.1" WRENFLOW_RELEASE_VERSION="0.4.0-beta.1" \
@@ -143,7 +143,9 @@ printf '{"id":"12345678-1234-1234-1234-123456789abc","status":"Accepted"}\n' \
     >"$FIXTURES/notary-accepted.json"
 FINAL="$FIXTURES/final"
 cp -R "$SECOND" "$FINAL"
-GITHUB_SHA="$(git -C "$REPO_DIR" rev-parse HEAD)" \
+EXPECTED_RELEASE_SOURCE="7e0e698191d003fe507b0729265cafceaf640c1e"
+GITHUB_SHA="a7e996945407bf21420b1173484ee303930b200a" \
+WRENFLOW_RELEASE_SOURCE_COMMIT="$EXPECTED_RELEASE_SOURCE" \
 GITHUB_REPOSITORY="IlyaGulya/wrenflow" GITHUB_RUN_ID="31306126055" \
 GITHUB_RUN_ATTEMPT="1" GITHUB_SERVER_URL="https://github.com" \
 WRENFLOW_RELEASE_TAG="v0.4.0-beta.1" WRENFLOW_RELEASE_VERSION="0.4.0-beta.1" \
@@ -154,6 +156,7 @@ WRENFLOW_RELEASE_BUILD_NUMBER="42" \
 cp "$FIXTURES/Wrenflow.dmg" "$FINAL/Wrenflow.dmg"
 jq -e '
   .schema_version == 1 and
+  .source.commit == "7e0e698191d003fe507b0729265cafceaf640c1e" and
   .workflow.run_id == "31306126055" and
   .workflow.attempt == "1" and
   .notarization.status == "Accepted" and

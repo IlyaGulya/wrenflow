@@ -394,6 +394,12 @@ require_pattern "scripts/verify-release-artifact.sh" "$BUILD_WORKFLOW"
 require_pattern "artifact-provenance.json" "$BUILD_WORKFLOW"
 require_pattern "build/Wrenflow.dmg.notary-result.json" "$BUILD_WORKFLOW"
 require_pattern "release-evidence.json" "$BUILD_WORKFLOW"
+require_pattern 'WRENFLOW_RELEASE_SOURCE_COMMIT: ${{ steps.version.outputs.source_commit }}' "$BUILD_WORKFLOW"
+require_pattern 'WRENFLOW_RELEASE_SOURCE_COMMIT' "$REPO_DIR/scripts/finalize-release-metadata.sh"
+if grep -Fq -- '--arg source_commit "$GITHUB_SHA"' "$REPO_DIR/scripts/finalize-release-metadata.sh"; then
+    echo "Release evidence must never derive its source from the workflow event SHA" >&2
+    exit 1
+fi
 require_pattern "notarySubmissionId" "$REPO_DIR/scripts/finalize-release-metadata.sh"
 require_pattern "workflowRun" "$REPO_DIR/scripts/finalize-release-metadata.sh"
 require_pattern "verify_macho_loads" "$REPO_DIR/scripts/verify-release-artifact.sh"

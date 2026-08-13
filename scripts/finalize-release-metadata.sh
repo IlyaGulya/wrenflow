@@ -14,16 +14,16 @@ DMG_PATH="$(cd "$(dirname "$DMG_PATH")" && pwd)/$(basename "$DMG_PATH")"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 NOTARY_RESULT="$(cd "$(dirname "$NOTARY_RESULT")" && pwd)/$(basename "$NOTARY_RESULT")"
 
-for variable in GITHUB_SHA GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_ATTEMPT \
+for variable in GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_ATTEMPT \
     GITHUB_SERVER_URL WRENFLOW_RELEASE_TAG WRENFLOW_RELEASE_VERSION \
-    WRENFLOW_RELEASE_BUILD_NUMBER; do
+    WRENFLOW_RELEASE_BUILD_NUMBER WRENFLOW_RELEASE_SOURCE_COMMIT; do
     if [[ -z "${!variable:-}" ]]; then
         echo "Release evidence requires $variable" >&2
         exit 65
     fi
 done
 if [[ "$GITHUB_REPOSITORY" != "IlyaGulya/wrenflow" || "$GITHUB_SERVER_URL" != "https://github.com" || \
-      ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ || ! "$GITHUB_RUN_ID" =~ ^[0-9]+$ || \
+      ! "$WRENFLOW_RELEASE_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ || ! "$GITHUB_RUN_ID" =~ ^[0-9]+$ || \
       ! "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ || ! "$WRENFLOW_RELEASE_BUILD_NUMBER" =~ ^[0-9]+$ || \
       "$WRENFLOW_RELEASE_TAG" != "v$WRENFLOW_RELEASE_VERSION" || \
       ! "$WRENFLOW_RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
@@ -58,7 +58,7 @@ subject() {
 DMG_SHA256="$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')"
 WORKFLOW_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT"
 jq -S -n \
-    --arg source_commit "$GITHUB_SHA" \
+    --arg source_commit "$WRENFLOW_RELEASE_SOURCE_COMMIT" \
     --arg repository "$GITHUB_REPOSITORY" \
     --arg workflow_run_id "$GITHUB_RUN_ID" \
     --arg workflow_run_attempt "$GITHUB_RUN_ATTEMPT" \
