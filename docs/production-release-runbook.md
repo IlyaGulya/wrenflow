@@ -70,7 +70,7 @@ and recovery pin the verifier checkout to reviewed commit
 a later default-branch head may supply verifier bytes.
 All private-release REST tooling and the promotion metadata verifier are pinned
 independently to reviewed commit
-`aa025228f4f8d12e29c866b6be43eb2c0bf0834c`; neither the stable source commit,
+`a81827311a8aa5745a88e1f4a081746ce820a6f5`; neither the stable source commit,
 workflow caller SHA, nor a later default-branch head may supply those bytes.
 
 If that initial reusable call is interrupted before staging, recover the same
@@ -81,7 +81,7 @@ mise exec -- gh workflow run build.yml \
   --repo IlyaGulya/wrenflow \
   -f release_tag=v0.4.0 \
   -f release_id='<positive numeric private draft ID>' \
-  -f release_tool_source_commit=aa025228f4f8d12e29c866b6be43eb2c0bf0834c \
+  -f release_tool_source_commit=a81827311a8aa5745a88e1f4a081746ce820a6f5 \
   -f release_source_commit='<40-character draft target commit>' \
   -f verifier_source_commit=e233cc6db6b37307e9774db228ab11ecc4d0673c \
   -f confirmation=STAGE_EXISTING_PRIVATE_DRAFT
@@ -96,7 +96,7 @@ mise exec -- gh workflow run build.yml \
   --repo IlyaGulya/wrenflow \
   -f release_tag=v0.4.0 \
   -f release_id='<positive numeric private draft ID>' \
-  -f release_tool_source_commit=aa025228f4f8d12e29c866b6be43eb2c0bf0834c \
+  -f release_tool_source_commit=a81827311a8aa5745a88e1f4a081746ce820a6f5 \
   -f release_source_commit='<40-character draft target commit>' \
   -f verifier_source_commit=e233cc6db6b37307e9774db228ab11ecc4d0673c \
   -f confirmation=VERIFY_EXISTING_PRIVATE_DRAFT
@@ -106,6 +106,35 @@ This mode skips compatibility, build, frozen-baseline, and upload jobs. It
 downloads the closed nine-asset set by immutable asset IDs, checks hashes and
 source/provenance binding, mounts the DMG, and revalidates Developer ID,
 notarization, and Gatekeeper without mutating the draft.
+
+The first `v0.4.0` staging run recorded the workflow event SHA in
+`release-evidence.json` even though its signed bytes and SLSA provenance were
+built from the exact stable source. That specific private payload may be
+replaced only by the reviewed repair transaction:
+
+```bash
+mise exec -- gh workflow run build.yml \
+  --repo IlyaGulya/wrenflow \
+  -f release_tag=v0.4.0 \
+  -f release_id=369445618 \
+  -f release_tool_source_commit=a81827311a8aa5745a88e1f4a081746ce820a6f5 \
+  -f release_source_commit=7e0e698191d003fe507b0729265cafceaf640c1e \
+  -f verifier_source_commit=e233cc6db6b37307e9774db228ab11ecc4d0673c \
+  -f invalid_payload_fingerprint=086ec8d47f3582eb73b8c90eb8836676afbfaffd649bf14ea19a20ef3f65c558 \
+  -f confirmation=REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD
+```
+
+Before deleting anything, the workflow re-downloads and verifies all existing
+assets and proves they equal signed payload artifact `9163585962` from run
+`31652943641` (artifact digest
+`sha256:44fc4874372b68c564b70b3a89230215a68a4f9bc8585d5ee4d113d667b7ebdf`).
+It also requires the literal draft fingerprint and all nine reviewed asset
+IDs/digests. It then deletes only those immutable IDs, requires an empty private
+draft, uploads the complete newly built nine-file payload, and re-downloads it
+by its new IDs. Any deletion or upload error stops while the release is still
+private. A partial state is never retried automatically: recovery requires a
+newly reviewed exact manifest and fingerprint. The repair evidence artifact
+records both asset manifests and the recoverable original Actions artifact.
 
 The owner later invokes **Promote Verified Stable Draft** with the immutable
 private draft release ID, canonical stable tag, exact approved lowercase DMG

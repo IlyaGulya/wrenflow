@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         if: steps.release.outputs.release_created == 'true'
         with:
-          ref: aa025228f4f8d12e29c866b6be43eb2c0bf0834c
+          ref: a81827311a8aa5745a88e1f4a081746ce820a6f5
           path: .release-workflow
           sparse-checkout: scripts/private-release-api.py
           sparse-checkout-cone-mode: false
@@ -39,7 +39,7 @@ jobs:
         if: steps.release.outputs.release_created == 'true'
         run: |
           if [ "$(git -C .release-workflow rev-parse HEAD)" != \
-               "aa025228f4f8d12e29c866b6be43eb2c0bf0834c" ]; then
+               "a81827311a8aa5745a88e1f4a081746ce820a6f5" ]; then
             echo "Private draft tooling checkout drifted from the reviewed source" >&2
             exit 1
           fi
@@ -66,7 +66,7 @@ jobs:
     with:
       release_tag: ${{ needs.release-please.outputs.tag_name }}
       release_id: ${{ needs.release-please.outputs.release_id }}
-      release_tool_source_commit: aa025228f4f8d12e29c866b6be43eb2c0bf0834c
+      release_tool_source_commit: a81827311a8aa5745a88e1f4a081746ce820a6f5
       release_source_commit: ${{ needs.release-please.outputs.source_commit }}
       verifier_source_commit: e233cc6db6b37307e9774db228ab11ecc4d0673c
     secrets:

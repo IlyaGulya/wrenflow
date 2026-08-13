@@ -114,6 +114,13 @@ verify_source_contract() {
     rg -F 'needs.publish.result == '\''success'\'' }}' \
         "$REPO_DIR/.github/workflows/build.yml" >/dev/null
     rg -F 'confirmation=VERIFY_EXISTING_PRIVATE_DRAFT' "$RUNBOOK" >/dev/null
+    rg -F 'confirmation=REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD' "$RUNBOOK" >/dev/null
+    rg -F 'invalid_payload_fingerprint=086ec8d47f3582eb73b8c90eb8836676afbfaffd649bf14ea19a20ef3f65c558' \
+        "$RUNBOOK" >/dev/null
+    rg -F 'private-release-api.py replace-known-invalid' \
+        "$REPO_DIR/.github/workflows/build.yml" >/dev/null
+    rg -F 'WRENFLOW_RELEASE_SOURCE_COMMIT: ${{ steps.version.outputs.source_commit }}' \
+        "$REPO_DIR/.github/workflows/build.yml" >/dev/null
     rg -F 'Require exact empty tagless private stable draft' \
         "$REPO_DIR/.github/workflows/build.yml" >/dev/null
     rg -F 'verify_frozen_performance_baseline:' \

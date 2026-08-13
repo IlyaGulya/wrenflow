@@ -28,8 +28,12 @@ on:
         required: true
         type: string
       confirmation:
-        description: Type STAGE_EXISTING_PRIVATE_DRAFT to stage or VERIFY_EXISTING_PRIVATE_DRAFT to verify without mutation
+        description: Exact stable private draft staging, verification, or reviewed repair confirmation
         required: true
+        type: string
+      invalid_payload_fingerprint:
+        description: Exact reviewed fingerprint required only to replace the known invalid private payload
+        required: false
         type: string
   workflow_call:
     inputs:
@@ -117,6 +121,7 @@ jobs:
           ref: ${{ inputs.release_source_commit || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+
       - name: Select Xcode 16.2
         run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
@@ -145,12 +150,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
+      actions: read
       contents: write
     env:
       RELEASE_TAG: ${{ inputs.release_tag }}
       RELEASE_ID: ${{ inputs.release_id }}
       RELEASE_TOOL_SOURCE_COMMIT: ${{ inputs.release_tool_source_commit }}
       RELEASE_SOURCE_COMMIT: ${{ inputs.release_source_commit }}
+      INVALID_PAYLOAD_FINGERPRINT: ${{ inputs.invalid_payload_fingerprint }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -167,7 +174,7 @@ jobs:
 
       - name: Require reviewed private draft tooling source
         run: |
-          if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "aa025228f4f8d12e29c866b6be43eb2c0bf0834c" ] || \
+          if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "a81827311a8aa5745a88e1f4a081746ce820a6f5" ] || \
              [ "$(git -C .release-workflow rev-parse HEAD)" != "$RELEASE_TOOL_SOURCE_COMMIT" ]; then
             echo "Private draft tooling does not match the reviewed immutable source" >&2
             exit 1
@@ -188,29 +195,77 @@ jobs:
             echo "Stable release source commit is not an exact lowercase SHA" >&2
             exit 1
           fi
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && \
-             [ "$RECOVERY_CONFIRMATION" != "STAGE_EXISTING_PRIVATE_DRAFT" ]; then
-            echo "Explicit private draft recovery confirmation is missing" >&2
-            exit 1
-          fi
           if [ "$(git rev-parse HEAD)" != "$RELEASE_SOURCE_COMMIT" ]; then
             echo "Checked-out source does not match the release-please source commit" >&2
             exit 1
           fi
-          mise exec -- python3 .release-workflow/scripts/private-release-api.py inspect \
-            --repo "$GITHUB_REPOSITORY" \
-            --release-id "$RELEASE_ID" \
-            --tag "$RELEASE_TAG" \
-            --source "$RELEASE_SOURCE_COMMIT" \
-            --state empty \
-            --output stable-release-source.json
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && \
+             [ "$RECOVERY_CONFIRMATION" = "REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD" ]; then
+            if [ "$INVALID_PAYLOAD_FINGERPRINT" != \
+                 "086ec8d47f3582eb73b8c90eb8836676afbfaffd649bf14ea19a20ef3f65c558" ]; then
+              echo "Reviewed invalid private draft fingerprint is missing" >&2
+              exit 1
+            fi
+            mise exec -- python3 .release-workflow/scripts/private-release-api.py inspect \
+              --repo "$GITHUB_REPOSITORY" \
+              --release-id "$RELEASE_ID" \
+              --tag "$RELEASE_TAG" \
+              --source "$RELEASE_SOURCE_COMMIT" \
+              --state staged \
+              --output stable-release-source.json
+            REPAIR_FINGERPRINT=$(jq -cS '{
+              id, tag_name:.tagName, target_commitish:.targetCommitish,
+              draft:.isDraft, prerelease:.isPrerelease,
+              assets:([.assets[] | {id,name,size,digest,state}] | sort_by(.name))
+            }' stable-release-source.json | shasum -a 256 | awk '{print $1}')
+            if [ "$REPAIR_FINGERPRINT" != "$INVALID_PAYLOAD_FINGERPRINT" ]; then
+              echo "Private draft changed from the reviewed invalid payload" >&2
+              exit 1
+            fi
+            mise exec -- gh api \
+              "repos/$GITHUB_REPOSITORY/actions/artifacts/9163585962" \
+              > invalid-signed-payload-artifact.json
+            jq -e '
+              .id == 9163585962 and
+              .name == "signed-release-payload" and
+              .digest == "sha256:44fc4874372b68c564b70b3a89230215a68a4f9bc8585d5ee4d113d667b7ebdf" and
+              .expired == false and
+              .workflow_run.id == 31652943641 and
+              .workflow_run.head_sha == "a7e996945407bf21420b1173484ee303930b200a"
+            ' invalid-signed-payload-artifact.json >/dev/null
+          else
+            if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && \
+               [ "$RECOVERY_CONFIRMATION" != "STAGE_EXISTING_PRIVATE_DRAFT" ]; then
+              echo "Explicit private draft recovery confirmation is missing" >&2
+              exit 1
+            fi
+            if [ -n "$INVALID_PAYLOAD_FINGERPRINT" ]; then
+              echo "Invalid payload fingerprint is repair-only" >&2
+              exit 1
+            fi
+            mise exec -- python3 .release-workflow/scripts/private-release-api.py inspect \
+              --repo "$GITHUB_REPOSITORY" \
+              --release-id "$RELEASE_ID" \
+              --tag "$RELEASE_TAG" \
+              --source "$RELEASE_SOURCE_COMMIT" \
+              --state empty \
+              --output stable-release-source.json
+          fi
           mise exec -- gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" \
             > stable-tag-refs.json
           # shellcheck disable=SC2016
           mise exec -- jq -e --argjson id "$RELEASE_ID" --arg tag "$RELEASE_TAG" --arg source "$RELEASE_SOURCE_COMMIT" '
             (keys | sort) == (["assets", "id", "isDraft", "isPrerelease", "tagName", "targetCommitish"] | sort) and
             .id == $id and .tagName == $tag and .targetCommitish == $source and
-            .isDraft == true and .isPrerelease == false and .assets == []
+            .isDraft == true and .isPrerelease == false and
+            ((env.RECOVERY_CONFIRMATION == "REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD" and
+              ([.assets[].name] | sort) == ([
+                "RustThirdPartyLicenses.txt", "SHA256SUMS", "Wrenflow.cdx.json",
+                "Wrenflow.dmg", "artifact-provenance.json", "exceptions.json",
+                "pins.json", "provenance.json", "release-evidence.json"
+              ] | sort)) or
+             (env.RECOVERY_CONFIRMATION != "REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD" and
+              .assets == []))
           ' stable-release-source.json >/dev/null
           # shellcheck disable=SC2016
           mise exec -- jq -e --arg ref "refs/tags/$RELEASE_TAG" '
@@ -222,6 +277,8 @@ jobs:
     if: >-
       ${{ always() && github.event_name != 'pull_request' &&
           inputs.confirmation != 'VERIFY_EXISTING_PRIVATE_DRAFT' &&
+          (inputs.confirmation != 'REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD' ||
+           (inputs.release_tag != '' && needs.verify_private_release_draft.result == 'success')) &&
           (inputs.release_tag == '' || needs.verify_private_release_draft.result == 'success') }}
     runs-on: macos-26
     timeout-minutes: 45
@@ -236,6 +293,7 @@ jobs:
       HAS_NOTARIZE: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
       RELEASE_TAG: ${{ inputs.release_tag }}
       RELEASE_SOURCE_COMMIT: ${{ inputs.release_source_commit }}
+      RELEASE_TOOL_SOURCE_COMMIT: ${{ inputs.release_tool_source_commit }}
       IS_RELEASE: ${{ inputs.release_tag != '' }}
       IS_BETA: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.release_tag == '' }}
     steps:
@@ -244,6 +302,24 @@ jobs:
           ref: ${{ inputs.release_source_commit || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: env.IS_RELEASE == 'true'
+        with:
+          ref: ${{ inputs.release_tool_source_commit }}
+          path: .release-workflow
+          sparse-checkout: scripts/finalize-release-metadata.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Require reviewed stable metadata finalizer source
+        if: env.IS_RELEASE == 'true'
+        run: |
+          if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "a81827311a8aa5745a88e1f4a081746ce820a6f5" ] || \
+             [ "$(git -C .release-workflow rev-parse HEAD)" != "$RELEASE_TOOL_SOURCE_COMMIT" ]; then
+            echo "Stable metadata finalizer does not match the reviewed immutable source" >&2
+            exit 1
+          fi
 
       - name: Check if release-please commit
         id: skip
@@ -427,7 +503,11 @@ jobs:
           WRENFLOW_RELEASE_VERSION: ${{ steps.version.outputs.version }}
           WRENFLOW_RELEASE_BUILD_NUMBER: ${{ steps.version.outputs.build_number }}
         run: |
-          mise exec -- scripts/finalize-release-metadata.sh \
+          FINALIZER=scripts/finalize-release-metadata.sh
+          if [ "${{ env.IS_RELEASE }}" = "true" ]; then
+            FINALIZER=.release-workflow/scripts/finalize-release-metadata.sh
+          fi
+          mise exec -- "$FINALIZER" \
             build/gpui/Wrenflow.app build/Wrenflow.dmg build/supply-chain \
             build/Wrenflow.dmg.notary-result.json
           mkdir -p build/release-payload
@@ -853,11 +933,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
+      actions: read
       contents: write
     env:
       RELEASE_TAG: ${{ inputs.release_tag }}
       RELEASE_ID: ${{ inputs.release_id }}
       RELEASE_TOOL_SOURCE_COMMIT: ${{ inputs.release_tool_source_commit }}
+      RECOVERY_CONFIRMATION: ${{ inputs.confirmation }}
+      INVALID_PAYLOAD_FINGERPRINT: ${{ inputs.invalid_payload_fingerprint }}
       IS_RELEASE: ${{ inputs.release_tag != '' }}
       PUBLISH_TAG: ${{ needs.build_release.outputs.publish_tag }}
       SOURCE_COMMIT: ${{ needs.build_release.outputs.source_commit }}
@@ -881,7 +964,7 @@ jobs:
       - name: Require reviewed private draft tooling source
         if: env.IS_RELEASE == 'true'
         run: |
-          if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "aa025228f4f8d12e29c866b6be43eb2c0bf0834c" ] || \
+          if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "a81827311a8aa5745a88e1f4a081746ce820a6f5" ] || \
              [ "$(git -C .release-workflow rev-parse HEAD)" != "$RELEASE_TOOL_SOURCE_COMMIT" ]; then
             echo "Private draft tooling does not match the reviewed immutable source" >&2
             exit 1
@@ -895,6 +978,16 @@ jobs:
           name: signed-release-payload
           path: release-payload
 
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: env.IS_RELEASE == 'true' && env.RECOVERY_CONFIRMATION == 'REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD'
+        with:
+          artifact-ids: 9163585962
+          path: original-invalid-payload
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          merge-multiple: true
+          repository: IlyaGulya/wrenflow
+          run-id: 31652943641
+
       - name: Refuse to overwrite staged or published candidate bytes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -904,18 +997,60 @@ jobs:
               echo "Stable release tag is not canonical SemVer: $RELEASE_TAG" >&2
               exit 1
             fi
-            mise exec -- python3 .release-workflow/scripts/private-release-api.py inspect \
-              --repo "$GITHUB_REPOSITORY" \
-              --release-id "$RELEASE_ID" \
-              --tag "$RELEASE_TAG" \
-              --source "$SOURCE_COMMIT" \
-              --state empty \
-              --output stable-release-before.json
+            if [ "$RECOVERY_CONFIRMATION" = "REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD" ]; then
+              (cd release-payload && shasum -a 256 -c SHA256SUMS)
+              NEW_DMG_SHA=$(shasum -a 256 release-payload/Wrenflow.dmg | awk '{print $1}')
+              jq -e --arg source "$SOURCE_COMMIT" --arg sha "$NEW_DMG_SHA" '
+                .source.commit == $source and .artifact.sha256 == $sha
+              ' release-payload/release-evidence.json >/dev/null
+              jq -e --arg source "$SOURCE_COMMIT" '
+                any(.predicate.buildDefinition.resolvedDependencies[];
+                  .uri == "git+https://github.com/ilyagulya/wrenflow" and
+                  .digest.gitCommit == $source) and
+                .predicate.runDetails.metadata.invocationId == $source
+              ' release-payload/artifact-provenance.json >/dev/null
+              mkdir invalid-draft-backup
+              mise exec -- python3 .release-workflow/scripts/private-release-api.py inspect \
+                --repo "$GITHUB_REPOSITORY" \
+                --release-id "$RELEASE_ID" \
+                --tag "$RELEASE_TAG" \
+                --source "$SOURCE_COMMIT" \
+                --state staged \
+                --output stable-release-before.json
+              mise exec -- python3 .release-workflow/scripts/private-release-api.py download \
+                --repo "$GITHUB_REPOSITORY" \
+                --release-id "$RELEASE_ID" \
+                --tag "$RELEASE_TAG" \
+                --source "$SOURCE_COMMIT" \
+                --state staged \
+                --directory "$PWD/invalid-draft-backup"
+              (cd invalid-draft-backup && shasum -a 256 -c SHA256SUMS)
+              for asset in release-payload/*; do
+                name=$(basename "$asset")
+                cmp "invalid-draft-backup/$name" "original-invalid-payload/$name"
+              done
+            else
+              mise exec -- python3 .release-workflow/scripts/private-release-api.py inspect \
+                --repo "$GITHUB_REPOSITORY" \
+                --release-id "$RELEASE_ID" \
+                --tag "$RELEASE_TAG" \
+                --source "$SOURCE_COMMIT" \
+                --state empty \
+                --output stable-release-before.json
+            fi
             gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" \
               > stable-tag-refs-before.json
             if ! jq -e --argjson id "$RELEASE_ID" --arg tag "$RELEASE_TAG" --arg source "$SOURCE_COMMIT" '
               .id == $id and .tagName == $tag and .targetCommitish == $source and
-              .isDraft == true and .isPrerelease == false and .assets == []
+              .isDraft == true and .isPrerelease == false and
+              ((env.RECOVERY_CONFIRMATION == "REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD" and
+                ([.assets[].name] | sort) == ([
+                  "RustThirdPartyLicenses.txt", "SHA256SUMS", "Wrenflow.cdx.json",
+                  "Wrenflow.dmg", "artifact-provenance.json", "exceptions.json",
+                  "pins.json", "provenance.json", "release-evidence.json"
+                ] | sort)) or
+               (env.RECOVERY_CONFIRMATION != "REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD" and
+                .assets == []))
             ' stable-release-before.json >/dev/null; then
               echo "Stable release must be an empty release-please draft; refusing mutation" >&2
               exit 1
@@ -937,13 +1072,51 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mise exec -- python3 .release-workflow/scripts/private-release-api.py upload \
-            --repo "$GITHUB_REPOSITORY" \
-            --release-id "$RELEASE_ID" \
-            --tag "$RELEASE_TAG" \
-            --source "$SOURCE_COMMIT" \
-            --payload "$PWD/release-payload" \
-            --output stable-release-after.json
+          if [ "$RECOVERY_CONFIRMATION" = "REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD" ]; then
+            mise exec -- python3 .release-workflow/scripts/private-release-api.py replace-known-invalid \
+              --repo "$GITHUB_REPOSITORY" \
+              --release-id "$RELEASE_ID" \
+              --tag "$RELEASE_TAG" \
+              --source "$SOURCE_COMMIT" \
+              --expected-fingerprint "$INVALID_PAYLOAD_FINGERPRINT" \
+              --payload "$PWD/release-payload" \
+              --output stable-release-after.json
+            mkdir repaired-private-payload
+            mise exec -- python3 .release-workflow/scripts/private-release-api.py download \
+              --repo "$GITHUB_REPOSITORY" \
+              --release-id "$RELEASE_ID" \
+              --tag "$RELEASE_TAG" \
+              --source "$SOURCE_COMMIT" \
+              --state staged \
+              --directory "$PWD/repaired-private-payload"
+            (cd repaired-private-payload && shasum -a 256 -c SHA256SUMS)
+            for asset in release-payload/*; do
+              name=$(basename "$asset")
+              cmp "$asset" "repaired-private-payload/$name"
+            done
+            jq -n \
+              --arg source "$SOURCE_COMMIT" \
+              --arg fingerprint "$INVALID_PAYLOAD_FINGERPRINT" \
+              --arg artifact_digest "sha256:44fc4874372b68c564b70b3a89230215a68a4f9bc8585d5ee4d113d667b7ebdf" \
+              --argjson release_id "$RELEASE_ID" \
+              --slurpfile before stable-release-before.json \
+              --slurpfile after stable-release-after.json \
+              '{
+                schema_version:1,
+                release:{id:$release_id,tag:"v0.4.0",source:$source},
+                reviewed_invalid:{fingerprint:$fingerprint,assets:$before[0].assets},
+                recoverable_payload:{workflow_run:31652943641,artifact_id:9163585962,digest:$artifact_digest},
+                replacement:{assets:$after[0].assets,verified_by_asset_id_download:true}
+              }' > private-release-repair-evidence.json
+          else
+            mise exec -- python3 .release-workflow/scripts/private-release-api.py upload \
+              --repo "$GITHUB_REPOSITORY" \
+              --release-id "$RELEASE_ID" \
+              --tag "$RELEASE_TAG" \
+              --source "$SOURCE_COMMIT" \
+              --payload "$PWD/release-payload" \
+              --output stable-release-after.json
+          fi
           gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" \
             > stable-tag-refs-after.json
           jq -e --argjson id "$RELEASE_ID" --arg tag "$RELEASE_TAG" --arg source "$SOURCE_COMMIT" '
@@ -964,6 +1137,14 @@ jobs:
           jq -e --arg ref "refs/tags/$RELEASE_TAG" '
             type == "array" and ([.[] | select(.ref == $ref)] | length) == 0
           ' stable-tag-refs-after.json >/dev/null
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: env.IS_RELEASE == 'true' && env.RECOVERY_CONFIRMATION == 'REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD'
+        with:
+          name: private-release-repair-evidence
+          path: private-release-repair-evidence.json
+          if-no-files-found: error
+          retention-days: 21
 
       - name: Create beta pre-release
         if: env.IS_RELEASE != 'true'
@@ -1051,7 +1232,7 @@ jobs:
           persist-credentials: false
       - name: Require reviewed private draft tooling source
         run: |
-          if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "aa025228f4f8d12e29c866b6be43eb2c0bf0834c" ] || \
+          if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "a81827311a8aa5745a88e1f4a081746ce820a6f5" ] || \
              [ "$(git -C .release-workflow rev-parse HEAD)" != "$RELEASE_TOOL_SOURCE_COMMIT" ]; then
             echo "Private draft tooling does not match the reviewed immutable source" >&2
             exit 1
@@ -1129,7 +1310,7 @@ jobs:
           persist-credentials: false
       - name: Require exact verification-only private draft inputs
         run: |
-          if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "aa025228f4f8d12e29c866b6be43eb2c0bf0834c" ] || \
+          if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "a81827311a8aa5745a88e1f4a081746ce820a6f5" ] || \
              [ "$(git -C .release-workflow rev-parse HEAD)" != "$RELEASE_TOOL_SOURCE_COMMIT" ] || \
              [ "$VERIFIER_SOURCE_COMMIT" != "e233cc6db6b37307e9774db228ab11ecc4d0673c" ]; then
             echo "Private draft verification inputs do not match reviewed immutable sources" >&2

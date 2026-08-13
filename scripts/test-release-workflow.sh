@@ -8,6 +8,7 @@ PROMOTION_WORKFLOW="$REPO_DIR/.github/workflows/promote-stable.yml"
 LINT_WORKFLOW="$REPO_DIR/.github/workflows/lint-workflows.yml"
 RELEASE_CONFIG="$REPO_DIR/release-please-config.json"
 PRIVATE_RELEASE_HELPER="$REPO_DIR/scripts/private-release-api.py"
+ACTIONLINT_CONFIG="$REPO_DIR/.github/actionlint.yaml"
 
 require_pattern() {
     local pattern="$1"
@@ -141,6 +142,8 @@ require_frozen_source_history_contract() {
     [[ "$(grep -Fxc -- '          fetch-depth: 0' <<< "$verify_block")" -eq 1 ]] || return 1
     [[ "$(grep -Fxc -- '          fetch-depth: 0' <<< "$compatibility_block")" -eq 1 ]] || return 1
     [[ "$(grep -Fxc -- '          fetch-depth: 0' <<< "$build_block")" -eq 1 ]] || return 1
+    grep -Fqx -- '          sparse-checkout: scripts/finalize-release-metadata.sh' <<< "$build_block" || return 1
+    grep -Fqx -- '            FINALIZER=.release-workflow/scripts/finalize-release-metadata.sh' <<< "$build_block" || return 1
     [[ "$(grep -Fxc -- '        run: mise run test' <<< "$compatibility_block")" -eq 1 ]] || return 1
     [[ "$(grep -Fxc -- '          mise run test' <<< "$build_block")" -eq 1 ]] || return 1
     ! grep -Fqx -- '          fetch-depth: 0' <<< "$verify_pr_block"
@@ -176,10 +179,15 @@ require_private_draft_permission_contract() {
        -n "$frozen" && -n "$verify_pr" && -n "$promote" ]] || return 1
 
     [[ "$(grep -Fxc -- '      contents: write' <<< "$preflight")" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc -- '      actions: read' <<< "$preflight")" -eq 1 ]] || return 1
     grep -Fqx -- "      \${{ inputs.release_tag != '' &&" <<< "$preflight" || return 1
     grep -Fqx -- '      - name: Require exact empty tagless private stable draft' <<< "$preflight" || return 1
     grep -Fqx -- '    needs: verify_private_release_draft' <<< "$build_release" || return 1
     grep -Fqx -- "          inputs.confirmation != 'VERIFY_EXISTING_PRIVATE_DRAFT' &&" \
+        <<< "$build_release" || return 1
+    grep -Fqx -- "          (inputs.confirmation != 'REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD' ||" \
+        <<< "$build_release" || return 1
+    grep -Fqx -- "           (inputs.release_tag != '' && needs.verify_private_release_draft.result == 'success')) &&" \
         <<< "$build_release" || return 1
     grep -Fqx -- "          (inputs.release_tag == '' || needs.verify_private_release_draft.result == 'success') }}" \
         <<< "$build_release" || return 1
@@ -225,11 +233,62 @@ require_private_draft_permission_contract() {
     grep -Fq -- 'RECOVERY_CONFIRMATION" != "STAGE_EXISTING_PRIVATE_DRAFT' <<< "$preflight" || return 1
 
     [[ "$(grep -Fxc -- '      contents: write' <<< "$publish")" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc -- '      actions: read' <<< "$publish")" -eq 1 ]] || return 1
     grep -Fq -- 'private-release-api.py upload' <<< "$publish" || return 1
+    grep -Fq -- 'private-release-api.py replace-known-invalid' <<< "$publish" || return 1
     [[ "$(grep -Fxc -- '      contents: write' "$build")" -eq 4 ]] || return 1
     [[ "$(grep -Fxc -- '      contents: write' <<< "$promote")" -eq 1 ]] || return 1
     [[ "$(grep -Fxc -- '      contents: write' "$release")" -eq 2 ]] || return 1
     grep -Fqx -- '      actions: read' "$release" || return 1
+}
+
+require_private_repair_contract() {
+    local build="$1"
+    local helper="${2:-$PRIVATE_RELEASE_HELPER}"
+    local runbook="${3:-$REPO_DIR/docs/production-release-runbook.md}"
+    local preflight publish required
+    preflight="$(workflow_job_block "$build" verify_private_release_draft)"
+    local build_release
+    build_release="$(workflow_job_block "$build" build_release)"
+    publish="$(workflow_job_block "$build" publish)"
+    [[ -n "$preflight" && -n "$build_release" && -n "$publish" ]] || return 1
+    grep -Fqx -- "          (inputs.confirmation != 'REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD' ||" \
+        <<< "$build_release" || return 1
+    grep -Fqx -- "           (inputs.release_tag != '' && needs.verify_private_release_draft.result == 'success')) &&" \
+        <<< "$build_release" || return 1
+    for required in \
+        'REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD' \
+        '086ec8d47f3582eb73b8c90eb8836676afbfaffd649bf14ea19a20ef3f65c558' \
+        'actions/artifacts/9163585962' \
+        'sha256:44fc4874372b68c564b70b3a89230215a68a4f9bc8585d5ee4d113d667b7ebdf' \
+        '.workflow_run.id == 31652943641' \
+        '.workflow_run.head_sha == "a7e996945407bf21420b1173484ee303930b200a"'; do
+        grep -Fq -- "$required" <<< "$preflight" || return 1
+    done
+    for required in \
+        'artifact-ids: 9163585962' \
+        'run-id: 31652943641' \
+        'merge-multiple: true' \
+        'private-release-api.py download' \
+        'invalid-draft-backup' \
+        'original-invalid-payload' \
+        'shasum -a 256 -c SHA256SUMS' \
+        '.source.commit == $source and .artifact.sha256 == $sha' \
+        '.predicate.runDetails.metadata.invocationId == $source' \
+        'private-release-api.py replace-known-invalid' \
+        '--expected-fingerprint "$INVALID_PAYLOAD_FINGERPRINT"' \
+        'repaired-private-payload' \
+        'private-release-repair-evidence.json' \
+        'name: private-release-repair-evidence' \
+        'retention-days: 21'; do
+        grep -Fq -- "$required" <<< "$publish" || return 1
+    done
+    grep -Fq -- 'KNOWN_INVALID_RELEASE_FINGERPRINT' "$helper" || return 1
+    grep -Fq -- 'KNOWN_INVALID_ASSETS' "$helper" || return 1
+    grep -Fq -- 'def command_replace_known_invalid' "$helper" || return 1
+    grep -Fq -- 'run_gh_empty' "$helper" || return 1
+    grep -Fq -- 'REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD' "$runbook" || return 1
+    grep -Fq -- '9163585962' "$runbook" || return 1
 }
 
 require_pattern "workflow_call:" "$BUILD_WORKFLOW"
@@ -252,6 +311,8 @@ if [[ "$(grep -Fxc -- '      release_tool_source_commit:' "$BUILD_WORKFLOW")" -n
 fi
 require_pattern "STAGE_EXISTING_PRIVATE_DRAFT" "$BUILD_WORKFLOW"
 require_pattern "VERIFY_EXISTING_PRIVATE_DRAFT" "$BUILD_WORKFLOW"
+require_pattern "REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD" "$BUILD_WORKFLOW"
+require_pattern "invalid_payload_fingerprint:" "$BUILD_WORKFLOW"
 require_pattern "IS_RELEASE: \${{ inputs.release_tag != '' }}" "$BUILD_WORKFLOW"
 require_pattern 'RELEASE_SOURCE_COMMIT: ${{ inputs.release_source_commit }}' "$BUILD_WORKFLOW"
 require_pattern 'ref: ${{ inputs.release_source_commit || github.sha }}' "$BUILD_WORKFLOW"
@@ -274,6 +335,7 @@ require_pattern "compatibility-minimum:" "$BUILD_WORKFLOW"
 require_pattern "runs-on: macos-14" "$BUILD_WORKFLOW"
 require_pattern "Select Xcode 16.2" "$BUILD_WORKFLOW"
 require_pattern "runs-on: macos-26" "$BUILD_WORKFLOW"
+require_pattern "labels: [macos-26]" "$ACTIONLINT_CONFIG"
 require_pattern "Select Xcode 26.3" "$BUILD_WORKFLOW"
 require_pattern "scripts/verify-macos-support.sh ci minimum" "$BUILD_WORKFLOW"
 require_pattern "scripts/verify-macos-support.sh ci current" "$BUILD_WORKFLOW"
@@ -315,6 +377,7 @@ require_frozen_stable_baseline_contract "$BUILD_WORKFLOW"
 require_frozen_source_history_contract "$BUILD_WORKFLOW"
 require_private_draft_permission_contract \
     "$BUILD_WORKFLOW" "$RELEASE_WORKFLOW" "$PROMOTION_WORKFLOW"
+require_private_repair_contract "$BUILD_WORKFLOW"
 require_pattern "scripts/perf/gpui-performance.py merge-cold" "$BUILD_WORKFLOW"
 require_pattern '[[ ${#COLD_SHARDS[@]} -eq 20 ]]' "$BUILD_WORKFLOW"
 require_pattern 'MERGE_ARGS+=(--shard "$shard")' "$BUILD_WORKFLOW"
@@ -571,7 +634,7 @@ require_pattern "      actions: read" "$RELEASE_WORKFLOW"
 require_pattern "uses: ./.github/workflows/build.yml" "$RELEASE_WORKFLOW"
 require_pattern "release_tag: \${{ needs.release-please.outputs.tag_name }}" "$RELEASE_WORKFLOW"
 require_pattern "release_id: \${{ needs.release-please.outputs.release_id }}" "$RELEASE_WORKFLOW"
-require_pattern "release_tool_source_commit: aa025228f4f8d12e29c866b6be43eb2c0bf0834c" "$RELEASE_WORKFLOW"
+require_pattern "release_tool_source_commit: a81827311a8aa5745a88e1f4a081746ce820a6f5" "$RELEASE_WORKFLOW"
 require_pattern 'steps.release.outputs.upload_url' "$RELEASE_WORKFLOW"
 require_pattern "source_commit: \${{ steps.release.outputs.sha }}" "$RELEASE_WORKFLOW"
 require_pattern "release_source_commit: \${{ needs.release-please.outputs.source_commit }}" "$RELEASE_WORKFLOW"
@@ -645,14 +708,89 @@ if awk '
     exit 1
 fi
 
-PINNED_RELEASE_TOOL_SOURCE="aa025228f4f8d12e29c866b6be43eb2c0bf0834c"
+PINNED_RELEASE_TOOL_SOURCE="a81827311a8aa5745a88e1f4a081746ce820a6f5"
 git cat-file -e "$PINNED_RELEASE_TOOL_SOURCE^{commit}"
 git show "$PINNED_RELEASE_TOOL_SOURCE:scripts/private-release-api.py" \
     > "$REPO_SCOPE_FIXTURE/private-release-api.py"
 git show "$PINNED_RELEASE_TOOL_SOURCE:scripts/test-private-release-api.py" \
     > "$REPO_SCOPE_FIXTURE/test-private-release-api.py"
+git show "$PINNED_RELEASE_TOOL_SOURCE:scripts/finalize-release-metadata.sh" \
+    > "$REPO_SCOPE_FIXTURE/finalize-release-metadata.sh"
 rg -F -- '--approved-fingerprint' "$REPO_SCOPE_FIXTURE/private-release-api.py" >/dev/null
+rg -F -- 'KNOWN_INVALID_RELEASE_FINGERPRINT' "$REPO_SCOPE_FIXTURE/private-release-api.py" >/dev/null
+rg -F -- 'replace-known-invalid' "$REPO_SCOPE_FIXTURE/private-release-api.py" >/dev/null
+rg -F -- 'WRENFLOW_RELEASE_SOURCE_COMMIT' "$REPO_SCOPE_FIXTURE/finalize-release-metadata.sh" >/dev/null
+! git show 7e0e698191d003fe507b0729265cafceaf640c1e:scripts/finalize-release-metadata.sh | \
+    rg -F -- 'WRENFLOW_RELEASE_SOURCE_COMMIT' >/dev/null
+FINALIZER_FIXTURE="$REPO_SCOPE_FIXTURE/finalizer"
+mkdir -p "$FINALIZER_FIXTURE/Wrenflow.app/Contents/MacOS" \
+    "$FINALIZER_FIXTURE/Wrenflow.app/Contents/Frameworks" \
+    "$FINALIZER_FIXTURE/metadata"
+printf 'app' > "$FINALIZER_FIXTURE/Wrenflow.app/Contents/MacOS/wrenflow"
+printf 'swift' > "$FINALIZER_FIXTURE/Wrenflow.app/Contents/Frameworks/libWrenflowShell.dylib"
+printf 'ort' > "$FINALIZER_FIXTURE/Wrenflow.app/Contents/MacOS/libonnxruntime.dylib"
+printf 'dmg' > "$FINALIZER_FIXTURE/Wrenflow.dmg"
+printf '{"id":"12345678-1234-1234-1234-123456789abc","status":"Accepted"}\n' \
+    > "$FINALIZER_FIXTURE/notary.json"
+for metadata in Wrenflow.cdx.json RustThirdPartyLicenses.txt pins.json exceptions.json provenance.json; do
+    printf '{}\n' > "$FINALIZER_FIXTURE/metadata/$metadata"
+done
+GITHUB_SHA="a7e996945407bf21420b1173484ee303930b200a" \
+GITHUB_REPOSITORY="IlyaGulya/wrenflow" GITHUB_RUN_ID="31652943641" \
+GITHUB_RUN_ATTEMPT="1" GITHUB_SERVER_URL="https://github.com" \
+WRENFLOW_RELEASE_SOURCE_COMMIT="7e0e698191d003fe507b0729265cafceaf640c1e" \
+WRENFLOW_RELEASE_TAG="v0.4.0" WRENFLOW_RELEASE_VERSION="0.4.0" \
+WRENFLOW_RELEASE_BUILD_NUMBER="312" \
+    mise exec -- bash "$REPO_SCOPE_FIXTURE/finalize-release-metadata.sh" \
+        "$FINALIZER_FIXTURE/Wrenflow.app" "$FINALIZER_FIXTURE/Wrenflow.dmg" \
+        "$FINALIZER_FIXTURE/metadata" "$FINALIZER_FIXTURE/notary.json"
+jq -e '.source.commit == "7e0e698191d003fe507b0729265cafceaf640c1e"' \
+    "$FINALIZER_FIXTURE/metadata/release-evidence.json" >/dev/null
 mise exec -- python3 "$REPO_SCOPE_FIXTURE/test-private-release-api.py" >/dev/null
+
+expect_private_repair_rejected() {
+    local label="$1"
+    local workflow="$2"
+    if require_private_repair_contract "$workflow"; then
+        echo "Private draft repair audit accepted $label" >&2
+        exit 1
+    fi
+}
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-repair-fingerprint.yml"
+sed 's/086ec8d47f3582eb73b8c90eb8836676afbfaffd649bf14ea19a20ef3f65c558/086ec8d47f3582eb73b8c90eb8836676afbfaffd649bf14ea19a20ef3f65c559/g' \
+    "$REPO_SCOPE_FIXTURE/build-repair-fingerprint.yml" \
+    > "$REPO_SCOPE_FIXTURE/build-repair-fingerprint-mutated.yml"
+expect_private_repair_rejected wrong-invalid-payload-fingerprint \
+    "$REPO_SCOPE_FIXTURE/build-repair-fingerprint-mutated.yml"
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-repair-artifact.yml"
+sed 's/9163585962/9163585963/g' \
+    "$REPO_SCOPE_FIXTURE/build-repair-artifact.yml" \
+    > "$REPO_SCOPE_FIXTURE/build-repair-artifact-mutated.yml"
+expect_private_repair_rejected wrong-recoverable-payload-artifact \
+    "$REPO_SCOPE_FIXTURE/build-repair-artifact-mutated.yml"
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-repair-command.yml"
+sed 's/private-release-api.py replace-known-invalid/private-release-api.py upload/' \
+    "$REPO_SCOPE_FIXTURE/build-repair-command.yml" \
+    > "$REPO_SCOPE_FIXTURE/build-repair-command-mutated.yml"
+expect_private_repair_rejected missing-transactional-repair-command \
+    "$REPO_SCOPE_FIXTURE/build-repair-command-mutated.yml"
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-repair-backup.yml"
+sed '/invalid-draft-backup/d' \
+    "$REPO_SCOPE_FIXTURE/build-repair-backup.yml" \
+    > "$REPO_SCOPE_FIXTURE/build-repair-backup-mutated.yml"
+expect_private_repair_rejected missing-invalid-payload-backup \
+    "$REPO_SCOPE_FIXTURE/build-repair-backup-mutated.yml"
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-repair-empty-tag.yml"
+sed "/inputs.confirmation != 'REPLACE_INVALID_PRIVATE_DRAFT_PAYLOAD'/,+1d" \
+    "$REPO_SCOPE_FIXTURE/build-repair-empty-tag.yml" \
+    > "$REPO_SCOPE_FIXTURE/build-repair-empty-tag-mutated.yml"
+expect_private_repair_rejected repair-without-stable-tag-guard \
+    "$REPO_SCOPE_FIXTURE/build-repair-empty-tag-mutated.yml"
 
 expect_frozen_contract_rejected() {
     local label="$1"
@@ -1053,7 +1191,7 @@ audit_tagless_source_contract() {
     require_pattern 'RELEASE_ID: ${{ inputs.release_id }}' "$build"
     require_pattern 'RELEASE_TOOL_SOURCE_COMMIT: ${{ inputs.release_tool_source_commit }}' "$build"
     require_pattern 'ref: ${{ inputs.release_tool_source_commit }}' "$build"
-    require_pattern 'aa025228f4f8d12e29c866b6be43eb2c0bf0834c' "$build"
+    require_pattern 'a81827311a8aa5745a88e1f4a081746ce820a6f5' "$build"
     require_pattern "Require exact empty tagless private stable draft" "$build"
     require_pattern 'git/matching-refs/tags/$RELEASE_TAG' "$build"
     require_pattern '([.[] | select(.ref == $ref)] | length) == 0' "$build"
@@ -1067,14 +1205,14 @@ audit_tagless_source_contract() {
     require_pattern 'source_commit: ${{ steps.release.outputs.sha }}' "$release"
     require_pattern 'release_id: ${{ steps.release-id.outputs.release_id }}' "$release"
     require_pattern 'release_id: ${{ needs.release-please.outputs.release_id }}' "$release"
-    require_pattern 'release_tool_source_commit: aa025228f4f8d12e29c866b6be43eb2c0bf0834c' "$release"
-    require_pattern 'ref: aa025228f4f8d12e29c866b6be43eb2c0bf0834c' "$release"
+    require_pattern 'release_tool_source_commit: a81827311a8aa5745a88e1f4a081746ce820a6f5' "$release"
+    require_pattern 'ref: a81827311a8aa5745a88e1f4a081746ce820a6f5' "$release"
     require_pattern 'RELEASE_UPLOAD_URL: ${{ steps.release.outputs.upload_url }}' "$release"
     require_pattern 'release_source_commit: ${{ needs.release-please.outputs.source_commit }}' "$release"
     require_pattern 'RELEASE_ID: ${{ inputs.release_id }}' "$promotion"
     require_pattern 'RELEASE_TOOL_SOURCE_COMMIT: ${{ inputs.release_tool_source_commit }}' "$promotion"
     require_pattern 'ref: ${{ inputs.release_tool_source_commit }}' "$promotion"
-    require_pattern 'aa025228f4f8d12e29c866b6be43eb2c0bf0834c' "$promotion"
+    require_pattern 'a81827311a8aa5745a88e1f4a081746ce820a6f5' "$promotion"
     require_pattern 'ref: ${{ steps.inputs.outputs.source_commit }}' "$promotion"
     require_pattern 'private-release-api.py publish' "$promotion"
     require_pattern "Published stable tag does not resolve to the approved source commit" "$promotion"
@@ -1121,7 +1259,7 @@ import sys
 path = Path(sys.argv[1])
 source = path.read_text()
 needle = 'STAGE_EXISTING_PRIVATE_DRAFT'
-if source.count(needle) < 2:
+if source.count(needle) < 1:
     raise SystemExit("recovery confirmation fixture drifted")
 path.write_text(source.replace(needle, 'STAGE_PRIVATE_DRAFT'))
 PY
@@ -1162,7 +1300,7 @@ expect_tagless_source_rejected missing-release-id \
     "$PROMOTION_WORKFLOW"
 
 cp "$RELEASE_WORKFLOW" "$REPO_SCOPE_FIXTURE/release-floating-tool.yml"
-sed 's/ref: aa025228f4f8d12e29c866b6be43eb2c0bf0834c/ref: ${{ github.sha }}/' \
+sed 's/ref: a81827311a8aa5745a88e1f4a081746ce820a6f5/ref: ${{ github.sha }}/' \
     "$REPO_SCOPE_FIXTURE/release-floating-tool.yml" \
     > "$REPO_SCOPE_FIXTURE/release-floating-tool-mutated.yml"
 expect_tagless_source_rejected floating-release-tool-source \

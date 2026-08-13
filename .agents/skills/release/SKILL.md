@@ -117,7 +117,7 @@ same empty draft without recreating it:
 mise exec -- gh workflow run build.yml \
   -f release_tag=<tag> \
   -f release_id=<positive-numeric-private-draft-id> \
-  -f release_tool_source_commit=aa025228f4f8d12e29c866b6be43eb2c0bf0834c \
+  -f release_tool_source_commit=a81827311a8aa5745a88e1f4a081746ce820a6f5 \
   -f release_source_commit=<targetCommitish> \
   -f verifier_source_commit=e233cc6db6b37307e9774db228ab11ecc4d0673c \
   -f confirmation=STAGE_EXISTING_PRIVATE_DRAFT
@@ -135,7 +135,7 @@ the verification-only dispatch:
 mise exec -- gh workflow run build.yml \
   -f release_tag=<tag> \
   -f release_id=<positive-numeric-private-draft-id> \
-  -f release_tool_source_commit=aa025228f4f8d12e29c866b6be43eb2c0bf0834c \
+  -f release_tool_source_commit=a81827311a8aa5745a88e1f4a081746ce820a6f5 \
   -f release_source_commit=<targetCommitish> \
   -f verifier_source_commit=e233cc6db6b37307e9774db228ab11ecc4d0673c \
   -f confirmation=VERIFY_EXISTING_PRIVATE_DRAFT
@@ -144,13 +144,22 @@ mise exec -- gh workflow run build.yml \
 This mode performs only immutable asset-ID downloads and exact candidate
 verification. It does not build, upload, edit, publish, or recreate a release.
 
+The known `v0.4.0` private payload whose release evidence recorded the workflow
+event SHA instead of the stable source may be replaced once with the reviewed
+repair mode. It is bound to release ID `369445618`, source `7e0e698…`, the
+literal invalid fingerprint `086ec8d…`, all nine immutable old asset
+IDs/digests, and recoverable signed payload artifact `9163585962` from run
+`31652943641`. Use only the exact command in
+`docs/production-release-runbook.md`; any partial repair remains private and
+requires a newly reviewed exact manifest rather than an automatic retry.
+
 ### Step 5: Promote the exact bytes after go/no-go
 
 ```bash
 mise exec -- gh workflow run promote-stable.yml \
   -f release_tag=<tag> \
   -f release_id=<positive-numeric-private-draft-id> \
-  -f release_tool_source_commit=aa025228f4f8d12e29c866b6be43eb2c0bf0834c \
+  -f release_tool_source_commit=a81827311a8aa5745a88e1f4a081746ce820a6f5 \
   -f expected_dmg_sha256=<64-lowercase-hex> \
   -f confirmation=PROMOTE_VERIFIED_STABLE
 ```

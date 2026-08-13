@@ -57,7 +57,7 @@ jobs:
 
       - name: Require reviewed private draft tooling source
         run: |
-          if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "aa025228f4f8d12e29c866b6be43eb2c0bf0834c" ] || \
+          if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "a81827311a8aa5745a88e1f4a081746ce820a6f5" ] || \
              [ "$(git -C .release-workflow rev-parse HEAD)" != "$RELEASE_TOOL_SOURCE_COMMIT" ]; then
             echo "Private draft tooling does not match the reviewed immutable source" >&2
             exit 1
@@ -138,7 +138,7 @@ jobs:
       - name: Reconfirm reviewed private draft tooling source
         run: |
           if [ "$(git -C .release-workflow rev-parse HEAD)" != \
-               "aa025228f4f8d12e29c866b6be43eb2c0bf0834c" ]; then
+               "a81827311a8aa5745a88e1f4a081746ce820a6f5" ]; then
             echo "Private draft tooling checkout drifted after release-source checkout" >&2
             exit 1
           fi
