@@ -13,7 +13,8 @@
     "legacy_migration": "excluded",
     "downgrade_or_rollback": "excluded",
     "prerelease_to_stable_update": "excluded",
-    "tcc_reset": "prohibited"
+    "tcc_reset": "prohibited",
+    "owner_smoke_data_root": "required_for_l01_l02"
   },
   "performance_baseline": {
     "tag": "v0.4.0-beta.64",

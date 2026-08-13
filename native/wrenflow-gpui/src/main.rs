@@ -155,6 +155,9 @@ impl Render for ShellView {
 
 fn main() {
     let arguments = std::env::args().collect::<Vec<_>>();
+    if wrenflow_runtime::owner_smoke::prepare_owner_smoke(&arguments).is_err() {
+        std::process::exit(64);
+    }
     let performance_request =
         match wrenflow_runtime::performance::prepare_performance_self_test(&arguments) {
             Ok(request) => request,
@@ -724,6 +727,12 @@ fn apply_window_policy(
             DiagnosticLevel::Info,
             code,
         ));
+        if wrenflow_runtime::owner_smoke::mark_owner_smoke_ready().is_err() {
+            report_diagnostic_failure(
+                DiagnosticCategory::Lifecycle,
+                DiagnosticCode::GpuiStartupFailed,
+            );
+        }
         if environment.shell.install_post_menu_bootstrap().is_err() {
             report_diagnostic_failure(
                 DiagnosticCategory::Bridge,
@@ -2273,6 +2282,29 @@ mod tests {
         };
         assert!(show < visible && visible < marker);
         assert!(retained_path.contains("route != NavigationTarget::Loading"));
+    }
+
+    #[test]
+    fn owner_smoke_only_redirects_data_before_ordinary_runtime_startup() {
+        let main = include_str!("main.rs");
+        let runtime = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../core/wrenflow-runtime/src/owner_smoke.rs"
+        ));
+        let owner = main.find("prepare_owner_smoke(&arguments)");
+        let performance = main.find("prepare_performance_self_test(&arguments)");
+        let diagnostics = main.find("initialize_production_diagnostics()");
+        let runtime_start = main.find("start_production_runtime()");
+        assert!(owner.is_some() && performance.is_some() && diagnostics.is_some());
+        assert!(owner < performance && performance < diagnostics);
+        assert!(runtime_start.is_some());
+        assert!(main.contains("mark_owner_smoke_ready()"));
+        assert!(runtime.contains("WRENFLOW_OWNER_SMOKE_LAUNCH"));
+        assert!(runtime.contains("terminal_window_policy_ready"));
+        assert!(!runtime.contains("TranscriptDisposition"));
+        assert!(!runtime.contains("crate::pipeline"));
+        assert!(!runtime.contains("crate::performance"));
+        assert!(!runtime.contains("tccutil"));
     }
 
     #[test]

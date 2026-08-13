@@ -119,6 +119,14 @@ run = "mise exec -- python3 scripts/gpui-human-acceptance.py"
 description = "Test fail-closed human acceptance manifest and evidence verification"
 run = "scripts/test-gpui-human-acceptance.sh"
 
+[tasks.owner-smoke]
+description = "Prepare or LaunchServices-launch the exact signed owner-smoke app with disposable data"
+run = "scripts/gpui-owner-smoke.sh"
+
+[tasks.test-owner-smoke]
+description = "Test the private ordinary-UI owner-smoke root and launch contract"
+run = "scripts/test-gpui-owner-smoke.sh"
+
 [tasks.performance-preflight]
 description = "Capture sanitized macOS, hardware, power, xctrace and signed-candidate inventory"
 run = "mise exec -- python3 scripts/perf/gpui-performance.py preflight"
@@ -239,7 +247,7 @@ scripts/test-release-workflow.sh
 
 [tasks.test]
 description = "Run core/runtime and production app tests"
-depends = ["test-rust", "test-app", "test-lifecycle-contract", "test-macos-support", "test-supply-chain", "test-endurance-preflight", "test-human-acceptance", "test-release-runbook", "test-private-release-api", "test-performance-harness", "test-frozen-performance-baseline"]
+depends = ["test-rust", "test-app", "test-lifecycle-contract", "test-macos-support", "test-supply-chain", "test-endurance-preflight", "test-human-acceptance", "test-owner-smoke", "test-release-runbook", "test-private-release-api", "test-performance-harness", "test-frozen-performance-baseline"]
 run = "true"
 
 [tasks.test-rust]

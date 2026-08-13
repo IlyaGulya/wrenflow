@@ -12,9 +12,25 @@ EVIDENCE="$TEST_ROOT/evidence"
 mkdir -p "$CANDIDATE" "$EVIDENCE"
 
 SOURCE_COMMIT="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-TAG="v0.4.0-beta.1"
-VERSION="0.4.0-beta.1"
-ARTIFACT_URL="https://github.com/IlyaGulya/wrenflow/releases/download/$TAG/Wrenflow.dmg"
+TAG="v0.4.0"
+VERSION="0.4.0"
+RELEASE_ID=369445618
+DMG_ASSET_ID=512349584
+RELEASE_METADATA="$TEST_ROOT/private-release.json"
+
+human_tool() {
+    local command="$1"
+    shift
+    case "$command" in
+        verify-candidate|init|verify)
+            mise exec -- python3 "$TOOL" "$command" \
+                --release-metadata "$RELEASE_METADATA" "$@"
+            ;;
+        *)
+            mise exec -- python3 "$TOOL" "$command" "$@"
+            ;;
+    esac
+}
 
 printf 'immutable candidate fixture\n' >"$CANDIDATE/Wrenflow.dmg"
 printf '{"bomFormat":"CycloneDX","specVersion":"1.6"}\n' >"$CANDIDATE/Wrenflow.cdx.json"
@@ -74,6 +90,7 @@ jq -S -n \
     ],
     predicateType:"https://slsa.dev/provenance/v1",
     predicate:{
+      predicateType:"https://slsa.dev/provenance/v1",
       buildDefinition:{
         buildType:"https://github.com/ilyagulya/wrenflow/build-types/macos-gpui-v1",
         externalParameters:{target:"aarch64-apple-darwin",locked:true},
@@ -103,9 +120,103 @@ jq -S -n \
         release-evidence.json >SHA256SUMS
 )
 
-mise exec -- python3 "$TOOL" verify-candidate \
-    --candidate-dir "$CANDIDATE" >"$TEST_ROOT/candidate.out"
-rg -F '"tag":"v0.4.0-beta.1"' "$TEST_ROOT/candidate.out" >/dev/null
+mise exec -- python3 - "$CANDIDATE" "$RELEASE_METADATA" "$RELEASE_ID" \
+    "$DMG_ASSET_ID" "$TAG" "$SOURCE_COMMIT" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+root, output = map(pathlib.Path, sys.argv[1:3])
+release_id, dmg_asset_id = map(int, sys.argv[3:5])
+tag, source = sys.argv[5:7]
+names = sorted(path.name for path in root.iterdir())
+assets = []
+for index, name in enumerate(names):
+    path = root / name
+    asset_id = dmg_asset_id if name == "Wrenflow.dmg" else dmg_asset_id + index + 1
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    assets.append({
+        "id": asset_id,
+        "name": name,
+        "size": path.stat().st_size,
+        "digest": f"sha256:{digest}",
+        "state": "uploaded",
+        "contentType": "application/octet-stream",
+        "createdAt": "2026-08-13T00:00:00Z",
+        "updatedAt": "2026-08-13T00:00:01Z",
+        "url": f"https://api.github.com/repos/IlyaGulya/wrenflow/releases/assets/{asset_id}",
+        "browserDownloadUrl": (
+            "https://github.com/IlyaGulya/wrenflow/releases/download/"
+            f"untagged-ba9071a866140201dc02/{name}"
+        ),
+    })
+output.write_text(json.dumps({
+    "id": release_id,
+    "tagName": tag,
+    "targetCommitish": source,
+    "isDraft": True,
+    "isPrerelease": False,
+    "htmlUrl": "https://github.com/IlyaGulya/wrenflow/releases/tag/untagged-ba9071a866140201dc02",
+    "assets": assets,
+}, indent=2, sort_keys=True) + "\n")
+output.chmod(0o600)
+PY
+expect_release_metadata_failure() {
+    local name="$1"
+    local filter="$2"
+    local expected="$3"
+    local metadata="$TEST_ROOT/release-$name.json"
+    jq "$filter" "$RELEASE_METADATA" >"$metadata"
+    chmod 600 "$metadata"
+    if human_tool verify-candidate \
+        --candidate-dir "$CANDIDATE" \
+        --release-metadata "$metadata" \
+        >"$metadata.out" 2>"$metadata.err"; then
+        echo "Candidate verifier accepted release metadata mutation $name" >&2
+        exit 1
+    fi
+    rg -F "$expected" "$metadata.err" >/dev/null
+}
+
+expect_release_metadata_failure wrong-asset-id \
+    '(.assets[] | select(.name == "Wrenflow.dmg") | .id) += 1000' \
+    "asset API URL does not match its immutable id"
+expect_release_metadata_failure wrong-size \
+    '(.assets[] | select(.name == "Wrenflow.dmg") | .size) += 1' \
+    "asset size differs from the exact payload"
+expect_release_metadata_failure duplicate-asset-id \
+    '(.assets[] | select(.name == "RustThirdPartyLicenses.txt")) |=
+      (.id = 512349584 |
+       .url = "https://api.github.com/repos/IlyaGulya/wrenflow/releases/assets/512349584")' \
+    "invalid or duplicate asset identity"
+expect_release_metadata_failure arbitrary-untagged \
+    '(.assets[] | select(.name == "RustThirdPartyLicenses.txt") | .browserDownloadUrl) =
+      "https://example.invalid/not-authenticated"' \
+    "asset browser URL is not canonical: RustThirdPartyLicenses.txt"
+expect_release_metadata_failure wrong-draft-state '.isDraft = "false"' \
+    "draft/prerelease state is invalid"
+expect_release_metadata_failure unknown-release-field '.private = true' \
+    "unknown keys ['private']"
+
+PERMISSIVE_RELEASE_METADATA="$TEST_ROOT/release-permissive-mode.json"
+cp "$RELEASE_METADATA" "$PERMISSIVE_RELEASE_METADATA"
+chmod 644 "$PERMISSIVE_RELEASE_METADATA"
+if human_tool verify-candidate \
+    --candidate-dir "$CANDIDATE" \
+    --release-metadata "$PERMISSIVE_RELEASE_METADATA" \
+    >"$PERMISSIVE_RELEASE_METADATA.out" 2>"$PERMISSIVE_RELEASE_METADATA.err"; then
+    echo "Candidate verifier accepted permissive release metadata" >&2
+    exit 1
+fi
+rg -F "authenticated release metadata must have exact mode 0600" \
+    "$PERMISSIVE_RELEASE_METADATA.err" >/dev/null
+
+human_tool verify-candidate \
+    --candidate-dir "$CANDIDATE" \
+    --release-metadata "$RELEASE_METADATA" >"$TEST_ROOT/candidate.out"
+rg -F '"tag":"v0.4.0"' "$TEST_ROOT/candidate.out" >/dev/null
+rg -F '"state":"private_draft"' "$TEST_ROOT/candidate.out" >/dev/null
 
 DUPLICATE_PAYLOAD="$TEST_ROOT/candidate-duplicate-release-key"
 cp -R "$CANDIDATE" "$DUPLICATE_PAYLOAD"
@@ -126,8 +237,9 @@ PY
         pins.json exceptions.json provenance.json artifact-provenance.json \
         release-evidence.json >SHA256SUMS
 )
-if mise exec -- python3 "$TOOL" verify-candidate \
+if human_tool verify-candidate \
     --candidate-dir "$DUPLICATE_PAYLOAD" \
+    --release-metadata "$RELEASE_METADATA" \
     >"$TEST_ROOT/candidate-duplicate.out" \
     2>"$TEST_ROOT/candidate-duplicate.err"; then
     echo "Candidate verifier accepted duplicate release-evidence key" >&2
@@ -157,24 +269,26 @@ for kind in \
 done
 
 PENDING="$TEST_ROOT/pending.json"
-mise exec -- python3 "$TOOL" init \
+human_tool init \
     --candidate-dir "$CANDIDATE" \
     --evidence-root "$EVIDENCE" \
     --context "$TEST_ROOT/context.json" \
-    --artifact-url "$ARTIFACT_URL" \
+    --release-metadata "$RELEASE_METADATA" \
     --output "$PENDING"
 
-mise exec -- python3 "$TOOL" verify \
+human_tool verify \
     --candidate-dir "$CANDIDATE" \
     --evidence-root "$EVIDENCE" \
     --manifest "$PENDING" \
+    --release-metadata "$RELEASE_METADATA" \
     --allow-pending >"$TEST_ROOT/pending.out"
 rg -F "structurally valid but incomplete" "$TEST_ROOT/pending.out" >/dev/null
 
-if mise exec -- python3 "$TOOL" verify \
+if human_tool verify \
     --candidate-dir "$CANDIDATE" \
     --evidence-root "$EVIDENCE" \
     --manifest "$PENDING" \
+    --release-metadata "$RELEASE_METADATA" \
     >"$TEST_ROOT/pending-final.out" 2>"$TEST_ROOT/pending-final.err"; then
     echo "Final verifier accepted pending human rows" >&2
     exit 1
@@ -213,11 +327,78 @@ for row in manifest["rows"]:
 destination.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
 
-mise exec -- python3 "$TOOL" verify \
+human_tool verify \
     --candidate-dir "$CANDIDATE" \
     --evidence-root "$EVIDENCE" \
-    --manifest "$FINAL" >"$TEST_ROOT/final.out"
+    --manifest "$FINAL" \
+    --release-metadata "$RELEASE_METADATA" >"$TEST_ROOT/final.out"
 rg -F "final owner smoke passed" "$TEST_ROOT/final.out" >/dev/null
+
+WRONG_RELEASE_METADATA="$TEST_ROOT/wrong-release-id.json"
+jq '.id += 1' "$RELEASE_METADATA" >"$WRONG_RELEASE_METADATA"
+chmod 600 "$WRONG_RELEASE_METADATA"
+if human_tool verify \
+    --candidate-dir "$CANDIDATE" \
+    --evidence-root "$EVIDENCE" \
+    --manifest "$FINAL" \
+    --release-metadata "$WRONG_RELEASE_METADATA" \
+    >"$TEST_ROOT/wrong-release-id.out" 2>"$TEST_ROOT/wrong-release-id.err"; then
+    echo "Verifier accepted a different private release id" >&2
+    exit 1
+fi
+rg -F "manifest candidate does not exactly match" "$TEST_ROOT/wrong-release-id.err" >/dev/null
+
+PUBLIC_RELEASE_METADATA="$TEST_ROOT/public-release.json"
+jq --arg tag "$TAG" '
+  .isDraft = false |
+  .htmlUrl = ("https://github.com/IlyaGulya/wrenflow/releases/tag/" + $tag) |
+  .assets |= map(
+    .browserDownloadUrl =
+      ("https://github.com/IlyaGulya/wrenflow/releases/download/" + $tag + "/" + .name)
+  )
+' "$RELEASE_METADATA" >"$PUBLIC_RELEASE_METADATA"
+chmod 600 "$PUBLIC_RELEASE_METADATA"
+PUBLIC_MANIFEST="$TEST_ROOT/final-public.json"
+mise exec -- python3 "$TOOL" transition-public \
+    --candidate-dir "$CANDIDATE" \
+    --manifest "$FINAL" \
+    --private-release-metadata "$RELEASE_METADATA" \
+    --public-release-metadata "$PUBLIC_RELEASE_METADATA" \
+    --output "$PUBLIC_MANIFEST" >"$TEST_ROOT/transition-public.out"
+human_tool verify \
+    --candidate-dir "$CANDIDATE" \
+    --release-metadata "$PUBLIC_RELEASE_METADATA" \
+    --evidence-root "$EVIDENCE" \
+    --manifest "$PUBLIC_MANIFEST" >"$TEST_ROOT/final-public.out"
+jq -e --arg tag "$TAG" '
+  .candidate.distribution.state == "public" and
+  .candidate.distribution.release_id == 369445618 and
+  .candidate.distribution.dmg_asset_id == 512349584 and
+  .candidate.artifact_url ==
+    ("https://github.com/IlyaGulya/wrenflow/releases/download/" + $tag + "/Wrenflow.dmg")
+' "$PUBLIC_MANIFEST" >/dev/null
+cmp <(jq 'del(.candidate.artifact_url,.candidate.distribution.state)' "$FINAL") \
+    <(jq 'del(.candidate.artifact_url,.candidate.distribution.state)' "$PUBLIC_MANIFEST")
+
+PUBLIC_CHANGED_ID="$TEST_ROOT/public-release-changed-non-dmg-id.json"
+jq '
+  (.assets[] | select(.name == "RustThirdPartyLicenses.txt")) |=
+    (.id += 1000 |
+     .url = ("https://api.github.com/repos/IlyaGulya/wrenflow/releases/assets/" + (.id | tostring)))
+' "$PUBLIC_RELEASE_METADATA" >"$PUBLIC_CHANGED_ID"
+chmod 600 "$PUBLIC_CHANGED_ID"
+if mise exec -- python3 "$TOOL" transition-public \
+    --candidate-dir "$CANDIDATE" \
+    --manifest "$FINAL" \
+    --private-release-metadata "$RELEASE_METADATA" \
+    --public-release-metadata "$PUBLIC_CHANGED_ID" \
+    --output "$TEST_ROOT/changed-id-public.json" \
+    >"$TEST_ROOT/changed-id-public.out" 2>"$TEST_ROOT/changed-id-public.err"; then
+    echo "Public transition accepted a changed non-DMG asset id" >&2
+    exit 1
+fi
+rg -F "does not preserve all nine immutable asset ids" \
+    "$TEST_ROOT/changed-id-public.err" >/dev/null
 
 HASHED="$(mise exec -- python3 "$TOOL" hash-evidence \
     --evidence-root "$EVIDENCE" \
@@ -231,7 +412,7 @@ expect_negative_fixture() {
     local expected="$2"
     local mutated="$TEST_ROOT/${fixture%.jq}.json"
     jq -f "$FIXTURES/$fixture" "$FINAL" >"$mutated"
-    if mise exec -- python3 "$TOOL" verify \
+    if human_tool verify \
         --candidate-dir "$CANDIDATE" \
         --evidence-root "$EVIDENCE" \
         --manifest "$mutated" \
@@ -253,7 +434,7 @@ ln -s result-sheet.txt "$EVIDENCE/result-sheet-link.txt"
 SYMLINK_EVIDENCE="$TEST_ROOT/evidence-symlink.json"
 jq '.rows[0].evidence[0].relative_path = "result-sheet-link.txt"' \
     "$FINAL" >"$SYMLINK_EVIDENCE"
-if mise exec -- python3 "$TOOL" verify \
+if human_tool verify \
     --candidate-dir "$CANDIDATE" \
     --evidence-root "$EVIDENCE" \
     --manifest "$SYMLINK_EVIDENCE" \
@@ -263,7 +444,7 @@ if mise exec -- python3 "$TOOL" verify \
 fi
 rg -F "must not traverse a symlink" "$TEST_ROOT/evidence-symlink.err" >/dev/null
 
-if mise exec -- python3 "$TOOL" verify \
+if human_tool verify \
     --candidate-dir "$CANDIDATE" \
     --evidence-root "$EVIDENCE" \
     --manifest "$FIXTURES/duplicate-object-key.json" \
@@ -276,7 +457,7 @@ rg -F "duplicate JSON key: schema_id" "$TEST_ROOT/duplicate-object-key.err" >/de
 
 NONFINITE="$TEST_ROOT/nonfinite.json"
 sed 's/"memory_gib": 64/"memory_gib": NaN/' "$FINAL" >"$NONFINITE"
-if mise exec -- python3 "$TOOL" verify \
+if human_tool verify \
     --candidate-dir "$CANDIDATE" \
     --evidence-root "$EVIDENCE" \
     --manifest "$NONFINITE" \
@@ -288,7 +469,7 @@ rg -F "contains non-finite JSON number NaN" "$TEST_ROOT/nonfinite.err" >/dev/nul
 
 OVERFLOW="$TEST_ROOT/exponent-overflow.json"
 sed 's/"scale": 2/"scale": 1e400/' "$FINAL" >"$OVERFLOW"
-if mise exec -- python3 "$TOOL" verify \
+if human_tool verify \
     --candidate-dir "$CANDIDATE" \
     --evidence-root "$EVIDENCE" \
     --manifest "$OVERFLOW" \
@@ -300,7 +481,7 @@ rg -F "contains non-finite JSON number 1e400" "$TEST_ROOT/exponent-overflow.err"
 
 GENERIC_HUMAN="$TEST_ROOT/wrong-owner.json"
 jq '(.rows[].tester.name) = "Acceptance Tester"' "$FINAL" >"$GENERIC_HUMAN"
-if mise exec -- python3 "$TOOL" verify \
+if human_tool verify \
     --candidate-dir "$CANDIDATE" \
     --evidence-root "$EVIDENCE" \
     --manifest "$GENERIC_HUMAN" \
@@ -315,7 +496,7 @@ expect_candidate_negative() {
     local candidate="$1"
     local expected="$2"
     local label="$3"
-    if mise exec -- python3 "$TOOL" verify \
+    if human_tool verify \
         --candidate-dir "$candidate" \
         --evidence-root "$EVIDENCE" \
         --manifest "$FINAL" \
@@ -408,7 +589,7 @@ SCHEMA_DRIFT="$TEST_ROOT/schema-drift.json"
 jq '.title = "Drifted acceptance manifest contract"' \
     "$REPO_DIR/support/acceptance/macos-human-v1.schema.json" >"$SCHEMA_DRIFT"
 if WRENFLOW_HUMAN_ACCEPTANCE_SCHEMA_PATH="$SCHEMA_DRIFT" \
-    mise exec -- python3 "$TOOL" verify \
+    human_tool verify \
         --candidate-dir "$CANDIDATE" \
         --evidence-root "$EVIDENCE" \
         --manifest "$FINAL" \
@@ -421,7 +602,7 @@ rg -F "JSON schema drifted from the verifier's exact v1 contract" \
 
 cp "$CANDIDATE/Wrenflow.dmg" "$TEST_ROOT/Wrenflow.dmg.original"
 printf 'changed candidate bytes\n' >"$CANDIDATE/Wrenflow.dmg"
-if mise exec -- python3 "$TOOL" verify \
+if human_tool verify \
     --candidate-dir "$CANDIDATE" \
     --evidence-root "$EVIDENCE" \
     --manifest "$FINAL" \
@@ -432,11 +613,11 @@ fi
 rg -F "does not match SHA256SUMS" "$TEST_ROOT/candidate-drift.err" >/dev/null
 mv "$TEST_ROOT/Wrenflow.dmg.original" "$CANDIDATE/Wrenflow.dmg"
 
-if mise exec -- python3 "$TOOL" init \
+if human_tool init \
     --candidate-dir "$CANDIDATE" \
     --evidence-root "$EVIDENCE" \
     --context "$TEST_ROOT/context.json" \
-    --artifact-url "$ARTIFACT_URL" \
+    --release-metadata "$RELEASE_METADATA" \
     --output "$PENDING" \
     >"$TEST_ROOT/overwrite.out" 2>"$TEST_ROOT/overwrite.err"; then
     echo "Initializer overwrote an existing manifest" >&2

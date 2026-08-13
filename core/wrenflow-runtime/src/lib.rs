@@ -12,6 +12,7 @@ pub mod diagnostics;
 mod history;
 mod logging;
 mod model;
+pub mod owner_smoke;
 pub mod performance;
 mod pipeline;
 mod platform;

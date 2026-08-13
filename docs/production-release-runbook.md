@@ -33,6 +33,17 @@ Fresh permission-state transitions are proven by automated state tests. The
 owner smoke never resets TCC or claims a fresh-account observation it did not
 perform.
 
+Before S01, capture the exact private draft's normalized owner metadata with
+the pinned `private-release-api.py inspect-owner` command, download by immutable
+asset IDs, verify all nine assets, mount the DMG read-only and copy Wrenflow.app
+to a new unique owner-evidence location (never overwrite `/Applications`). The
+human and lifecycle candidate plans consume that closed release metadata, not
+an arbitrary `untagged-*` URL. Prepare one mode-0700 root with
+`mise run owner-smoke -- prepare-root` and use its printed session for every
+S01/S02/L01/L02 `mise run owner-smoke -- launch`. These are ordinary signed
+LaunchServices UI launches; the private gate changes only production data paths
+and supplies no synthetic input, TCC/reset capability or automation shortcut.
+
 ## Single-owner go/no-go
 
 Ilya Gulya is the release owner. The decision record contains the exact stable

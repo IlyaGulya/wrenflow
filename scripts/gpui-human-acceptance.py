@@ -14,6 +14,7 @@ import json
 import math
 import os
 import re
+import stat
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,7 +25,7 @@ REPO_DIR = Path(__file__).resolve().parents[1]
 POLICY_PATH = REPO_DIR / "support/acceptance/macos-human-v1-policy.json"
 SCHEMA_PATH = REPO_DIR / "support/acceptance/macos-human-v1.schema.json"
 SCHEMA_ID = "wrenflow-first-release-owner-smoke-v1"
-SCHEMA_CANONICAL_SHA256 = "c4f49bd1688786f18c8eb46ec8055f43928d6937dd30e53bd64c88346440e6cf"
+SCHEMA_CANONICAL_SHA256 = "31b45a03b4c006af512dee172e530da6cd2ca7e7928b1427179b36a6863ac857"
 TEAM_ID = "T4LV8K9BGV"
 BUNDLE_ID = "me.gulya.wrenflow"
 PUBLISHED_PAYLOAD = [
@@ -242,6 +243,7 @@ def load_policy() -> dict[str, Any]:
         "tcc_mutation": "prohibited",
         "existing_permission_grants": "inspect_without_reset",
         "fresh_permission_paths": "automated_state_tests",
+        "data_isolation": "exact_owner_smoke_disposable_root",
     }:
         fail("policy execution constraints drifted")
     validate_schema_contract()
@@ -392,7 +394,13 @@ def validate_artifact_provenance(
         fail("artifact provenance DMG subject does not match the candidate payload")
 
     predicate = expect_object(provenance["predicate"], "artifact provenance predicate")
-    exact_keys(predicate, {"buildDefinition", "runDetails"}, "artifact provenance predicate")
+    exact_keys(
+        predicate,
+        {"predicateType", "buildDefinition", "runDetails"},
+        "artifact provenance predicate",
+    )
+    if predicate["predicateType"] != provenance["predicateType"]:
+        fail("artifact provenance nested predicate type is invalid")
     build = expect_object(predicate["buildDefinition"], "artifact provenance build definition")
     exact_keys(
         build,
@@ -483,7 +491,115 @@ def validate_artifact_provenance(
         fail("source provenance invocation does not match release evidence source")
 
 
-def candidate_from_payload(candidate_root: Path, artifact_url: str | None) -> dict[str, Any]:
+def validate_release_metadata(
+    metadata_path: Path,
+    *,
+    tag: str,
+    source_commit: str,
+    payload_digests: dict[str, str],
+    payload_sizes: dict[str, int],
+) -> dict[str, Any]:
+    try:
+        metadata = metadata_path.lstat()
+    except OSError as error:
+        fail(f"could not inspect authenticated release metadata: {error}")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        fail("authenticated release metadata must have exact mode 0600")
+    release = expect_object(read_json(metadata_path, "authenticated release metadata"), "release metadata")
+    exact_keys(
+        release,
+        {"id", "tagName", "targetCommitish", "isDraft", "isPrerelease", "htmlUrl", "assets"},
+        "release metadata",
+    )
+    release_id = release["id"]
+    if not isinstance(release_id, int) or isinstance(release_id, bool) or release_id <= 0:
+        fail("release metadata id must be a positive integer")
+    if release["tagName"] != tag or release["targetCommitish"] != source_commit:
+        fail("release metadata tag/source does not match the candidate payload")
+    if release["isPrerelease"] is not False or not isinstance(release["isDraft"], bool):
+        fail("release metadata draft/prerelease state is invalid")
+
+    if release["isDraft"]:
+        html_match = re.fullmatch(
+            r"https://github\.com/IlyaGulya/wrenflow/releases/tag/(untagged-[0-9a-f]{20})",
+            str(release["htmlUrl"]),
+        )
+        if html_match is None:
+            fail("private release browser URL is not one exact authenticated tagless object")
+        browser_segment = html_match.group(1)
+        state = "private_draft"
+    else:
+        if release["htmlUrl"] != f"https://github.com/IlyaGulya/wrenflow/releases/tag/{tag}":
+            fail("public release browser URL is not canonical")
+        browser_segment = tag
+        state = "public"
+
+    assets = expect_list(release["assets"], "release metadata assets")
+    if len(assets) != len(PUBLISHED_PAYLOAD):
+        fail("release metadata must contain exactly nine assets")
+    normalized: dict[str, dict[str, Any]] = {}
+    asset_ids: set[int] = set()
+    for index, asset_value in enumerate(assets):
+        asset = expect_object(asset_value, f"release metadata assets[{index}]")
+        exact_keys(
+            asset,
+            {
+                "id", "name", "size", "digest", "state", "contentType",
+                "createdAt", "updatedAt", "url", "browserDownloadUrl",
+            },
+            f"release metadata assets[{index}]",
+        )
+        asset_id = asset["id"]
+        name = asset["name"]
+        if (
+            not isinstance(asset_id, int)
+            or isinstance(asset_id, bool)
+            or asset_id <= 0
+            or asset_id in asset_ids
+            or not isinstance(name, str)
+            or name in normalized
+        ):
+            fail("release metadata has an invalid or duplicate asset identity")
+        if name not in PUBLISHED_PAYLOAD or asset["state"] != "uploaded":
+            fail("release metadata contains an unapproved or incomplete asset")
+        if not isinstance(asset["size"], int) or isinstance(asset["size"], bool) or asset["size"] <= 0:
+            fail("release metadata asset size is invalid")
+        if asset["size"] != payload_sizes[name]:
+            fail(f"release metadata asset size differs from the exact payload: {name}")
+        expected_api_url = f"https://api.github.com/repos/IlyaGulya/wrenflow/releases/assets/{asset_id}"
+        if asset["url"] != expected_api_url:
+            fail("release metadata asset API URL does not match its immutable id")
+        if not all(isinstance(asset[field], str) and asset[field] for field in ("contentType", "createdAt", "updatedAt")):
+            fail("release metadata asset timestamps/content type are invalid")
+        if not isinstance(asset["digest"], str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", asset["digest"]):
+            fail("release metadata asset digest is invalid")
+        if asset["digest"] != f"sha256:{payload_digests[name]}":
+            fail(f"release metadata asset digest differs from the exact payload: {name}")
+        expected_browser_url = (
+            "https://github.com/IlyaGulya/wrenflow/releases/download/"
+            f"{browser_segment}/{name}"
+        )
+        if asset["browserDownloadUrl"] != expected_browser_url:
+            fail(f"release metadata asset browser URL is not canonical: {name}")
+        asset_ids.add(asset_id)
+        normalized[name] = asset
+    if sorted(normalized) != sorted(PUBLISHED_PAYLOAD):
+        fail("release metadata asset names differ from the exact payload")
+
+    dmg = normalized["Wrenflow.dmg"]
+    return {
+        "state": state,
+        "release_id": release_id,
+        "dmg_asset_id": dmg["id"],
+        "artifact_url": dmg["browserDownloadUrl"],
+        "asset_ids": {name: normalized[name]["id"] for name in sorted(normalized)},
+    }
+
+
+def candidate_with_distribution(
+    candidate_root: Path,
+    release_metadata: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     policy = load_policy()
     required = expect_list(policy["candidate_artifacts"], "policy.candidate_artifacts")
     try:
@@ -520,13 +636,15 @@ def candidate_from_payload(candidate_root: Path, artifact_url: str | None) -> di
     workflow_url = workflow["url"]
     submission_id = notarization["submission_id"]
 
-    if artifact_url is None:
-        fail("candidate artifact URL is required")
-    expected_url = f"https://github.com/IlyaGulya/wrenflow/releases/download/{tag}/Wrenflow.dmg"
-    if artifact_url != expected_url:
-        fail(f"candidate artifact URL must be the canonical tag asset URL: {expected_url}")
+    distribution = validate_release_metadata(
+        release_metadata,
+        tag=tag,
+        source_commit=source_commit,
+        payload_digests={record["name"]: record["sha256"] for record in artifact_records},
+        payload_sizes={name: (candidate_root / name).stat().st_size for name in PUBLISHED_PAYLOAD},
+    )
 
-    return {
+    candidate = {
         "tag": tag,
         "version": version,
         "build_number": build_number,
@@ -534,22 +652,27 @@ def candidate_from_payload(candidate_root: Path, artifact_url: str | None) -> di
         "dmg_sha256": dmg_sha,
         "team_id": TEAM_ID,
         "bundle_id": BUNDLE_ID,
-        "artifact_url": artifact_url,
+        "artifact_url": distribution["artifact_url"],
+        "distribution": {
+            "state": distribution["state"],
+            "release_id": distribution["release_id"],
+            "dmg_asset_id": distribution["dmg_asset_id"],
+        },
         "workflow_url": workflow_url,
         "apple_submission_id": submission_id,
         "artifacts": artifact_records,
     }
+    return candidate, distribution
+
+
+def candidate_from_payload(candidate_root: Path, release_metadata: Path) -> dict[str, Any]:
+    candidate, _ = candidate_with_distribution(candidate_root, release_metadata)
+    return candidate
 
 
 def verify_candidate_payload(args: argparse.Namespace) -> None:
     candidate_root = require_root(args.candidate_dir, "candidate directory")
-    checksums = parse_checksums(candidate_root)
-    evidence = validate_release_evidence(candidate_root, checksums)
-    artifact_url = (
-        "https://github.com/IlyaGulya/wrenflow/releases/download/"
-        f"{evidence['release']['tag']}/Wrenflow.dmg"
-    )
-    candidate = candidate_from_payload(candidate_root, artifact_url)
+    candidate = candidate_from_payload(candidate_root, args.release_metadata)
     print(json.dumps(candidate, sort_keys=True, separators=(",", ":"), allow_nan=False))
 
 
@@ -600,6 +723,8 @@ def candidate_binding(candidate: dict[str, Any]) -> dict[str, str]:
         "dmg_sha256": candidate["dmg_sha256"],
         "team_id": candidate["team_id"],
         "bundle_id": candidate["bundle_id"],
+        "release_id": candidate["distribution"]["release_id"],
+        "dmg_asset_id": candidate["distribution"]["dmg_asset_id"],
     }
 
 
@@ -608,7 +733,7 @@ def init_manifest(args: argparse.Namespace) -> None:
     require_root(args.evidence_root, "evidence root")
     policy = load_policy()
     context = validate_context(read_json(args.context, "execution context"))
-    candidate = candidate_from_payload(candidate_root, args.artifact_url)
+    candidate = candidate_from_payload(candidate_root, args.release_metadata)
     binding = candidate_binding(candidate)
     rows = []
     for row_id, row_policy_value in policy["rows"].items():
@@ -641,18 +766,57 @@ def init_manifest(args: argparse.Namespace) -> None:
         "candidate": candidate,
         "rows": rows,
     }
-    output: Path = args.output
+    write_new_json(args.output, manifest, "manifest")
+    print(f"Created pending {SCHEMA_ID} manifest at {args.output}")
+
+
+def write_new_json(output: Path, value: dict[str, Any], label: str) -> None:
     if not output.is_absolute() or output.exists() or output.is_symlink():
-        fail("manifest output must be a new absolute non-symlink path")
+        fail(f"{label} output must be a new absolute non-symlink path")
     if not output.parent.is_dir() or output.parent.is_symlink():
-        fail("manifest output parent must be an existing non-symlink directory")
+        fail(f"{label} output parent must be an existing non-symlink directory")
     try:
         with output.open("x", encoding="utf-8") as destination:
-            json.dump(manifest, destination, indent=2, sort_keys=True, allow_nan=False)
+            json.dump(value, destination, indent=2, sort_keys=True, allow_nan=False)
             destination.write("\n")
     except OSError as error:
-        fail(f"could not create manifest: {error}")
-    print(f"Created pending {SCHEMA_ID} manifest at {output}")
+        fail(f"could not create {label}: {error}")
+
+
+def transition_public(args: argparse.Namespace) -> None:
+    candidate_root = require_root(args.candidate_dir, "candidate directory")
+    manifest = expect_object(read_json(args.manifest, "private owner smoke manifest"), "manifest")
+    exact_keys(manifest, {"schema_version", "schema_id", "generated_at", "candidate", "rows"}, "manifest")
+    if manifest["schema_version"] != 1 or manifest["schema_id"] != SCHEMA_ID:
+        fail("manifest schema version/id is unsupported")
+    private_candidate, private_distribution = candidate_with_distribution(
+        candidate_root, args.private_release_metadata
+    )
+    public_candidate, public_distribution = candidate_with_distribution(
+        candidate_root, args.public_release_metadata
+    )
+    if private_candidate["distribution"]["state"] != "private_draft":
+        fail("transition source release metadata is not the authenticated private draft")
+    if public_candidate["distribution"]["state"] != "public":
+        fail("transition destination release metadata is not the authenticated public release")
+    if manifest["candidate"] != private_candidate:
+        fail("transition manifest does not match the authenticated private draft")
+    private_binding = dict(private_candidate)
+    public_binding = dict(public_candidate)
+    private_binding.pop("artifact_url")
+    public_binding.pop("artifact_url")
+    private_binding["distribution"] = dict(private_binding["distribution"])
+    public_binding["distribution"] = dict(public_binding["distribution"])
+    private_binding["distribution"].pop("state")
+    public_binding["distribution"].pop("state")
+    if private_binding != public_binding:
+        fail("public release metadata does not preserve the exact private candidate bytes and ids")
+    if private_distribution["asset_ids"] != public_distribution["asset_ids"]:
+        fail("public release metadata does not preserve all nine immutable asset ids")
+    transitioned = dict(manifest)
+    transitioned["candidate"] = public_candidate
+    write_new_json(args.output, transitioned, "public manifest")
+    print(f"Transitioned {SCHEMA_ID} manifest to canonical public URL at {args.output}")
 
 
 def validate_artifacts(candidate: dict[str, Any], payload_candidate: dict[str, Any]) -> None:
@@ -665,6 +829,7 @@ def validate_artifacts(candidate: dict[str, Any], payload_candidate: dict[str, A
         "team_id",
         "bundle_id",
         "artifact_url",
+        "distribution",
         "workflow_url",
         "apple_submission_id",
         "artifacts",
@@ -715,7 +880,7 @@ def verify_manifest(args: argparse.Namespace) -> None:
         fail("manifest schema version/id is unsupported")
     valid_datetime(manifest["generated_at"], "manifest.generated_at")
     candidate = expect_object(manifest["candidate"], "manifest.candidate")
-    payload_candidate = candidate_from_payload(candidate_root, candidate.get("artifact_url"))
+    payload_candidate = candidate_from_payload(candidate_root, args.release_metadata)
     validate_artifacts(candidate, payload_candidate)
     binding = candidate_binding(candidate)
 
@@ -829,13 +994,14 @@ def parser() -> argparse.ArgumentParser:
         help="verify the exact published payload and emit its closed candidate identity",
     )
     candidate.add_argument("--candidate-dir", type=Path, required=True)
+    candidate.add_argument("--release-metadata", type=Path, required=True)
     candidate.set_defaults(handler=verify_candidate_payload)
 
     init = subcommands.add_parser("init", help="create a new pending manifest from an immutable candidate")
     init.add_argument("--candidate-dir", type=Path, required=True)
     init.add_argument("--evidence-root", type=Path, required=True)
     init.add_argument("--context", type=Path, required=True)
-    init.add_argument("--artifact-url", required=True)
+    init.add_argument("--release-metadata", type=Path, required=True)
     init.add_argument("--output", type=Path, required=True)
     init.set_defaults(handler=init_manifest)
 
@@ -843,8 +1009,20 @@ def parser() -> argparse.ArgumentParser:
     verify.add_argument("--candidate-dir", type=Path, required=True)
     verify.add_argument("--evidence-root", type=Path, required=True)
     verify.add_argument("--manifest", type=Path, required=True)
+    verify.add_argument("--release-metadata", type=Path, required=True)
     verify.add_argument("--allow-pending", action="store_true")
     verify.set_defaults(handler=verify_manifest)
+
+    transition = subcommands.add_parser(
+        "transition-public",
+        help="bind an existing private-draft manifest to the same now-public release object",
+    )
+    transition.add_argument("--candidate-dir", type=Path, required=True)
+    transition.add_argument("--manifest", type=Path, required=True)
+    transition.add_argument("--private-release-metadata", type=Path, required=True)
+    transition.add_argument("--public-release-metadata", type=Path, required=True)
+    transition.add_argument("--output", type=Path, required=True)
+    transition.set_defaults(handler=transition_public)
 
     evidence_hash = subcommands.add_parser("hash-evidence", help="emit one closed evidence descriptor")
     evidence_hash.add_argument("--evidence-root", type=Path, required=True)

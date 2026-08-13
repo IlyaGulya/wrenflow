@@ -19,6 +19,14 @@ fi
 rg -F "WRENFLOW_TARGET_PAYLOAD" "$TEST_ROOT/missing.err" >/dev/null
 [[ ! -e "$TEST_ROOT/missing.json" ]]
 
+if WRENFLOW_TARGET_PAYLOAD="$TEST_ROOT" env -u WRENFLOW_TARGET_RELEASE_METADATA \
+    "$HARNESS" candidate-plan "$TEST_ROOT/missing-release.json" \
+    >"$TEST_ROOT/missing-release.out" 2>"$TEST_ROOT/missing-release.err"; then
+    echo "candidate-plan accepted missing authenticated release metadata" >&2
+    exit 1
+fi
+rg -F "WRENFLOW_TARGET_RELEASE_METADATA" "$TEST_ROOT/missing-release.err" >/dev/null
+
 SOURCE="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 DMG="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 BETA_SOURCE="d3e01e0ec085121f3bd3e78038836a16608b98a0"
@@ -197,5 +205,7 @@ if rg -n 'tccutil|kill-stage|WRENFLOW_BASELINE_PAYLOAD|WRENFLOW_M13_M22_PLAN' "$
     echo "first-release lifecycle harness retained destructive or legacy/update execution" >&2
     exit 1
 fi
+rg -F -- '--release-metadata "$release_metadata"' "$HARNESS" >/dev/null
+rg -F 'required_for_l01_l02' "$REPO_DIR/support/acceptance/endurance-v1-policy.json" >/dev/null
 
 echo "First-release lifecycle evidence tests passed"

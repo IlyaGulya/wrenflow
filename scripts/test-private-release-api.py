@@ -46,18 +46,38 @@ def raw_asset(name: str, asset_id: int, size: int = 1) -> dict[str, object]:
         "created_at": "2026-08-13T00:00:00Z",
         "updated_at": "2026-08-13T00:00:01Z",
         "url": f"https://api.github.com/repos/{REPO}/releases/assets/{asset_id}",
+        "browser_download_url": (
+            f"https://github.com/{REPO}/releases/download/"
+            f"untagged-ba9071a866140201dc02/{name}"
+        ),
     }
 
 
 def raw_release(*, assets: list[dict[str, object]] | None = None, draft: bool = True) -> dict[str, object]:
+    selected_assets = assets or []
+    if not draft:
+        selected_assets = [
+            {
+                **asset,
+                "browser_download_url": (
+                    f"https://github.com/{REPO}/releases/download/{TAG}/{asset['name']}"
+                ),
+            }
+            for asset in selected_assets
+        ]
     return {
         "id": RELEASE_ID,
         "tag_name": TAG,
         "target_commitish": SOURCE,
         "draft": draft,
         "prerelease": False,
+        "html_url": (
+            f"https://github.com/{REPO}/releases/tag/{TAG}"
+            if not draft
+            else f"https://github.com/{REPO}/releases/tag/untagged-ba9071a866140201dc02"
+        ),
         "upload_url": f"https://uploads.github.com/repos/{REPO}/releases/{RELEASE_ID}/assets{{?name,label}}",
-        "assets": assets or [],
+        "assets": selected_assets,
     }
 
 
@@ -118,6 +138,7 @@ class PrivateReleaseApiTests(unittest.TestCase):
         )
         self.assertEqual(canonical["id"], RELEASE_ID)
         self.assertEqual([asset["name"] for asset in canonical["assets"]], sorted(API.ASSET_NAMES))
+        self.assertNotIn("browserDownloadUrl", canonical["assets"][0])
 
         mutations = []
         wrong_id = raw_release(assets=assets)
@@ -132,6 +153,15 @@ class PrivateReleaseApiTests(unittest.TestCase):
         wrong_upload = raw_release(assets=assets)
         wrong_upload["upload_url"] = "https://uploads.github.com/repos/other/repo/releases/1/assets{?name,label}"
         mutations.append(wrong_upload)
+        wrong_private_url = raw_release(assets=assets)
+        wrong_private_url["assets"][0]["browser_download_url"] = (
+            f"https://github.com/{REPO}/releases/download/untagged-deadbeefdeadbeefdead/"
+            f"{wrong_private_url['assets'][0]['name']}"
+        )
+        mutations.append(wrong_private_url)
+        wrong_html = raw_release(assets=assets)
+        wrong_html["html_url"] = f"https://github.com/{REPO}/releases/tag/untagged-deadbeefdeadbeefdead"
+        mutations.append(wrong_html)
         for mutation in mutations:
             with self.assertRaises(API.ReleaseError):
                 API.canonical_release(
@@ -163,6 +193,32 @@ class PrivateReleaseApiTests(unittest.TestCase):
         wrong["id"] = RELEASE_ID + 1
         with mock.patch.object(API, "run_gh_json", return_value=wrong), self.assertRaises(API.ReleaseError):
             API.command_derive_source(args)
+
+    def test_owner_inspect_is_the_closed_authenticated_browser_metadata_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "owner-release.json"
+            assets = [raw_asset(name, index + 70) for index, name in enumerate(API.ASSET_NAMES)]
+            args = mock.Mock(
+                repo=REPO,
+                release_id_int=RELEASE_ID,
+                tag=TAG,
+                source=SOURCE,
+                gh="gh",
+                state="staged",
+                output=output,
+            )
+            with mock.patch.object(API, "run_gh_json", return_value=raw_release(assets=assets)):
+                API.command_inspect_owner(args)
+            value = json.loads(output.read_text())
+            self.assertEqual(
+                set(value),
+                {"id", "tagName", "targetCommitish", "isDraft", "isPrerelease", "htmlUrl", "assets"},
+            )
+            dmg = next(asset for asset in value["assets"] if asset["name"] == "Wrenflow.dmg")
+            self.assertEqual(
+                dmg["browserDownloadUrl"],
+                f"https://github.com/{REPO}/releases/download/untagged-ba9071a866140201dc02/Wrenflow.dmg",
+            )
 
     def test_upload_uses_exact_id_endpoint_and_refetches_closed_release(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

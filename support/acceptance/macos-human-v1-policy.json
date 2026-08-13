@@ -21,7 +21,8 @@
     "mode": "single_owner_first_public_release",
     "tcc_mutation": "prohibited",
     "existing_permission_grants": "inspect_without_reset",
-    "fresh_permission_paths": "automated_state_tests"
+    "fresh_permission_paths": "automated_state_tests",
+    "data_isolation": "exact_owner_smoke_disposable_root"
   },
   "rows": {
     "S01": {

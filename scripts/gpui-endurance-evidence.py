@@ -129,6 +129,7 @@ def policy() -> dict[str, Any]:
         "downgrade_or_rollback": "excluded",
         "prerelease_to_stable_update": "excluded",
         "tcc_reset": "prohibited",
+        "owner_smoke_data_root": "required_for_l01_l02",
     }:
         fail("lifecycle policy scope drifted")
     if value["performance_baseline"] != {

@@ -50,7 +50,7 @@
       "additionalProperties": false,
       "required": [
         "tag", "version", "build_number", "source_commit", "dmg_sha256",
-        "team_id", "bundle_id", "artifact_url", "workflow_url",
+        "team_id", "bundle_id", "artifact_url", "distribution", "workflow_url",
         "apple_submission_id", "artifacts"
       ],
       "properties": {
@@ -65,6 +65,16 @@
         "team_id": {"const": "T4LV8K9BGV"},
         "bundle_id": {"const": "me.gulya.wrenflow"},
         "artifact_url": {"type": "string", "pattern": "^https://github\\.com/IlyaGulya/wrenflow/"},
+        "distribution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "release_id", "dmg_asset_id"],
+          "properties": {
+            "state": {"enum": ["private_draft", "public"]},
+            "release_id": {"type": "integer", "minimum": 1},
+            "dmg_asset_id": {"type": "integer", "minimum": 1}
+          }
+        },
         "workflow_url": {"type": "string", "pattern": "^https://github\\.com/IlyaGulya/wrenflow/actions/runs/[0-9]+/attempts/[0-9]+$"},
         "apple_submission_id": {"type": "string", "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"},
         "artifacts": {"type": "array", "minItems": 9, "maxItems": 9, "uniqueItems": true, "items": {"$ref": "#/$defs/artifact"}}
@@ -73,13 +83,15 @@
     "candidateBinding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["tag", "source_commit", "dmg_sha256", "team_id", "bundle_id"],
+      "required": ["tag", "source_commit", "dmg_sha256", "team_id", "bundle_id", "release_id", "dmg_asset_id"],
       "properties": {
         "tag": {"$ref": "#/$defs/tag"},
         "source_commit": {"$ref": "#/$defs/sourceCommit"},
         "dmg_sha256": {"$ref": "#/$defs/sha256"},
         "team_id": {"const": "T4LV8K9BGV"},
-        "bundle_id": {"const": "me.gulya.wrenflow"}
+        "bundle_id": {"const": "me.gulya.wrenflow"},
+        "release_id": {"type": "integer", "minimum": 1},
+        "dmg_asset_id": {"type": "integer", "minimum": 1}
       }
     },
     "tester": {

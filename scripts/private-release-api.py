@@ -138,6 +138,7 @@ def canonical_asset(asset: Any, repo: str) -> dict[str, Any]:
     created_at = asset.get("created_at")
     updated_at = asset.get("updated_at")
     url = asset.get("url")
+    browser_download_url = asset.get("browser_download_url")
     digest = asset.get("digest")
     if not isinstance(asset_id, int) or asset_id <= 0:
         raise ReleaseError("release asset id must be positive")
@@ -156,6 +157,13 @@ def canonical_asset(asset: Any, repo: str) -> dict[str, Any]:
     expected_url = f"https://api.github.com/repos/{repo}/releases/assets/{asset_id}"
     if url != expected_url:
         raise ReleaseError("release asset API URL does not match its exact id")
+    expected_browser_prefix = f"https://github.com/{repo}/releases/download/"
+    if (
+        not isinstance(browser_download_url, str)
+        or not browser_download_url.startswith(expected_browser_prefix)
+        or browser_download_url.rsplit("/", 1)[-1] != name
+    ):
+        raise ReleaseError("release asset browser URL is not bound to its repository and name")
     if digest is not None and (
         not isinstance(digest, str)
         or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
@@ -171,6 +179,7 @@ def canonical_asset(asset: Any, repo: str) -> dict[str, Any]:
         "createdAt": created_at,
         "updatedAt": updated_at,
         "url": url,
+        "browserDownloadUrl": browser_download_url,
     }
 
 
@@ -184,6 +193,20 @@ def canonical_release(
     expected_draft = state != "public"
     if raw.get("draft") is not expected_draft or raw.get("prerelease") is not False:
         raise ReleaseError("release object has the wrong draft/prerelease state")
+    html_url = raw.get("html_url")
+    if state == "public":
+        expected_html_url = f"https://github.com/{repo}/releases/tag/{tag}"
+        if html_url != expected_html_url:
+            raise ReleaseError("public release browser URL is not canonical")
+        browser_segment = tag
+    else:
+        match = re.fullmatch(
+            rf"https://github\.com/{re.escape(repo)}/releases/tag/(untagged-[0-9a-f]{{20}})",
+            str(html_url),
+        )
+        if match is None:
+            raise ReleaseError("private release browser URL is not one exact tagless object")
+        browser_segment = match.group(1)
     expected_upload_url = (
         f"https://uploads.github.com/repos/{repo}/releases/{release_id}/assets"
         "{?name,label}"
@@ -193,23 +216,42 @@ def canonical_release(
     assets_raw = raw.get("assets")
     if not isinstance(assets_raw, list):
         raise ReleaseError("release assets must be an array")
-    assets = [canonical_asset(asset, repo) for asset in assets_raw]
-    names = [asset["name"] for asset in assets]
-    ids = [asset["id"] for asset in assets]
+    validated_assets = [canonical_asset(asset, repo) for asset in assets_raw]
+    names = [asset["name"] for asset in validated_assets]
+    ids = [asset["id"] for asset in validated_assets]
     if len(names) != len(set(names)) or len(ids) != len(set(ids)):
         raise ReleaseError("release assets contain duplicate names or ids")
     if state == "empty":
-        if assets:
+        if validated_assets:
             raise ReleaseError("private stable draft is not empty")
-    elif sorted(names) != sorted(ASSET_NAMES) or len(assets) != len(ASSET_NAMES):
+    elif sorted(names) != sorted(ASSET_NAMES) or len(validated_assets) != len(ASSET_NAMES):
         raise ReleaseError("release does not contain the exact nine assets")
+    if state != "empty":
+        for asset in validated_assets:
+            if state == "public":
+                expected_browser_url = (
+                    f"https://github.com/{repo}/releases/download/{tag}/{asset['name']}"
+                )
+                if asset["browserDownloadUrl"] != expected_browser_url:
+                    raise ReleaseError("public release asset browser URL is not canonical")
+            elif asset["browserDownloadUrl"] != (
+                f"https://github.com/{repo}/releases/download/"
+                f"{browser_segment}/{asset['name']}"
+            ):
+                raise ReleaseError("private release asset browser URL is not an exact tagless URL")
     return {
         "id": release_id,
         "tagName": tag,
         "targetCommitish": source,
         "isDraft": expected_draft,
         "isPrerelease": False,
-        "assets": sorted(assets, key=lambda asset: asset["name"]),
+        "assets": sorted(
+            [
+                {key: value for key, value in asset.items() if key != "browserDownloadUrl"}
+                for asset in validated_assets
+            ],
+            key=lambda asset: asset["name"],
+        ),
     }
 
 
@@ -266,6 +308,29 @@ def command_derive_id(args: argparse.Namespace) -> None:
 
 def command_inspect(args: argparse.Namespace) -> None:
     write_json(args.output, fetch_release(args, args.state))
+
+
+def command_inspect_owner(args: argparse.Namespace) -> None:
+    raw = run_gh_json(
+        args.gh,
+        ["api", f"repos/{args.repo}/releases/{args.release_id_int}"],
+    )
+    release = canonical_release(
+        raw,
+        repo=args.repo,
+        release_id=args.release_id_int,
+        tag=args.tag,
+        source=args.source,
+        state=args.state,
+    )
+    release["htmlUrl"] = raw["html_url"]
+    browser_urls = {
+        asset["id"]: canonical_asset(asset, args.repo)["browserDownloadUrl"]
+        for asset in raw["assets"]
+    }
+    for asset in release["assets"]:
+        asset["browserDownloadUrl"] = browser_urls[asset["id"]]
+    write_json(args.output, release)
 
 
 def command_derive_source(args: argparse.Namespace) -> None:
@@ -464,6 +529,11 @@ def parse_args() -> argparse.Namespace:
     inspect.add_argument("--state", choices=("empty", "staged", "public"), required=True)
     inspect.add_argument("--output", type=Path, required=True)
 
+    inspect_owner = subparsers.add_parser("inspect-owner")
+    add_release_arguments(inspect_owner)
+    inspect_owner.add_argument("--state", choices=("staged", "public"), required=True)
+    inspect_owner.add_argument("--output", type=Path, required=True)
+
     derive_source = subparsers.add_parser("derive-source")
     derive_source.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
     derive_source.add_argument("--release-id", required=True)
@@ -511,6 +581,7 @@ def main() -> int:
             "derive-id": command_derive_id,
             "derive-source": command_derive_source,
             "inspect": command_inspect,
+            "inspect-owner": command_inspect_owner,
             "upload": command_upload,
             "replace-known-invalid": command_replace_known_invalid,
             "download": command_download,

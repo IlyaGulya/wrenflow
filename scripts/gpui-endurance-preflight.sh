@@ -13,7 +13,9 @@ Usage:
   gpui-endurance-preflight.sh verify-evidence <absolute-plan.json> <absolute-manifest.json> <absolute-evidence-root>
 
 candidate-plan requires WRENFLOW_TARGET_PAYLOAD to name one exact signed,
-notarized, private stable nine-asset payload. No command launches Wrenflow,
+notarized, private stable nine-asset payload and
+WRENFLOW_TARGET_RELEASE_METADATA to name the exact authenticated closed private
+release object. No command launches Wrenflow,
 changes TCC, or mutates application/user data.
 USAGE
 }
@@ -30,11 +32,13 @@ regular_input() {
 candidate_plan() {
     local output="$1"
     local payload="${WRENFLOW_TARGET_PAYLOAD:-}"
+    local release_metadata="${WRENFLOW_TARGET_RELEASE_METADATA:-}"
     local parent temporary candidate
     if [[ -z "$payload" || "$payload" != /* || ! -d "$payload" || -L "$payload" ]]; then
         echo "WRENFLOW_TARGET_PAYLOAD must name an absolute exact payload directory" >&2
         exit 64
     fi
+    regular_input "$release_metadata" "WRENFLOW_TARGET_RELEASE_METADATA"
     if [[ "$output" != /* || -e "$output" || -L "$output" ]]; then
         echo "Candidate plan output must be a new absolute non-symlink path" >&2
         exit 64
@@ -47,7 +51,7 @@ candidate_plan() {
     temporary="$(mktemp "$parent/.first-release-plan.XXXXXX")"
     trap 'rm -f -- "${temporary:-}"' EXIT
     candidate="$(mise exec -- python3 "$REPO_DIR/scripts/gpui-human-acceptance.py" \
-        verify-candidate --candidate-dir "$payload")"
+        verify-candidate --candidate-dir "$payload" --release-metadata "$release_metadata")"
     if [[ "$(jq -r '.version | contains("-")' <<<"$candidate")" != "false" ]]; then
         echo "First-release lifecycle requires the exact private stable draft, not a prerelease" >&2
         exit 65
