@@ -160,24 +160,27 @@ require_private_draft_permission_contract() {
     local build="$1"
     local release="$2"
     local promotion="$3"
-    local preflight build_release publish beta_verify stable_verify compatibility frozen verify_pr promote
+    local preflight build_release publish beta_verify stable_verify existing_verify compatibility frozen verify_pr promote
     preflight="$(workflow_job_block "$build" verify_private_release_draft)"
     build_release="$(workflow_job_block "$build" build_release)"
     publish="$(workflow_job_block "$build" publish)"
     beta_verify="$(workflow_job_block "$build" verify_staged_or_published)"
     stable_verify="$(workflow_job_block "$build" verify_staged_release)"
+    existing_verify="$(workflow_job_block "$build" verify_existing_private_release)"
     compatibility="$(workflow_job_block "$build" compatibility-minimum)"
     frozen="$(workflow_job_block "$build" verify_frozen_performance_baseline)"
     verify_pr="$(workflow_job_block "$build" verify-pr)"
     promote="$(workflow_job_block "$promotion" promote)"
     [[ -n "$preflight" && -n "$build_release" && -n "$publish" &&
-       -n "$beta_verify" && -n "$stable_verify" && -n "$compatibility" &&
+       -n "$beta_verify" && -n "$stable_verify" && -n "$existing_verify" && -n "$compatibility" &&
        -n "$frozen" && -n "$verify_pr" && -n "$promote" ]] || return 1
 
     [[ "$(grep -Fxc -- '      contents: write' <<< "$preflight")" -eq 1 ]] || return 1
-    grep -Fqx -- "    if: inputs.release_tag != ''" <<< "$preflight" || return 1
+    grep -Fqx -- "      \${{ inputs.release_tag != '' &&" <<< "$preflight" || return 1
     grep -Fqx -- '      - name: Require exact empty tagless private stable draft' <<< "$preflight" || return 1
     grep -Fqx -- '    needs: verify_private_release_draft' <<< "$build_release" || return 1
+    grep -Fqx -- "          inputs.confirmation != 'VERIFY_EXISTING_PRIVATE_DRAFT' &&" \
+        <<< "$build_release" || return 1
     grep -Fqx -- "          (inputs.release_tag == '' || needs.verify_private_release_draft.result == 'success') }}" \
         <<< "$build_release" || return 1
 
@@ -191,15 +194,39 @@ require_private_draft_permission_contract() {
     ! grep -Fq -- 'private-release-api.py' <<< "$beta_verify" || return 1
 
     [[ "$(grep -Fxc -- '      contents: write' <<< "$stable_verify")" -eq 1 ]] || return 1
-    grep -Fqx -- "    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag != ''" \
-        <<< "$stable_verify" || return 1
+    grep -Fqx -- "      \${{ always() && inputs.release_tag != '' &&" <<< "$stable_verify" || return 1
+    grep -Fqx -- "          needs.build_release.result == 'success' &&" <<< "$stable_verify" || return 1
+    grep -Fqx -- "          needs.publish.result == 'success' }}" <<< "$stable_verify" || return 1
     grep -Fqx -- '      - name: Re-download and verify immutable private stable candidate' \
         <<< "$stable_verify" || return 1
     grep -Fq -- 'private-release-api.py download' <<< "$stable_verify" || return 1
+    grep -Fq -- 'verify-release-promotion.sh staged' <<< "$stable_verify" || return 1
+
+    [[ "$(grep -Fxc -- '      contents: write' <<< "$existing_verify")" -eq 1 ]] || return 1
+    grep -Fqx -- "      \${{ github.event_name == 'workflow_dispatch' &&" <<< "$existing_verify" || return 1
+    grep -Fqx -- "          inputs.confirmation == 'VERIFY_EXISTING_PRIVATE_DRAFT' }}" \
+        <<< "$existing_verify" || return 1
+    grep -Fqx -- '      - name: Require exact verification-only private draft inputs' \
+        <<< "$existing_verify" || return 1
+    grep -Fqx -- '      VERIFIER_SOURCE_COMMIT: ${{ inputs.verifier_source_commit }}' \
+        <<< "$existing_verify" || return 1
+    grep -Fq -- 'VERIFIER_SOURCE_COMMIT" != "e233cc6db6b37307e9774db228ab11ecc4d0673c' \
+        <<< "$existing_verify" || return 1
+    grep -Fqx -- '      - name: Re-download and verify existing immutable private stable candidate' \
+        <<< "$existing_verify" || return 1
+    grep -Fq -- 'private-release-api.py download' <<< "$existing_verify" || return 1
+    grep -Fq -- 'verify-release-promotion.sh staged' <<< "$existing_verify" || return 1
+    ! grep -Eq -- 'private-release-api\.py (upload|publish)|gh release (create|upload|edit)|-X (POST|PATCH|DELETE)' \
+        <<< "$existing_verify" || return 1
+
+    grep -Fqx -- "    if: github.event_name != 'workflow_dispatch' || inputs.confirmation != 'VERIFY_EXISTING_PRIVATE_DRAFT'" \
+        <<< "$compatibility" || return 1
+    grep -Fq -- "inputs.confirmation != 'VERIFY_EXISTING_PRIVATE_DRAFT'" <<< "$preflight" || return 1
+    grep -Fq -- 'RECOVERY_CONFIRMATION" != "STAGE_EXISTING_PRIVATE_DRAFT' <<< "$preflight" || return 1
 
     [[ "$(grep -Fxc -- '      contents: write' <<< "$publish")" -eq 1 ]] || return 1
     grep -Fq -- 'private-release-api.py upload' <<< "$publish" || return 1
-    [[ "$(grep -Fxc -- '      contents: write' "$build")" -eq 3 ]] || return 1
+    [[ "$(grep -Fxc -- '      contents: write' "$build")" -eq 4 ]] || return 1
     [[ "$(grep -Fxc -- '      contents: write' <<< "$promote")" -eq 1 ]] || return 1
     [[ "$(grep -Fxc -- '      contents: write' "$release")" -eq 2 ]] || return 1
     grep -Fqx -- '      actions: read' "$release" || return 1
@@ -224,6 +251,7 @@ if [[ "$(grep -Fxc -- '      release_tool_source_commit:' "$BUILD_WORKFLOW")" -n
     exit 1
 fi
 require_pattern "STAGE_EXISTING_PRIVATE_DRAFT" "$BUILD_WORKFLOW"
+require_pattern "VERIFY_EXISTING_PRIVATE_DRAFT" "$BUILD_WORKFLOW"
 require_pattern "IS_RELEASE: \${{ inputs.release_tag != '' }}" "$BUILD_WORKFLOW"
 require_pattern 'RELEASE_SOURCE_COMMIT: ${{ inputs.release_source_commit }}' "$BUILD_WORKFLOW"
 require_pattern 'ref: ${{ inputs.release_source_commit || github.sha }}' "$BUILD_WORKFLOW"
@@ -791,6 +819,58 @@ expect_private_permission_rejected stable-verify-read \
     "$REPO_SCOPE_FIXTURE/build-stable-verify-read.yml"
 
 mutate_job_permission "$BUILD_WORKFLOW" \
+    "$REPO_SCOPE_FIXTURE/build-existing-verify-read.yml" \
+    verify_existing_private_release write read
+expect_private_permission_rejected existing-private-verify-read \
+    "$REPO_SCOPE_FIXTURE/build-existing-verify-read.yml"
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-stable-verify-without-always.yml"
+mise exec -- python3 - "$REPO_SCOPE_FIXTURE/build-stable-verify-without-always.yml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text()
+needle = "      ${{ always() && inputs.release_tag != '' &&\n"
+if source.count(needle) != 1:
+    raise SystemExit("stable verification always fixture drifted")
+path.write_text(source.replace(needle, "      ${{ inputs.release_tag != '' &&\n", 1))
+PY
+expect_private_permission_rejected stable-verify-skip-propagation \
+    "$REPO_SCOPE_FIXTURE/build-stable-verify-without-always.yml"
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-existing-verify-mutation.yml"
+mise exec -- python3 - "$REPO_SCOPE_FIXTURE/build-existing-verify-mutation.yml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text()
+marker = "      - name: Re-download and verify existing immutable private stable candidate\n"
+if source.count(marker) != 1:
+    raise SystemExit("verification-only job fixture drifted")
+mutation = "      - name: Mutate the private draft\n        run: mise exec -- python3 .release-workflow/scripts/private-release-api.py upload\n"
+path.write_text(source.replace(marker, mutation + marker, 1))
+PY
+expect_private_permission_rejected existing-private-verification-mutation \
+    "$REPO_SCOPE_FIXTURE/build-existing-verify-mutation.yml"
+
+cp "$BUILD_WORKFLOW" "$REPO_SCOPE_FIXTURE/build-existing-verify-build-enabled.yml"
+mise exec -- python3 - "$REPO_SCOPE_FIXTURE/build-existing-verify-build-enabled.yml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text()
+needle = "          inputs.confirmation != 'VERIFY_EXISTING_PRIVATE_DRAFT' &&\n"
+if source.count(needle) != 1:
+    raise SystemExit("verification-only build exclusion fixture drifted")
+path.write_text(source.replace(needle, "", 1))
+PY
+expect_private_permission_rejected existing-private-build-enabled \
+    "$REPO_SCOPE_FIXTURE/build-existing-verify-build-enabled.yml"
+
+mutate_job_permission "$BUILD_WORKFLOW" \
     "$REPO_SCOPE_FIXTURE/build-pr-write.yml" \
     verify-pr read write
 expect_private_permission_rejected untrusted-pr-write \
@@ -972,8 +1052,8 @@ audit_tagless_source_contract() {
     require_pattern 'git/matching-refs/tags/$RELEASE_TAG' "$build"
     require_pattern '([.[] | select(.ref == $ref)] | length) == 0' "$build"
     if [[ "$(grep -Fc 'ref: ${{ inputs.release_source_commit || github.sha }}' "$build")" -ne 2 ]] || \
-       [[ "$(grep -Fc 'ref: ${{ inputs.release_source_commit }}' "$build")" -ne 1 ]]; then
-        echo "Stable preflight, build, and minimum-OS jobs must checkout the explicit release source" >&2
+       [[ "$(grep -Fc 'ref: ${{ inputs.release_source_commit }}' "$build")" -ne 2 ]]; then
+        echo "Stable preflight, verification-only, build, and minimum-OS jobs must checkout the explicit release source" >&2
         return 1
     fi
     reject_pattern 'TAG_COMMIT=$(git rev-list -n 1 "$TAG")' "$build"

@@ -107,6 +107,13 @@ verify_source_contract() {
         "$REPO_DIR/.github/workflows/build.yml" >/dev/null
     rg -F 'Re-download and verify immutable private stable candidate' \
         "$REPO_DIR/.github/workflows/build.yml" >/dev/null
+    rg -F 'Re-download and verify existing immutable private stable candidate' \
+        "$REPO_DIR/.github/workflows/build.yml" >/dev/null
+    rg -F "inputs.confirmation == 'VERIFY_EXISTING_PRIVATE_DRAFT'" \
+        "$REPO_DIR/.github/workflows/build.yml" >/dev/null
+    rg -F 'needs.publish.result == '\''success'\'' }}' \
+        "$REPO_DIR/.github/workflows/build.yml" >/dev/null
+    rg -F 'confirmation=VERIFY_EXISTING_PRIVATE_DRAFT' "$RUNBOOK" >/dev/null
     rg -F 'Require exact empty tagless private stable draft' \
         "$REPO_DIR/.github/workflows/build.yml" >/dev/null
     rg -F 'verify_frozen_performance_baseline:' \

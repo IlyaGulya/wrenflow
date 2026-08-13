@@ -87,6 +87,26 @@ mise exec -- gh workflow run build.yml \
   -f confirmation=STAGE_EXISTING_PRIVATE_DRAFT
 ```
 
+If all nine assets were attached but the private asset re-download verifier was
+interrupted or skipped, do not rebuild, re-upload, or recreate the draft. Run
+the read-only verification mode against the exact existing release object:
+
+```bash
+mise exec -- gh workflow run build.yml \
+  --repo IlyaGulya/wrenflow \
+  -f release_tag=v0.4.0 \
+  -f release_id='<positive numeric private draft ID>' \
+  -f release_tool_source_commit=aa025228f4f8d12e29c866b6be43eb2c0bf0834c \
+  -f release_source_commit='<40-character draft target commit>' \
+  -f verifier_source_commit=e233cc6db6b37307e9774db228ab11ecc4d0673c \
+  -f confirmation=VERIFY_EXISTING_PRIVATE_DRAFT
+```
+
+This mode skips compatibility, build, frozen-baseline, and upload jobs. It
+downloads the closed nine-asset set by immutable asset IDs, checks hashes and
+source/provenance binding, mounts the DMG, and revalidates Developer ID,
+notarization, and Gatekeeper without mutating the draft.
+
 The owner later invokes **Promote Verified Stable Draft** with the immutable
 private draft release ID, canonical stable tag, exact approved lowercase DMG
 SHA-256, `PROMOTE_VERIFIED_STABLE`, and the same reviewed private-release

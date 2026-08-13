@@ -157,6 +157,27 @@ if "$REPO_DIR/scripts/verify-release-promotion.sh" staged \
     exit 1
 fi
 
+TAMPERED_PROVENANCE="$FIXTURE/tampered-provenance"
+cp -R "$CANDIDATE" "$TAMPERED_PROVENANCE"
+jq '.subject[0].digest.sha256 = ("f" * 64)' \
+    "$TAMPERED_PROVENANCE/artifact-provenance.json" \
+    >"$TAMPERED_PROVENANCE/artifact-provenance.tmp"
+mv "$TAMPERED_PROVENANCE/artifact-provenance.tmp" \
+    "$TAMPERED_PROVENANCE/artifact-provenance.json"
+(
+    cd "$TAMPERED_PROVENANCE"
+    shasum -a 256 Wrenflow.dmg Wrenflow.cdx.json RustThirdPartyLicenses.txt \
+        pins.json exceptions.json provenance.json artifact-provenance.json \
+        release-evidence.json >SHA256SUMS
+)
+if "$REPO_DIR/scripts/verify-release-promotion.sh" staged \
+    "$FIXTURE/release.json" "$TAMPERED_PROVENANCE" v0.4.0 \
+    "$CANDIDATE_SHA" "$SOURCE_A" 369445618 \
+    >"$FIXTURE/tampered-provenance.out" 2>"$FIXTURE/tampered-provenance.err"; then
+    echo "Staged verifier accepted rechecksummed provenance with wrong DMG subject" >&2
+    exit 1
+fi
+
 "$REPO_DIR/scripts/verify-release-promotion.sh" promotion "$CANDIDATE" "$IDENTICAL" \
     >"$FIXTURE/identical.out"
 rg -F "Exact private-draft promotion verified" "$FIXTURE/identical.out" >/dev/null

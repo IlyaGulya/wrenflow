@@ -127,6 +127,23 @@ The recovery workflow rejects a nonempty draft, a mismatched source commit, an
 already-created stable tag, or verifier bytes other than reviewed commit
 `e233cc6db6b37307e9774db228ab11ecc4d0673c`.
 
+If the exact nine assets are already attached but the private re-download
+verification did not complete, never rerun staging or replace the assets. Use
+the verification-only dispatch:
+
+```bash
+mise exec -- gh workflow run build.yml \
+  -f release_tag=<tag> \
+  -f release_id=<positive-numeric-private-draft-id> \
+  -f release_tool_source_commit=aa025228f4f8d12e29c866b6be43eb2c0bf0834c \
+  -f release_source_commit=<targetCommitish> \
+  -f verifier_source_commit=e233cc6db6b37307e9774db228ab11ecc4d0673c \
+  -f confirmation=VERIFY_EXISTING_PRIVATE_DRAFT
+```
+
+This mode performs only immutable asset-ID downloads and exact candidate
+verification. It does not build, upload, edit, publish, or recreate a release.
+
 ### Step 5: Promote the exact bytes after go/no-go
 
 ```bash

@@ -28,7 +28,7 @@ on:
         required: true
         type: string
       confirmation:
-        description: Type STAGE_EXISTING_PRIVATE_DRAFT to recover draft staging
+        description: Type STAGE_EXISTING_PRIVATE_DRAFT to stage or VERIFY_EXISTING_PRIVATE_DRAFT to verify without mutation
         required: true
         type: string
   workflow_call:
@@ -106,6 +106,7 @@ jobs:
         run: mise exec -- scripts/verify-macos-support.sh bundle build/gpui/Wrenflow.app
 
   compatibility-minimum:
+    if: github.event_name != 'workflow_dispatch' || inputs.confirmation != 'VERIFY_EXISTING_PRIVATE_DRAFT'
     runs-on: macos-14
     timeout-minutes: 45
     permissions:
@@ -137,7 +138,10 @@ jobs:
         run: mise exec -- scripts/verify-macos-support.sh bundle build/gpui/Wrenflow.app
 
   verify_private_release_draft:
-    if: inputs.release_tag != ''
+    if: >-
+      ${{ inputs.release_tag != '' &&
+          (github.event_name != 'workflow_dispatch' ||
+           inputs.confirmation != 'VERIFY_EXISTING_PRIVATE_DRAFT') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -217,6 +221,7 @@ jobs:
     needs: verify_private_release_draft
     if: >-
       ${{ always() && github.event_name != 'pull_request' &&
+          inputs.confirmation != 'VERIFY_EXISTING_PRIVATE_DRAFT' &&
           (inputs.release_tag == '' || needs.verify_private_release_draft.result == 'success') }}
     runs-on: macos-26
     timeout-minutes: 45
@@ -1015,7 +1020,11 @@ jobs:
 
   verify_staged_release:
     needs: [build_release, publish]
-    if: needs.build_release.outputs.skip != 'true' && inputs.release_tag != ''
+    if: >-
+      ${{ always() && inputs.release_tag != '' &&
+          needs.build_release.result == 'success' &&
+          needs.build_release.outputs.skip != 'true' &&
+          needs.publish.result == 'success' }}
     runs-on: macos-26
     timeout-minutes: 15
     permissions:
@@ -1034,7 +1043,9 @@ jobs:
         with:
           ref: ${{ inputs.release_tool_source_commit }}
           path: .release-workflow
-          sparse-checkout: scripts/private-release-api.py
+          sparse-checkout: |
+            scripts/private-release-api.py
+            scripts/verify-release-promotion.sh
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Require reviewed private draft tooling source
@@ -1052,6 +1063,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p downloaded
+          mise exec -- python3 .release-workflow/scripts/private-release-api.py inspect \
+            --repo "$GITHUB_REPOSITORY" \
+            --release-id "$RELEASE_ID" \
+            --tag "$PUBLISH_TAG" \
+            --source "$SOURCE_COMMIT" \
+            --state staged \
+            --output stable-release-downloaded.json
           mise exec -- python3 .release-workflow/scripts/private-release-api.py download \
             --repo "$GITHUB_REPOSITORY" \
             --release-id "$RELEASE_ID" \
@@ -1067,7 +1085,96 @@ jobs:
             echo "Staged candidate does not match source/evidence" >&2
             exit 1
           fi
+          mise exec -- .release-workflow/scripts/verify-release-promotion.sh staged \
+            "$PWD/stable-release-downloaded.json" "$PWD/downloaded" \
+            "$PUBLISH_TAG" "$ACTUAL_SHA" "$SOURCE_COMMIT" "$RELEASE_ID"
           VERIFY_ROOT=$(mktemp -d /tmp/wrenflow-staged.XXXXXX)
+          MOUNT="$VERIFY_ROOT/mount"
+          mkdir "$MOUNT"
+          trap 'hdiutil detach "$MOUNT" >/dev/null 2>&1 || true; rm -rf "$VERIFY_ROOT"' EXIT
+          hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" downloaded/Wrenflow.dmg
+          ditto "$MOUNT/Wrenflow.app" "$VERIFY_ROOT/Wrenflow.app"
+          hdiutil detach "$MOUNT"
+          scripts/verify-release-artifact.sh \
+            "$VERIFY_ROOT/Wrenflow.app" downloaded/Wrenflow.dmg --require-notarized
+
+  verify_existing_private_release:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.confirmation == 'VERIFY_EXISTING_PRIVATE_DRAFT' }}
+    runs-on: macos-26
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      RELEASE_ID: ${{ inputs.release_id }}
+      RELEASE_SOURCE_COMMIT: ${{ inputs.release_source_commit }}
+      RELEASE_TOOL_SOURCE_COMMIT: ${{ inputs.release_tool_source_commit }}
+      VERIFIER_SOURCE_COMMIT: ${{ inputs.verifier_source_commit }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.release_source_commit }}
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.release_tool_source_commit }}
+          path: .release-workflow
+          sparse-checkout: |
+            scripts/private-release-api.py
+            scripts/verify-release-promotion.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Require exact verification-only private draft inputs
+        run: |
+          if [ "$RELEASE_TOOL_SOURCE_COMMIT" != "aa025228f4f8d12e29c866b6be43eb2c0bf0834c" ] || \
+             [ "$(git -C .release-workflow rev-parse HEAD)" != "$RELEASE_TOOL_SOURCE_COMMIT" ] || \
+             [ "$VERIFIER_SOURCE_COMMIT" != "e233cc6db6b37307e9774db228ab11ecc4d0673c" ]; then
+            echo "Private draft verification inputs do not match reviewed immutable sources" >&2
+            exit 1
+          fi
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || \
+             ! [[ "$RELEASE_ID" =~ ^[1-9][0-9]*$ ]] || \
+             ! [[ "$RELEASE_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || \
+             [ "$(git rev-parse HEAD)" != "$RELEASE_SOURCE_COMMIT" ]; then
+            echo "Verification-only private draft inputs are not exact" >&2
+            exit 1
+          fi
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+      - name: Re-download and verify existing immutable private stable candidate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p downloaded
+          mise exec -- python3 .release-workflow/scripts/private-release-api.py inspect \
+            --repo "$GITHUB_REPOSITORY" \
+            --release-id "$RELEASE_ID" \
+            --tag "$RELEASE_TAG" \
+            --source "$RELEASE_SOURCE_COMMIT" \
+            --state staged \
+            --output stable-release-existing.json
+          mise exec -- python3 .release-workflow/scripts/private-release-api.py download \
+            --repo "$GITHUB_REPOSITORY" \
+            --release-id "$RELEASE_ID" \
+            --tag "$RELEASE_TAG" \
+            --source "$RELEASE_SOURCE_COMMIT" \
+            --state staged \
+            --directory "$PWD/downloaded"
+          (cd downloaded && shasum -a 256 -c SHA256SUMS)
+          SOURCE=$(jq -r '.source.commit' downloaded/release-evidence.json)
+          EVIDENCE_SHA=$(jq -r '.artifact.sha256' downloaded/release-evidence.json)
+          ACTUAL_SHA=$(shasum -a 256 downloaded/Wrenflow.dmg | awk '{print $1}')
+          if [ "$SOURCE" != "$RELEASE_SOURCE_COMMIT" ] || [ "$EVIDENCE_SHA" != "$ACTUAL_SHA" ]; then
+            echo "Existing staged candidate does not match source/evidence" >&2
+            exit 1
+          fi
+          mise exec -- .release-workflow/scripts/verify-release-promotion.sh staged \
+            "$PWD/stable-release-existing.json" "$PWD/downloaded" \
+            "$RELEASE_TAG" "$ACTUAL_SHA" "$RELEASE_SOURCE_COMMIT" "$RELEASE_ID"
+          VERIFY_ROOT=$(mktemp -d /tmp/wrenflow-staged-existing.XXXXXX)
           MOUNT="$VERIFY_ROOT/mount"
           mkdir "$MOUNT"
           trap 'hdiutil detach "$MOUNT" >/dev/null 2>&1 || true; rm -rf "$VERIFY_ROOT"' EXIT
